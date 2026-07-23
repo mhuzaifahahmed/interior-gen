@@ -69,6 +69,36 @@ def test_generate_image_combines_base_and_tier_negative_prompt(monkeypatch):
     assert cf_module.BASE_NEGATIVE_PROMPT in captured["negative_prompt"]
 
 
+def test_generate_image_uses_given_strength_over_default(monkeypatch):
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["strength"] = json["strength"]
+        return FakeResponse(content=b"x", headers={"content-type": "image/png"})
+
+    monkeypatch.setattr(cf_module.httpx, "post", fake_post)
+
+    provider = CloudflareImageProvider()
+    provider.generate_image(b"input-bytes", "prompt", strength=0.75)
+
+    assert captured["strength"] == 0.75
+
+
+def test_generate_image_falls_back_to_default_strength(monkeypatch):
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["strength"] = json["strength"]
+        return FakeResponse(content=b"x", headers={"content-type": "image/png"})
+
+    monkeypatch.setattr(cf_module.httpx, "post", fake_post)
+
+    provider = CloudflareImageProvider()
+    provider.generate_image(b"input-bytes", "prompt")
+
+    assert captured["strength"] == cf_module.DEFAULT_STRENGTH
+
+
 def test_generate_image_error_response_raises(monkeypatch):
     def fake_post(url, headers=None, json=None, timeout=None):
         return FakeResponse(

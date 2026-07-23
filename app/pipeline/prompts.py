@@ -27,7 +27,7 @@ Two SD1.5-specific lessons baked in below (both found by testing real output):
    NEGATIVE_ADDITIONS and build_negative_prompt() below.
 """
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 
 TIER_SPECS: dict[str, dict[str, str]] = {
     "economical": {
@@ -82,8 +82,28 @@ NEGATIVE_ADDITIONS: dict[str, str] = {
     "premium": "",
 }
 
+# Applies to every tier, positive prompt cannot reliably express this (same reason
+# chandelier exclusion needs the negative channel): every render should look
+# renovated/clean, never like the (possibly damaged/derelict) input photo's condition.
+UNIVERSAL_DAMAGE_NEGATIVE = (
+    "damaged, dirty, stained, cracked walls, cracked ceiling, mold, mildew, water "
+    "damage, peeling paint, debris, rubble, dust, disrepair, abandoned, derelict"
+)
 
-def build_prompt(tier: str, room_description: str | None = None) -> str:
+# img2img "strength": 0.0 = unchanged input, 1.0 = ignores input entirely. Tiers need
+# different values, not one shared constant - a badly damaged input photo needs MORE
+# strength for the (visually minimal) economical tier to actually paint over the
+# damage, while mid/premium's larger material swaps (marble, chandelier) also need
+# enough headroom to fully manifest. These are first-pass values to tune against real
+# output, not final: if a tier still under- or over-transforms, adjust this first.
+STRENGTH_BY_TIER: dict[str, float] = {
+    "economical": 0.65,
+    "mid": 0.6,
+    "premium": 0.65,
+}
+
+
+def build_prompt(tier: str, room_description: str | None = None, tier_note: str | None = None) -> str:
     """Compose the SD1.5 prompt.
 
     SD1.5's CLIP text encoder hard-truncates at 77 tokens - anything past that is
@@ -93,6 +113,12 @@ def build_prompt(tier: str, room_description: str | None = None) -> str:
     impact-per-dollar ranking the tier methodology itself uses (paint -> flooring ->
     lighting -> feature walls -> materials/palette -> decor last, since decor is the
     lowest-priority item and the one safest to lose if truncation happens).
+
+    tier_note is an optional short, room-specific instruction (e.g. "repaint over
+    visible water stains on the ceiling") produced by analyzing the actual uploaded
+    photo per tier - see Provider.generate_tier_notes(). It is placed right before
+    `paint` since it's usually a prerequisite/qualifier for that step, and is high
+    enough priority to survive truncation alongside paint/flooring/lighting.
     """
     if tier not in TIER_SPECS:
         raise ValueError(f"unknown tier: {tier}")
@@ -101,6 +127,12 @@ def build_prompt(tier: str, room_description: str | None = None) -> str:
     tokens = [
         f"{spec['label']} of the same room",
         PRESERVE_STRUCTURE,
+    ]
+    if room_description:
+        tokens.append(room_description)
+    if tier_note:
+        tokens.append(tier_note)
+    tokens += [
         spec["paint"],
         spec["flooring"],
         spec["lighting_temp"],
@@ -111,8 +143,6 @@ def build_prompt(tier: str, room_description: str | None = None) -> str:
         spec["density"],
         spec["decor"],
     ]
-    if room_description:
-        tokens.insert(2, room_description)
 
     return ", ".join(tokens)
 
@@ -120,4 +150,13 @@ def build_prompt(tier: str, room_description: str | None = None) -> str:
 def build_negative_prompt(tier: str) -> str:
     if tier not in TIER_SPECS:
         raise ValueError(f"unknown tier: {tier}")
-    return NEGATIVE_ADDITIONS[tier]
+    addition = NEGATIVE_ADDITIONS[tier]
+    if addition:
+        return f"{UNIVERSAL_DAMAGE_NEGATIVE}, {addition}"
+    return UNIVERSAL_DAMAGE_NEGATIVE
+
+
+def get_strength(tier: str) -> float:
+    if tier not in STRENGTH_BY_TIER:
+        raise ValueError(f"unknown tier: {tier}")
+    return STRENGTH_BY_TIER[tier]

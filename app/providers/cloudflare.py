@@ -4,11 +4,9 @@ import httpx
 
 from app.config import settings
 
-# img2img "strength" controls how much the output is allowed to diverge from the
-# input image: 0.0 = unchanged input, 1.0 = ignores input entirely. Kept low-ish
-# so room structure (walls/windows/layout) survives the edit; this is the primary
-# knob to tune during prompt/quality iteration (see plan step 7).
-IMG2IMG_STRENGTH = 0.55
+# Fallback strength if the caller doesn't pass one. Callers should normally pass a
+# per-tier value from app/pipeline/prompts.py's STRENGTH_BY_TIER.
+DEFAULT_STRENGTH = 0.6
 NUM_STEPS = 20
 
 # Tier-agnostic negative prompt: structure/quality guards that apply to every tier.
@@ -33,7 +31,13 @@ class CloudflareImageProvider:
             f"{settings.cloudflare_account_id}/ai/run/{settings.cloudflare_image_model}"
         )
 
-    def generate_image(self, image_bytes: bytes, prompt: str, negative_prompt: str = "") -> bytes:
+    def generate_image(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        negative_prompt: str = "",
+        strength: float | None = None,
+    ) -> bytes:
         combined_negative = BASE_NEGATIVE_PROMPT
         if negative_prompt:
             combined_negative = f"{combined_negative}, {negative_prompt}"
@@ -42,7 +46,7 @@ class CloudflareImageProvider:
             "prompt": prompt,
             "negative_prompt": combined_negative,
             "image_b64": base64.b64encode(image_bytes).decode("ascii"),
-            "strength": IMG2IMG_STRENGTH,
+            "strength": strength if strength is not None else DEFAULT_STRENGTH,
             "num_steps": NUM_STEPS,
         }
         response = httpx.post(

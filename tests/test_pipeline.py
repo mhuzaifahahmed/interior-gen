@@ -12,8 +12,13 @@ class FakeProvider:
     def describe_room(self, image_bytes: bytes) -> str:
         return "A rectangular room with one window and one door."
 
-    def generate_image(self, image_bytes: bytes, prompt: str, negative_prompt: str = "") -> bytes:
-        self.image_calls.append((prompt, negative_prompt))
+    def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
+        return {"economical": "repaint over visible stains", "mid": "replace damaged flooring"}
+
+    def generate_image(
+        self, image_bytes: bytes, prompt: str, negative_prompt: str = "", strength: float | None = None
+    ) -> bytes:
+        self.image_calls.append((prompt, negative_prompt, strength))
         return b"fake-image-bytes"
 
 
@@ -63,6 +68,9 @@ def test_run_pipeline_success(monkeypatch):
 
     assert len(provider.image_calls) == 3
 
+    economical_prompt = next(p for p, _, _ in provider.image_calls if "budget renovation" in p)
+    assert "repaint over visible stains" in economical_prompt
+
 
 def test_run_pipeline_marks_failed_on_provider_error(monkeypatch):
     engine = make_test_engine()
@@ -77,7 +85,7 @@ def test_run_pipeline_marks_failed_on_provider_error(monkeypatch):
         session.commit()
 
     class FailingProvider(FakeProvider):
-        def generate_image(self, image_bytes, prompt, negative_prompt=""):
+        def generate_image(self, image_bytes, prompt, negative_prompt="", strength=None):
             raise RuntimeError("quota exceeded")
 
     run_pipeline("p2", FailingProvider(), storage)

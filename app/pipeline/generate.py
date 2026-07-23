@@ -5,7 +5,13 @@ from sqlmodel import Session
 
 from app.db import engine
 from app.models import Project
-from app.pipeline.prompts import PROMPT_VERSION, TIER_SPECS, build_negative_prompt, build_prompt
+from app.pipeline.prompts import (
+    PROMPT_VERSION,
+    TIER_SPECS,
+    build_negative_prompt,
+    build_prompt,
+    get_strength,
+)
 from app.providers.base import Provider
 from app.storage.base import Storage
 
@@ -42,10 +48,17 @@ def run_pipeline(project_id: str, provider: Provider, storage: Storage) -> None:
             session.add(project)
             session.commit()
 
+            try:
+                tier_notes = provider.generate_tier_notes(original_bytes)
+            except Exception:
+                logger.exception("generate_tier_notes failed for project %s; continuing without it", project_id)
+                tier_notes = {}
+
             for tier in TIERS:
-                prompt = build_prompt(tier, room_description)
+                prompt = build_prompt(tier, room_description, tier_notes.get(tier))
                 negative_prompt = build_negative_prompt(tier)
-                image_bytes = provider.generate_image(original_bytes, prompt, negative_prompt)
+                strength = get_strength(tier)
+                image_bytes = provider.generate_image(original_bytes, prompt, negative_prompt, strength)
                 key = f"{project_id}/{tier}.png"
                 storage.put(key, image_bytes, content_type="image/png")
                 setattr(project, f"{tier}_key", key)
@@ -57,6 +70,7 @@ def run_pipeline(project_id: str, provider: Provider, storage: Storage) -> None:
                 {
                     "prompt_version": PROMPT_VERSION,
                     "tier_specs": list(TIER_SPECS.keys()),
+                    "tier_notes": tier_notes,
                 }
             )
             session.add(project)

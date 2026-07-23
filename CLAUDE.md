@@ -36,8 +36,16 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
 - **Image generation**: `app/providers/cloudflare.py` — **Cloudflare Workers AI**,
   `@cf/runwayml/stable-diffusion-v1-5-img2img` (free tier: 10,000 neurons/day, no card). This is
   **SD1.5 img2img**, not Nano Banana's instruction-based editing — structure preservation is controlled by
-  the `IMG2IMG_STRENGTH` constant in `cloudflare.py` (low = closer to input photo, high = more freedom to
-  redecorate). Tuning that constant is the main lever if outputs drift too far or too little.
+  a **per-tier `strength`** (`STRENGTH_BY_TIER` in `prompts.py`, not one shared constant: a badly damaged
+  input photo needs more strength for the economical tier to actually paint over the damage, while
+  mid/premium's larger material swaps also need enough headroom). Tuning those per-tier values is the main
+  lever if outputs drift too far or too little.
+- **Tier notes (room-specific prompt customization)**: `GeminiProvider.generate_tier_notes` analyzes the
+  actual uploaded photo once and returns a short, tier-specific instruction per tier (e.g. "repaint over
+  visible water stains" for economical) that `build_prompt()` inserts at high priority. This exists because
+  a fully generic prompt under-transformed a badly damaged room for the economical tier (looked barely
+  renovated) — see `TIER_NOTES_PROMPT` in `gemini.py`. Best-effort: on failure/parse error it degrades to
+  `{}` and the pipeline continues without room-specific notes, same as `describe_room`.
 - `get_provider()` (`app/providers/__init__.py`) returns `HybridProvider` — this is the composition root.
   `GeminiProvider.generate_image` still exists but is unused/dormant (would work again if billing is ever
   enabled on the Gemini project) — don't delete it without checking with the user first.
@@ -52,8 +60,8 @@ them.
 Three deliberate seams keep the free/solo build swappable — respect them when adding code:
 
 1. **Provider seam** (`app/providers/`): all model calls go through the `Provider` interface
-   (`generate_image`, `describe_room`). See "Provider split" above for the current hybrid wiring. Swapping
-   a model/vendor should only ever mean touching this directory.
+   (`generate_image`, `describe_room`, `generate_tier_notes`). See "Provider split" above for the current
+   hybrid wiring. Swapping a model/vendor should only ever mean touching this directory.
 2. **Storage seam** (`app/storage/`): image **bytes** go through a `Storage` interface — `local.py`
    (filesystem, dev default) or `s3.py` (boto3, S3-compatible → **Cloudflare R2** recommended, or AWS S3).
    SQLite stores **metadata + storage keys only**, never image blobs.
@@ -70,9 +78,15 @@ Three deliberate seams keep the free/solo build swappable — respect them when 
      alone) specifically so it can't be truncated away — an earlier version kept color only in `palette`
      and every tier rendered visually similar as a result.
    - **Diffusion models don't reliably obey negation in the positive prompt.** "no chandelier" written
-     into `prompt` still primes a chandelier. Exclusions (no chandelier/marble/gold-trim for budget+mid)
-     must go through `build_negative_prompt(tier)` → the provider's `negative_prompt` param, never as
-     "no X" text inside `build_prompt()`. `test_positive_prompt_never_mentions_chandelier` guards this.
+     into `prompt` still primes a chandelier. Exclusions (no chandelier/marble/gold-trim for budget+mid,
+     and a **universal** damage/disrepair exclusion applied to every tier so no render looks like the
+     un-renovated input) must go through `build_negative_prompt(tier)` → the provider's `negative_prompt`
+     param, never as "no X" text inside `build_prompt()`. `test_positive_prompt_never_mentions_chandelier`
+     guards this.
+
+   `tier_note` (optional 3rd arg to `build_prompt()`) carries the room-specific instruction from
+   `generate_tier_notes` — see "Provider split" above. It's inserted right before `paint` (high priority,
+   since it's usually a prerequisite qualifier for the paint step).
 
 Async: FastAPI `BackgroundTasks` + client polling (no real queue yet — hardening-phase item). Each
 Project's `meta_json` carries `PROMPT_VERSION` so outputs are reproducible/defensible.

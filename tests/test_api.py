@@ -11,7 +11,12 @@ class FakeProvider:
     def describe_room(self, image_bytes: bytes) -> str:
         return "A small rectangular room with one window."
 
-    def generate_image(self, image_bytes: bytes, prompt: str, negative_prompt: str = "") -> bytes:
+    def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
+        return {}
+
+    def generate_image(
+        self, image_bytes: bytes, prompt: str, negative_prompt: str = "", strength: float | None = None
+    ) -> bytes:
         buf = io.BytesIO()
         Image.new("RGB", (4, 4), color=(200, 200, 200)).save(buf, format="PNG")
         return buf.getvalue()
