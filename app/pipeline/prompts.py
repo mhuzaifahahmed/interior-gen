@@ -1,0 +1,123 @@
+"""Tier style specs driving visual differentiation between the 3 prototypes.
+
+Encodes a real renovation cost-impact methodology, not arbitrary "budget/mid/premium"
+adjectives: each tier follows a "material quality ladder" (paint -> mouldings/wood ->
+marble+brass) and a "lighting temperature ladder" (cool 5000-6000K -> neutral warm
+3500-4000K -> warm luxury 2700-3000K), matching how a real renovation prioritizes
+spend (paint -> flooring -> lighting -> feature walls -> decor) and how luxury reads
+visually (restraint + material quality, not clutter).
+
+Each spec is a structured dict, not free text, because it is intentionally the seed
+of the future materials/pricing database (deferred feature - see the plan's Long-Term
+Plan section): these fields will later map to itemized, priceable line items.
+
+Prompt format is tuned for SD1.5 img2img (the current image backend, see
+app/providers/cloudflare.py), which conditions on short descriptive phrases rather
+than reasoning over natural-language instructions - so build_prompt() compresses the
+tier spec into a comma-separated descriptive string, not paragraphs.
+
+Two SD1.5-specific lessons baked in below (both found by testing real output):
+1. CLIP hard-truncates prompts at 77 tokens, so token order = priority order, and
+   the tier's DISTINGUISHING COLOR is folded directly into `paint` (priority #1)
+   instead of a separate `palette` field, so it can never be truncated away - a
+   generic "palette" field this far back was why early renders looked same-ish.
+2. Diffusion models don't reliably obey negation in the positive prompt ("no
+   chandelier" still primes a chandelier). Exclusions like "no chandelier" for
+   budget/mid must go through the NEGATIVE prompt channel instead - see
+   NEGATIVE_ADDITIONS and build_negative_prompt() below.
+"""
+
+PROMPT_VERSION = "v3"
+
+TIER_SPECS: dict[str, dict[str, str]] = {
+    "economical": {
+        "label": "budget renovation",
+        "paint": "plain flat cream and sage-green two-tone paint, cheap and utilitarian looking",
+        "flooring": "ordinary matte grey ceramic tile flooring, plain and unpolished, no shine, no gloss",
+        "lighting_temp": "cool white practical lighting, 5000-6000K",
+        "feature_wall": "no accent wall, no wall mouldings, bare plain walls",
+        "ceiling": "plain flat white ceiling, no false ceiling, a simple ceiling fan",
+        "materials": "paint only, no premium materials, no wood paneling, no marble",
+        "palette": "muted cream, sage green, and grey tones",
+        "density": "sparse furniture, about 80 percent of floor space left empty, uncluttered and clean",
+        "decor": "one or two potted plants, simple thin plain curtains, one or two plain framed prints",
+    },
+    "mid": {
+        "label": "mid-level renovation",
+        "paint": "warm beige walls with olive-green wainscoting panel on the lower half",
+        "flooring": "warm wood-look laminate flooring",
+        "lighting_temp": "neutral warm lighting, 3500-4000K",
+        "feature_wall": "wall mouldings and a few framed art prints",
+        "ceiling": "false ceiling with a warm cove lighting strip",
+        "materials": "paint, wall mouldings, wainscoting, laminate wood flooring",
+        "palette": "warm beige, olive green, and light wood tones",
+        "density": "balanced furniture arrangement, tidy and comfortable, not crowded",
+        "decor": "an area rug, framed art prints, a few potted plants",
+    },
+    "premium": {
+        "label": "premium luxury renovation",
+        "paint": "dark wood panel and marble feature wall with brass trim accents",
+        "flooring": "polished Italian marble flooring, reflective and bright",
+        "lighting_temp": "warm luxury lighting, 2700-3000K, like a luxury hotel lobby",
+        "feature_wall": "marble and dark wood panel wall with brass inlay",
+        "ceiling": "designer multi-layer cove ceiling with warm gold-lit trim",
+        "materials": "real marble, brass trim, dark wood paneling",
+        "palette": "rich dark wood tones with gold and brass metallic accents",
+        "density": "furniture arranged in curated symmetrical conversation zones, restrained, not overfilled",
+        "decor": "floor-to-ceiling heavy fabric curtains, framed art, symmetrical furniture placement",
+    },
+}
+
+PRESERVE_STRUCTURE = (
+    "same room structure, same walls, same windows, same doors, same ceiling height, "
+    "same camera angle and perspective as the original photo, unchanged room dimensions"
+)
+
+# Tier-specific NEGATIVE prompt additions (not positive-prompt phrasing - see module
+# docstring point 2). Budget/mid must actively steer away from luxury fixtures that
+# read as "real add-on costs"; premium has no such restriction.
+NEGATIVE_ADDITIONS: dict[str, str] = {
+    "economical": "chandelier, crystal chandelier, pendant light, gold trim, marble, luxury, ornate, wainscoting",
+    "mid": "chandelier, crystal chandelier, gold trim, marble, ornate luxury details",
+    "premium": "",
+}
+
+
+def build_prompt(tier: str, room_description: str | None = None) -> str:
+    """Compose the SD1.5 prompt.
+
+    SD1.5's CLIP text encoder hard-truncates at 77 tokens - anything past that is
+    silently dropped. A full tier spec is well over that (~130-145 words), so token
+    order here is priority order, not spec order: PRESERVE_STRUCTURE goes first
+    (non-negotiable, must survive truncation), then fields in the same
+    impact-per-dollar ranking the tier methodology itself uses (paint -> flooring ->
+    lighting -> feature walls -> materials/palette -> decor last, since decor is the
+    lowest-priority item and the one safest to lose if truncation happens).
+    """
+    if tier not in TIER_SPECS:
+        raise ValueError(f"unknown tier: {tier}")
+
+    spec = TIER_SPECS[tier]
+    tokens = [
+        f"{spec['label']} of the same room",
+        PRESERVE_STRUCTURE,
+        spec["paint"],
+        spec["flooring"],
+        spec["lighting_temp"],
+        spec["ceiling"],
+        spec["feature_wall"],
+        spec["materials"],
+        spec["palette"],
+        spec["density"],
+        spec["decor"],
+    ]
+    if room_description:
+        tokens.insert(2, room_description)
+
+    return ", ".join(tokens)
+
+
+def build_negative_prompt(tier: str) -> str:
+    if tier not in TIER_SPECS:
+        raise ValueError(f"unknown tier: {tier}")
+    return NEGATIVE_ADDITIONS[tier]

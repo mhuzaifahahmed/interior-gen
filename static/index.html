@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Interior-Gen</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main>
+    <h1>Interior-Gen</h1>
+    <p>Upload a room photo to generate 3 redesign tiers: Economical, Mid-Range, Premium.</p>
+
+    <form id="upload-form">
+      <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" required />
+      <button type="submit">Generate</button>
+    </form>
+
+    <p id="status"></p>
+
+    <div id="results" class="grid"></div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
