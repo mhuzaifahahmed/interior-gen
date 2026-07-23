@@ -94,3 +94,31 @@ def test_get_strength_unknown_tier_raises():
     except ValueError:
         return
     assert False, "expected ValueError for unknown tier"
+
+
+def test_premium_strength_is_lower_than_economical_despite_bigger_material_change():
+    # Regression guard for a real observed failure: economical and premium once
+    # shared the same (higher) strength, and premium hallucinated an entirely
+    # different room (no window, wrong shape) while economical preserved structure
+    # fine at that same value. Premium's luxury vocabulary needs LESS freedom, not
+    # more, to stay anchored to the input - don't raise this back up without
+    # re-verifying against a real generation first.
+    assert get_strength("premium") < get_strength("economical")
+
+
+def test_only_premium_has_a_structure_reminder():
+    assert TIER_SPECS["economical"]["structure_reminder"] == ""
+    assert TIER_SPECS["mid"]["structure_reminder"] == ""
+    assert TIER_SPECS["premium"]["structure_reminder"] != ""
+
+
+def test_build_prompt_includes_premium_structure_reminder():
+    prompt = build_prompt("premium")
+    assert TIER_SPECS["premium"]["structure_reminder"] in prompt
+
+
+def test_build_prompt_omits_structure_reminder_for_tiers_without_one():
+    for tier in ("economical", "mid"):
+        prompt = build_prompt(tier)
+        # the double comma that would result from appending an empty token
+        assert ", , " not in prompt

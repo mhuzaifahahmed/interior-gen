@@ -27,7 +27,7 @@ Two SD1.5-specific lessons baked in below (both found by testing real output):
    NEGATIVE_ADDITIONS and build_negative_prompt() below.
 """
 
-PROMPT_VERSION = "v4"
+PROMPT_VERSION = "v5"
 
 TIER_SPECS: dict[str, dict[str, str]] = {
     "economical": {
@@ -41,6 +41,7 @@ TIER_SPECS: dict[str, dict[str, str]] = {
         "palette": "muted cream, sage green, and grey tones",
         "density": "sparse furniture, about 80 percent of floor space left empty, uncluttered and clean",
         "decor": "one or two potted plants, simple thin plain curtains, one or two plain framed prints",
+        "structure_reminder": "",
     },
     "mid": {
         "label": "mid-level renovation",
@@ -53,6 +54,7 @@ TIER_SPECS: dict[str, dict[str, str]] = {
         "palette": "warm beige, olive green, and light wood tones",
         "density": "balanced furniture arrangement, tidy and comfortable, not crowded",
         "decor": "an area rug, framed art prints, a few potted plants",
+        "structure_reminder": "",
     },
     "premium": {
         "label": "premium luxury renovation",
@@ -65,6 +67,14 @@ TIER_SPECS: dict[str, dict[str, str]] = {
         "palette": "rich dark wood tones with gold and brass metallic accents",
         "density": "furniture arranged in curated symmetrical conversation zones, restrained, not overfilled",
         "decor": "floor-to-ceiling heavy fabric curtains, framed art, symmetrical furniture placement",
+        # Repeated structure anchor placed right before the heaviest luxury vocabulary
+        # (marble/brass/chandelier-adjacent words) - a real failure was traced to this
+        # word cluster overpowering PRESERVE_STRUCTURE and causing SD1.5 to hallucinate
+        # a whole different room (a "luxury vanity nook") instead of redecorating the
+        # actual input room. Repeating the anchor here reinforces it via CLIP
+        # conditioning weight, right where it's needed most. Only premium needs this -
+        # economical/mid don't carry the same luxury-vocabulary pull.
+        "structure_reminder": "still the same original room shape and window, do not enlarge or change the space",
     },
 }
 
@@ -93,13 +103,18 @@ UNIVERSAL_DAMAGE_NEGATIVE = (
 # img2img "strength": 0.0 = unchanged input, 1.0 = ignores input entirely. Tiers need
 # different values, not one shared constant - a badly damaged input photo needs MORE
 # strength for the (visually minimal) economical tier to actually paint over the
-# damage, while mid/premium's larger material swaps (marble, chandelier) also need
-# enough headroom to fully manifest. These are first-pass values to tune against real
-# output, not final: if a tier still under- or over-transforms, adjust this first.
+# damage. Premium is deliberately LOWER, not higher, despite having the biggest
+# material change: a real test showed economical (0.65) preserved structure fine,
+# but premium at the SAME 0.65 hallucinated an entirely different room (no window,
+# wrong shape) - the rich luxury vocabulary (marble/brass/chandelier) combined with
+# that much freedom let SD1.5 fully reinterpret the scene toward a generic "luxury
+# vanity" archetype instead of redecorating the actual input. Counterintuitive but
+# real: premium needs LESS freedom to stay anchored, not more, precisely because its
+# vocabulary has the strongest pull away from the input geometry.
 STRENGTH_BY_TIER: dict[str, float] = {
     "economical": 0.65,
     "mid": 0.6,
-    "premium": 0.65,
+    "premium": 0.45,
 }
 
 
@@ -119,6 +134,12 @@ def build_prompt(tier: str, room_description: str | None = None, tier_note: str 
     photo per tier - see Provider.generate_tier_notes(). It is placed right before
     `paint` since it's usually a prerequisite/qualifier for that step, and is high
     enough priority to survive truncation alongside paint/flooring/lighting.
+
+    `structure_reminder` (per-tier, usually empty) is inserted right before
+    `materials`/`palette` - i.e. right before the heaviest, most scene-defining
+    vocabulary for that tier. It exists because a single PRESERVE_STRUCTURE mention
+    wasn't enough to counteract premium's marble/brass/chandelier vocabulary in real
+    testing; repeating the anchor closer to the words that threaten it reinforces it.
     """
     if tier not in TIER_SPECS:
         raise ValueError(f"unknown tier: {tier}")
@@ -138,6 +159,10 @@ def build_prompt(tier: str, room_description: str | None = None, tier_note: str 
         spec["lighting_temp"],
         spec["ceiling"],
         spec["feature_wall"],
+    ]
+    if spec.get("structure_reminder"):
+        tokens.append(spec["structure_reminder"])
+    tokens += [
         spec["materials"],
         spec["palette"],
         spec["density"],
