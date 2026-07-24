@@ -36,10 +36,27 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
 - **Image generation**: `app/providers/cloudflare.py` — **Cloudflare Workers AI**,
   `@cf/runwayml/stable-diffusion-v1-5-img2img` (free tier: 10,000 neurons/day, no card). This is
   **SD1.5 img2img**, not Nano Banana's instruction-based editing — structure preservation is controlled by
-  a **per-tier `strength`** (`STRENGTH_BY_TIER` in `prompts.py`, not one shared constant: a badly damaged
-  input photo needs more strength for the economical tier to actually paint over the damage, while
-  mid/premium's larger material swaps also need enough headroom). Tuning those per-tier values is the main
-  lever if outputs drift too far or too little.
+  a **per-tier `strength`** (`STRENGTH_BY_TIER` in `prompts.py`, not one shared constant). Tuning these
+  values is the main lever if outputs drift too far or too little. **Counterintuitive, hard-won lesson**:
+  premium is *lower* (0.45) than economical/mid (0.65/0.6), not higher, despite having the biggest material
+  change. A real generation showed economical and premium at the same 0.65 - economical preserved structure
+  fine, but premium hallucinated an entirely different room (no window, wrong shape), because its luxury
+  vocabulary (marble/brass/chandelier) combined with that much freedom let SD1.5 fully reinterpret the scene
+  toward a generic "luxury vanity" archetype instead of redecorating the actual input. Premium also carries
+  a `structure_reminder` field (empty for the other tiers) that `build_prompt()` inserts right before the
+  heaviest material tokens - a repeated structure-preservation anchor placed where the luxury vocabulary's
+  pull is strongest. Don't raise premium's strength back up without re-verifying against a real generation.
+  - **Investigated alternate image providers** (none currently wired in - Cloudflare remains primary):
+    Pixazo (Flux Schnell img2img) was abandoned - their API gateway Cloudflare-bot-blocks server-side
+    requests (403 challenge page even with a valid key), unusable for backend integration. NVIDIA NIM's
+    Qwen-Image-Edit (real instruction-based editing, open-weight, comparable structure-preservation to
+    closed-source models per published benchmarks) is the current candidate - `NVIDIA_API_KEY` placeholder
+    exists in `.env`/`.env.example` but no provider code exists yet. Its hosted invocation shape is still
+    unconfirmed: image-edit models aren't in the standard `/v1/models` OpenAI-compatible catalog (that only
+    lists chat/LLM models), so it likely goes through NVIDIA's NVCF function-ID-based invocation instead of
+    a friendly model-name string - needs the exact request shape from the model's own API tab on
+    `build.nvidia.com/qwen/qwen-image-edit` (a JS-rendered page that automated fetching can't scrape) before
+    a `NvidiaQwenProvider` can be built.
 - **Tier notes (room-specific prompt customization)**: `GeminiProvider.generate_tier_notes` analyzes the
   actual uploaded photo once and returns a short, tier-specific instruction per tier (e.g. "repaint over
   visible water stains" for economical) that `build_prompt()` inserts at high priority. This exists because
@@ -108,7 +125,8 @@ instruction.
 - SD1.5 img2img (current image backend) preserves structure via the `strength` parameter, not a hard
   geometric lock — expect more drift than the originally-planned Nano Banana approach, and expect less
   precise instruction-following than a natural-language-tuned model. ControlNet+depth is the eventual
-  hardening upgrade if this proves insufficient.
+  hardening upgrade if this proves insufficient. Current prompt version is `v5` (`PROMPT_VERSION` in
+  `prompts.py`) - see the premium strength/structure_reminder fix above.
 - Free-tier caps (Cloudflare: 10,000 neurons/day; Gemini text: separate free quota) and localhost-only
   deployment are intentional for Phase 1.
 - `GEMINI_IMAGE_MODEL` env var / Gemini image path is dormant, not deleted — kept for a possible future
