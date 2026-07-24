@@ -16,6 +16,10 @@
         <span class="brand-mark">◆</span>
         <span class="brand-name">Interior&#8209;Gen</span>
       </div>
+      <nav class="nav-links">
+        <a href="#examples">Examples</a>
+      </nav>
+      <a href="#upload-card" class="nav-cta">Start Redesigning</a>
     </header>
 
     <main>
@@ -27,7 +31,30 @@
           </p>
         </section>
 
-        <section class="upload-card">
+        <section class="examples" id="examples">
+          <p class="eyebrow">A real example</p>
+          <div class="examples-grid">
+            <figure class="example-figure">
+              <img src="/static/examples/original.jpg" alt="Original uploaded room" loading="lazy" />
+              <figcaption>Original</figcaption>
+            </figure>
+            <figure class="example-figure">
+              <img src="/static/examples/economical.jpg" alt="Economical redesign" loading="lazy" />
+              <figcaption>Economical</figcaption>
+            </figure>
+            <figure class="example-figure">
+              <img src="/static/examples/mid.jpg" alt="Mid-Range redesign" loading="lazy" />
+              <figcaption>Mid&#8209;Range</figcaption>
+            </figure>
+            <figure class="example-figure">
+              <img src="/static/examples/premium.jpg" alt="Premium redesign" loading="lazy" />
+              <figcaption>Premium</figcaption>
+            </figure>
+          </div>
+          <p class="examples-note">One real upload, unedited — the same walls, windows, and layout carried through all three tiers.</p>
+        </section>
+
+        <section class="upload-card" id="upload-card">
           <form id="upload-form">
             <label id="dropzone" for="file-input" class="dropzone">
               <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" hidden />
@@ -95,6 +122,11 @@
         <span>Interior&#8209;Gen</span>
       </div>
       <p>AI&#8209;generated visualizations for planning purposes.</p>
+      <p class="footer-links">
+        <a href="/terms">Terms</a>
+        <span aria-hidden="true">&middot;</span>
+        <a href="/privacy">Privacy Policy</a>
+      </p>
     </footer>
   </div>
 

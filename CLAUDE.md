@@ -122,12 +122,20 @@ every 3s until `status: "done"`, rendering `images.{original,economical,mid,prem
 `room_description` from the response — no separate/mocked frontend data path. Deliberately restrained
 by design decision (not an oversight): all four result cards are visually uniform (image + text label +
 one-line descriptor, no per-tier color coding) so the *generated images* carry the tier differences,
-not the UI chrome; the progress screen shows one steady message rather than fake staged per-tier steps.
-The landing screen carries a three-card **tier explainer band** (Economical/Mid/Premium finish
-descriptions) and per-result descriptors — copy for both is sourced from the real `prompts.py` tier
-methodology (paint→wood/mouldings→marble+brass, cool→warm→luxury lighting), so keep them in sync if the
-tier specs change. Stays vanilla HTML/CSS/JS, no build step. `tests/test_api.py`'s
-`test_full_upload_and_poll_flow` exercises the exact contract this frontend depends on.
+not the UI chrome. The progress screen cycles through `PROGRESS_MESSAGES` in `app.js` every 7s -
+deliberately **general** ("Applying materials and finishes…"), never claiming specific per-tier progress
+the backend doesn't actually report (an earlier version faked "now designing Premium..." steps - keep
+these honest if edited). The landing screen carries a nav bar (`Examples` anchor + a CTA scrolling to
+`#upload-card`), a real **example showcase** (`static/examples/*.jpg` - actual pipeline output, not
+mockups, picked for good structure preservation) at `#examples`, a three-card **tier explainer band**
+(Economical/Mid/Premium finish descriptions), and per-result descriptors - copy for the explainer band
+and descriptors is sourced from the real `prompts.py` tier methodology (paint→wood/mouldings→marble+brass,
+cool→warm→luxury lighting), so keep them in sync if the tier specs change. `static/terms.html` and
+`static/privacy.html` (served via `GET /terms` and `GET /privacy` in `main.py`) are simple, honestly-worded
+placeholder pages appropriate for the prototype stage - not real legal review, flag to the user before
+treating them as sufficient for an actual launch. Stays vanilla HTML/CSS/JS, no build step.
+`tests/test_api.py`'s `test_full_upload_and_poll_flow` exercises the exact contract this frontend
+depends on; `test_terms_page_serves`/`test_privacy_page_serves` cover the new routes.
 
 ## Testing convention
 

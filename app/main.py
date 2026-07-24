@@ -43,6 +43,20 @@ def index():
     return FileResponse("static/index.html")
 
 
+@app.get("/terms")
+def terms():
+    from fastapi.responses import FileResponse
+
+    return FileResponse("static/terms.html")
+
+
+@app.get("/privacy")
+def privacy():
+    from fastapi.responses import FileResponse
+
+    return FileResponse("static/privacy.html")
+
+
 @app.post("/api/projects", response_model=ProjectCreateResponse)
 async def create_project(
     background_tasks: BackgroundTasks,

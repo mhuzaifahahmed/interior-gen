@@ -61,3 +61,17 @@ def test_unknown_project_returns_404():
     with TestClient(app) as client:
         res = client.get("/api/projects/does-not-exist")
         assert res.status_code == 404
+
+
+def test_terms_page_serves():
+    with TestClient(app) as client:
+        res = client.get("/terms")
+        assert res.status_code == 200
+        assert "Terms" in res.text
+
+
+def test_privacy_page_serves():
+    with TestClient(app) as client:
+        res = client.get("/privacy")
+        assert res.status_code == 200
+        assert "Privacy" in res.text
