@@ -9,6 +9,9 @@
 
   --accent: #b07d3f;
   --accent-bg: #f5ead9;
+  --accent-dark: #5c3f22;
+  --accent-dark-ink: #f5ede0;
+  --accent-dark-ink-soft: rgba(245, 237, 224, 0.72);
 
   --radius: 16px;
   --radius-sm: 10px;
@@ -37,10 +40,16 @@ body {
 /* ---- Topbar ---- */
 
 .topbar {
+  background: var(--accent-dark);
+}
+
+.topbar-inner {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 1.1rem 1.5rem;
   display: flex;
   align-items: center;
   gap: 2rem;
-  padding-bottom: 3.5rem;
 }
 
 .brand {
@@ -51,12 +60,12 @@ body {
 
 .nav-links {
   display: flex;
-  gap: 1.5rem;
+  gap: 1.75rem;
   margin-right: auto;
 }
 
 .nav-links a {
-  color: var(--ink-soft);
+  color: var(--accent-dark-ink-soft);
   text-decoration: none;
   font-size: 0.92rem;
   font-weight: 500;
@@ -64,7 +73,7 @@ body {
 }
 
 .nav-links a:hover {
-  color: var(--ink);
+  color: var(--accent-dark-ink);
 }
 
 .nav-cta {
@@ -74,8 +83,8 @@ body {
   padding: 0.55rem 1.25rem;
   font-size: 0.88rem;
   font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, #2b2622, #17140f);
+  color: var(--accent-dark);
+  background: var(--accent-dark-ink);
   white-space: nowrap;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
@@ -92,7 +101,7 @@ body {
 }
 
 .brand-mark {
-  color: var(--accent);
+  color: var(--accent-dark-ink);
   font-size: 1.1rem;
 }
 
@@ -101,6 +110,7 @@ body {
   font-weight: 600;
   font-size: 1.25rem;
   letter-spacing: -0.01em;
+  color: var(--accent-dark-ink);
 }
 
 /* ---- Hero ---- */
@@ -125,6 +135,52 @@ body {
   color: var(--ink-soft);
   font-size: 1.05rem;
   line-height: 1.6;
+}
+
+/* ---- Overview (value proposition) ---- */
+
+.overview {
+  max-width: 640px;
+  margin: 0 auto 4rem;
+  text-align: center;
+  scroll-margin-top: 2rem;
+}
+
+.overview-list {
+  list-style: none;
+  margin: 0 0 2rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  text-align: left;
+}
+
+.overview-list li {
+  color: var(--ink-soft);
+  line-height: 1.55;
+  font-size: 0.95rem;
+}
+
+.overview-list strong {
+  color: var(--ink);
+}
+
+.overview-cta {
+  display: inline-block;
+  text-decoration: none;
+  border-radius: 999px;
+  padding: 0.75rem 1.75rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #fff;
+  background: linear-gradient(135deg, #2b2622, #17140f);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.overview-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lift);
 }
 
 /* ---- Examples showcase ---- */
@@ -555,11 +611,16 @@ button#generate-btn:disabled {
 /* ---- Footer ---- */
 
 .footer {
-  text-align: center;
+  background: var(--accent-dark);
   margin-top: 5rem;
-  padding-top: 2rem;
-  border-top: 1px solid var(--line);
-  color: var(--ink-soft);
+}
+
+.footer-inner {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  color: var(--accent-dark-ink-soft);
   font-size: 0.8rem;
 }
 
@@ -571,25 +632,25 @@ button#generate-btn:disabled {
   font-family: var(--serif);
   font-weight: 600;
   font-size: 0.95rem;
-  color: var(--ink);
+  color: var(--accent-dark-ink);
   margin-bottom: 0.4rem;
 }
 
-.footer p {
+.footer-inner p {
   margin: 0;
 }
 
-.footer p.footer-links {
+.footer-inner p.footer-links {
   margin-top: 0.5rem;
 }
 
 .footer-links a {
-  color: var(--ink-soft);
+  color: var(--accent-dark-ink-soft);
   text-decoration: underline;
 }
 
 .footer-links a:hover {
-  color: var(--ink);
+  color: var(--accent-dark-ink);
 }
 
 .footer-links span {

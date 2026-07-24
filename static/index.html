@@ -10,18 +10,21 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <div class="page">
-    <header class="topbar">
+  <header class="topbar">
+    <div class="topbar-inner">
       <div class="brand">
         <span class="brand-mark">◆</span>
         <span class="brand-name">Interior&#8209;Gen</span>
       </div>
       <nav class="nav-links">
+        <a href="#overview">Overview</a>
         <a href="#examples">Examples</a>
       </nav>
       <a href="#upload-card" class="nav-cta">Start Redesigning</a>
-    </header>
+    </div>
+  </header>
 
+  <div class="page">
     <main>
       <div class="upload-view" id="upload-view">
         <section class="hero">
@@ -29,6 +32,23 @@
           <p class="hero-sub">
             Upload a photo to get three redesigns — Economical, Mid&#8209;Range, and Premium.
           </p>
+        </section>
+
+        <section class="overview" id="overview">
+          <ul class="overview-list">
+            <li>
+              <strong>Upload one photo</strong> — no measurements, no waiting on a designer's calendar.
+            </li>
+            <li>
+              <strong>Structure preserved</strong> — the same walls, windows, and layout carry through
+              every tier; only the finishes change.
+            </li>
+            <li>
+              <strong>Three tiers, one click</strong> — Economical, Mid&#8209;Range, and Premium,
+              generated together so you can compare.
+            </li>
+          </ul>
+          <a href="#upload-card" class="overview-cta">Start Redesigning &rarr;</a>
         </section>
 
         <section class="examples" id="examples">
@@ -115,8 +135,10 @@
         </div>
       </section>
     </main>
+  </div>
 
-    <footer class="footer">
+  <footer class="footer">
+    <div class="footer-inner">
       <div class="footer-brand">
         <span class="brand-mark">◆</span>
         <span>Interior&#8209;Gen</span>
@@ -127,8 +149,8 @@
         <span aria-hidden="true">&middot;</span>
         <a href="/privacy">Privacy Policy</a>
       </p>
-    </footer>
-  </div>
+    </div>
+  </footer>
 
   <div class="lightbox" id="lightbox" hidden>
     <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
