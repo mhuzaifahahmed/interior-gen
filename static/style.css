@@ -34,8 +34,32 @@ body {
   flex-direction: column;
   font-family: var(--sans);
   color: var(--ink);
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(176, 125, 63, 0.07), transparent 42%),
+    radial-gradient(circle at 88% 8%, rgba(156, 122, 82, 0.08), transparent 40%),
+    var(--bg);
   -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Scroll reveal ---- */
+
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(22px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+[data-reveal].is-revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
 }
 
 .page {
@@ -144,15 +168,18 @@ body {
 
 .overview-list {
   list-style: none;
-  margin: 0 0 2rem;
+  margin: 0 0 2.5rem;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.25rem;
   text-align: left;
 }
 
 .overview-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
   color: var(--ink-soft);
   line-height: 1.55;
   font-size: 0.95rem;
@@ -160,6 +187,23 @@ body {
 
 .overview-list strong {
   color: var(--ink);
+}
+
+.overview-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.overview-icon svg {
+  width: 19px;
+  height: 19px;
 }
 
 .overview-cta {
@@ -376,10 +420,46 @@ button#generate-btn:disabled {
 }
 
 .tier-explainer {
+  position: relative;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 1.5rem;
+  padding: 1.75rem 1.5rem 1.5rem;
+  overflow: hidden;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.tier-explainer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.25s ease;
+}
+
+.tier-explainer:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lift);
+  border-color: transparent;
+}
+
+.tier-explainer:hover::before {
+  transform: scaleX(1);
+}
+
+.tier-number {
+  display: block;
+  font-family: var(--serif);
+  font-size: 1.6rem;
+  font-weight: 500;
+  color: var(--accent);
+  opacity: 0.55;
+  margin-bottom: 0.5rem;
 }
 
 .tier-explainer h3 {

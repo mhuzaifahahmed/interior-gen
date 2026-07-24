@@ -233,3 +233,31 @@ function showState(state) {
   errorCard.hidden = state !== "error";
   resultsSection.hidden = state !== "results";
 }
+
+/* ---------- Scroll reveal ---------- */
+/* Fades/rises elements in as they enter the viewport. One-time per element
+   (unobserves after revealing) rather than re-triggering on every scroll -
+   a subtle motion cue, not a distraction. Falls back to instantly visible
+   if IntersectionObserver isn't available. */
+
+const revealTargets = document.querySelectorAll("[data-reveal]");
+
+if (revealTargets.length) {
+  if ("IntersectionObserver" in window) {
+    const revealObserver = new IntersectionObserver(
+      (entries, observer) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const delay = entry.target.dataset.revealDelay || 0;
+          entry.target.style.transitionDelay = `${delay}ms`;
+          entry.target.classList.add("is-revealed");
+          observer.unobserve(entry.target);
+        }
+      },
+      { threshold: 0.15 }
+    );
+    revealTargets.forEach((el) => revealObserver.observe(el));
+  } else {
+    revealTargets.forEach((el) => el.classList.add("is-revealed"));
+  }
+}
