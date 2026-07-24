@@ -112,6 +112,23 @@ Layout: `app/{main,config,db,models,schemas}.py`, `app/pipeline/` (prompts + orc
 `app/providers/` (base + gemini + cloudflare + hybrid), `app/storage/` (base + local + s3), `static/`
 (vanilla HTML/JS — no build step), `data/` (sqlite + local storage, gitignored), `tests/`.
 
+### Frontend (`static/`)
+
+Single-screen, clarity-first flow: upload → progress → results (or error), one state visible at a
+time via `showState()` in `app.js` (the whole upload screen — hero + upload card + tier-explainer band
+— is one `#upload-view` container toggled together) — never more than one primary action on screen.
+Wired directly to the real backend: `POST /api/projects` (upload) then polls `GET /api/projects/{id}`
+every 3s until `status: "done"`, rendering `images.{original,economical,mid,premium}` and
+`room_description` from the response — no separate/mocked frontend data path. Deliberately restrained
+by design decision (not an oversight): all four result cards are visually uniform (image + text label +
+one-line descriptor, no per-tier color coding) so the *generated images* carry the tier differences,
+not the UI chrome; the progress screen shows one steady message rather than fake staged per-tier steps.
+The landing screen carries a three-card **tier explainer band** (Economical/Mid/Premium finish
+descriptions) and per-result descriptors — copy for both is sourced from the real `prompts.py` tier
+methodology (paint→wood/mouldings→marble+brass, cool→warm→luxury lighting), so keep them in sync if the
+tier specs change. Stays vanilla HTML/CSS/JS, no build step. `tests/test_api.py`'s
+`test_full_upload_and_poll_flow` exercises the exact contract this frontend depends on.
+
 ## Testing convention
 
 All provider calls in tests are **mocked** — no real Gemini or Cloudflare network calls in the test suite
