@@ -156,6 +156,24 @@ Three deliberate seams keep the free/solo build swappable — respect them when 
    presumably `-mini`/`-1.5`) support it, which is why `OPENAI_IMAGE_MODEL=gpt-image-1` despite its
    Oct 2026 deprecation - a deliberate, informed choice, not an oversight.
 
+   **v7: room-type common sense + explicit depth lock.** A real generation turned a hallway into a
+   bedroom (added a bed/wardrobe that don't belong in a hallway) and changed a hallway's depth between
+   tiers - both are "architecture changes" caused by the image model defaulting to generic "furnish this
+   space" instincts rather than reasoning about what's actually in the photo. Root cause diagnosis: the
+   old `describe_room()` prompt (`app/providers/gemini.py`) was written for the SD1.5-era 77-token budget
+   ("under 15 words... extremely terse") and only asked for window/door positions and room shape - it
+   never asked Gemini to name what *type* of space it's looking at or its depth/proportions, so that
+   information never reached the image model at all. Fixed two ways: (1) `describe_room()` now asks
+   Gemini to state the room's type (hallway, bedroom, living room, etc. - based on its own judgement of
+   what's visible, not a fixed enum) and its approximate depth/proportions in plain sentences (no longer
+   artificially terse, since OpenAI has no token-budget pressure); (2) a new always-on
+   `ROOM_TYPE_COMMON_SENSE` sentence in `build_prompt()` (`app/pipeline/prompts.py`) instructs the model
+   to only add furniture/decor realistic for the space it's actually looking at, and `PRESERVE_STRUCTURE`
+   now explicitly locks the room's depth/size, not just walls/windows/proportions in the abstract.
+   Deliberately **not** hardcoded to a fixed list of room types (e.g. only "hall" vs "bedroom") - the
+   instruction leans on the model's own common sense about the specific photo, so it generalizes to
+   whatever room type actually appears. `PROMPT_VERSION` bumped to `v7`.
+
 Async: FastAPI `BackgroundTasks` + client polling (no real queue yet — hardening-phase item). Each
 Project's `meta_json` carries `PROMPT_VERSION` so outputs are reproducible/defensible.
 
@@ -204,11 +222,11 @@ instruction.
 
 ## Known limitations to keep in mind (not bugs to "fix" silently)
 
-- SD1.5 img2img (current image backend) preserves structure via the `strength` parameter, not a hard
-  geometric lock — expect more drift than the originally-planned Nano Banana approach, and expect less
-  precise instruction-following than a natural-language-tuned model. ControlNet+depth is the eventual
-  hardening upgrade if this proves insufficient. Current prompt version is `v5` (`PROMPT_VERSION` in
-  `prompts.py`) - see the premium strength/structure_reminder fix above.
+- SD1.5 img2img (Cloudflare fallback only, not the active backend) preserves structure via the `strength`
+  parameter, not a hard geometric lock — expect more drift than gpt-image-1's instruction-following if
+  that path is ever used. ControlNet+depth is the eventual hardening upgrade if this proves insufficient.
+  Current prompt version is `v7` (`PROMPT_VERSION` in `prompts.py`) - see the Tier/prompt seam section
+  above for the full v6/v7 history.
 - Free-tier caps (Cloudflare: 10,000 neurons/day; Gemini text: separate free quota) and localhost-only
   deployment are intentional for Phase 1.
 - `GEMINI_IMAGE_MODEL` env var / Gemini image path is dormant, not deleted — kept for a possible future

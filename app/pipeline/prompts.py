@@ -42,7 +42,7 @@ renderer selected per-provider - not implemented (explicit user decision to repl
 the format entirely rather than maintain two).
 """
 
-PROMPT_VERSION = "v6"
+PROMPT_VERSION = "v7"
 
 TIER_SPECS: dict[str, dict[str, str]] = {
     "economical": {
@@ -96,7 +96,24 @@ TIER_SPECS: dict[str, dict[str, str]] = {
 PRESERVE_STRUCTURE = (
     "Keep the exact walls, windows, doors, columns or pillars, ceiling shape and height, "
     "floor layout, and proportions unchanged. Do not add, remove, move, or resize any "
-    "structural element, and do not change the camera angle or perspective."
+    "structural element, and do not change the camera angle or perspective. The room's "
+    "depth and size must stay exactly as shown - do not make it look longer, shorter, "
+    "deeper, wider, or more spacious than the original photo."
+)
+
+# v7: a generic, room-type-agnostic instruction (not hardcoded to any specific list
+# of room types - the model must use its own judgement about what's realistic for
+# THIS specific space). Added after a real failure: the image model was turning
+# hallways into bedrooms and adding furniture that doesn't belong in the space,
+# because room_description alone (even once it names the room type) doesn't stop
+# the model from defaulting to generic "make it look furnished" instincts. This is
+# a blanket rule that applies regardless of what type of room describe_room() found.
+ROOM_TYPE_COMMON_SENSE = (
+    "Only add furniture and decor that would realistically belong in this specific "
+    "type of space, based on common sense about what the photo actually shows - for "
+    "example, do not add a bed or wardrobe to a hallway, entryway, or living room, "
+    "and do not add dining or kitchen items to a bedroom. Do not change what kind of "
+    "room or space this is."
 )
 
 # Tier-specific exclusions. Used two ways in v6: (a) still passed through
@@ -154,6 +171,9 @@ def build_prompt(
     Sentence order:
       1. Edit framing - this is a photo edit, not a fresh generation.
       2. PRESERVE_STRUCTURE - the structural lock, always present, non-negotiable.
+      2b. ROOM_TYPE_COMMON_SENSE - always present; stops the model from turning a
+          hallway into a bedroom or adding furniture that doesn't belong in the
+          space, without hardcoding a fixed list of room types.
       3. room_description / tier_note / user_notes, if given (each optional).
       4. Tier renovation instructions, derived from TIER_SPECS in the same
          impact-per-dollar order the methodology itself uses (paint -> flooring ->
@@ -178,6 +198,7 @@ def build_prompt(
         f"Edit this photograph of a real room to create a {spec['label']}. "
         "The output must be the same physical room, clearly recognizable - only redecorated.",
         PRESERVE_STRUCTURE,
+        ROOM_TYPE_COMMON_SENSE,
     ]
     if room_description:
         sentences.append(room_description)

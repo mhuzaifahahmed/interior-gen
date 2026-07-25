@@ -62,10 +62,15 @@ class GeminiProvider(Provider):
     def describe_room(self, image_bytes: bytes) -> str:
         image = Image.open(BytesIO(image_bytes))
         prompt = (
-            "In one short phrase (under 15 words, comma-separated, no full sentences), "
-            "describe this room's fixed structure only: window/door positions and room "
-            "shape. Do not mention furniture, decor, or colors. This will be prepended "
-            "to an SD1.5 prompt with a strict 77-token budget, so be extremely terse."
+            "In two short sentences, describe this room for an AI image-editing model. "
+            "First: state what TYPE of space this actually is, based only on what's "
+            "visibly there (e.g. hallway, corridor, entryway, bedroom, living room, "
+            "kitchen, dining room, bathroom, office) - use your own judgement, don't "
+            "default to a generic guess, and don't call it a 'room' if a more specific "
+            "type is visible. Second: describe its fixed structure - window/door "
+            "positions, room shape, and its approximate depth/proportions (e.g. 'a long "
+            "narrow hallway extending several meters back' vs 'a compact, roughly "
+            "square room'). Do not mention furniture, decor, or colors. Be concise."
         )
         response = self.client.models.generate_content(
             model=settings.gemini_text_model,

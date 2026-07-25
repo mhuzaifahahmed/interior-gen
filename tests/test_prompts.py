@@ -1,5 +1,6 @@
 from app.pipeline.prompts import (
     PRESERVE_STRUCTURE,
+    ROOM_TYPE_COMMON_SENSE,
     STRENGTH_BY_TIER,
     TIER_SPECS,
     UNIVERSAL_DAMAGE_NEGATIVE,
@@ -200,3 +201,29 @@ def test_build_prompt_is_natural_language_sentences_not_comma_keywords():
     # (period-terminated), not one long comma-joined descriptor list.
     prompt = build_prompt("mid")
     assert prompt.count(". ") > 5
+
+
+# ---- v7: room-type common sense ----
+
+
+def test_build_prompt_always_includes_room_type_common_sense():
+    # Regression guard for a real failure: the image model was turning hallways
+    # into bedrooms and adding furniture that doesn't belong in the space. This
+    # instruction is generic (not hardcoded to "hall"/"bedroom" specifically) and
+    # must be present for every tier regardless of room_description being given.
+    for tier in TIER_SPECS:
+        assert ROOM_TYPE_COMMON_SENSE in build_prompt(tier)
+
+
+def test_room_type_common_sense_is_not_hardcoded_to_a_fixed_room_list():
+    # The instruction must lean on the model's own judgement about the specific
+    # room in the photo, not enumerate an exhaustive fixed list of room types -
+    # the user explicitly asked that this not be trained/limited to just
+    # "hall" and "bedroom".
+    assert "common sense" in ROOM_TYPE_COMMON_SENSE.lower()
+
+
+def test_preserve_structure_explicitly_locks_room_depth():
+    # Regression guard for a real failure: a hallway's depth changed (became
+    # shorter/longer) between tiers, effectively changing the room's architecture.
+    assert "depth" in PRESERVE_STRUCTURE.lower()
