@@ -28,9 +28,9 @@ const lightboxClose = document.getElementById("lightbox-close");
 
 const TIERS = [
   { key: "original", label: "Original", desc: "Your uploaded room." },
-  { key: "economical", label: "Economical", desc: "Fresh paint and clean practical finishes." },
-  { key: "mid", label: "Mid-Range", desc: "Warm woods and upgraded fixtures." },
   { key: "premium", label: "Premium", desc: "Marble, brass, and designer lighting." },
+  { key: "mid", label: "Mid-Range", desc: "Warm woods and upgraded fixtures." },
+  { key: "economical", label: "Economical", desc: "Fresh paint and clean practical finishes." },
 ];
 
 // Deliberately general, not staged per-tier claims ("now designing Premium...") - the
