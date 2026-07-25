@@ -25,11 +25,6 @@
 
 html {
   height: 100%;
-  /* Safety net for the full-bleed .examples breakout below: 100vw doesn't
-     account for the scrollbar's own width, which can cause a few stray
-     pixels of horizontal overflow. Clipping it here is the standard fix -
-     nothing visible is lost, it just prevents a horizontal scrollbar. */
-  overflow-x: hidden;
 }
 
 body {
@@ -231,18 +226,18 @@ body {
 /* ---- Examples showcase ---- */
 
 .examples {
-  /* Full-bleed breakout so this section reads noticeably bigger than the
-     rest of the page - runs almost edge-to-edge, still centered. Safe this
-     time: html has overflow-x:hidden above specifically to absorb the few
-     stray pixels 100vw miscalculates around the scrollbar. */
-  width: 100vw;
-  position: relative;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: 1700px;
-  padding: 0 2rem;
+  /* Plain centered block, deliberately NOT a viewport-relative breakout -
+     that trick (width:100vw + left:50%/transform) was tried twice and broke
+     both times: at this nesting depth (.examples > .upload-view > .page,
+     where .page itself is width-constrained), `left: 50%` resolves against
+     the narrow .page width, not the viewport, so it and the transform
+     don't cancel out - the section drifted far off-center instead of
+     centering. A plain max-width + margin:0 auto can never have this bug
+     (same mechanism .page itself already uses correctly), at the cost of
+     not reaching all the way to the viewport edges.
+  */
+  max-width: 1300px;
   margin: 0 auto 4rem;
-  box-sizing: border-box;
   scroll-margin-top: 2rem;
 }
 
@@ -570,6 +565,13 @@ button#generate-btn:disabled {
   color: var(--ink-soft);
   font-size: 1rem;
   margin: 0;
+  min-height: 1.4em;
+  opacity: 1;
+  transition: opacity 0.25s ease;
+}
+
+.progress-message.is-changing {
+  opacity: 0;
 }
 
 /* ---- Error ---- */

@@ -68,7 +68,7 @@ def run_pipeline(
                 negative_prompt = build_negative_prompt(tier)
                 strength = get_strength(tier)
                 image_bytes = provider.generate_image(original_bytes, prompt, negative_prompt, strength)
-                key = f"{project_id}/{tier}.png"
+                key = f"local.output/{project_id}/{tier}.png"
                 storage.put(key, image_bytes, content_type="image/png")
                 setattr(project, f"{tier}_key", key)
                 session.add(project)

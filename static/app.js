@@ -34,15 +34,23 @@ const TIERS = [
   { key: "economical", label: "Economical", desc: "Fresh paint and clean practical finishes." },
 ];
 
-// Deliberately general, not staged per-tier claims ("now designing Premium...") - the
-// backend doesn't report that level of detail, and earlier versions of this that faked
-// specific steps were misleading. These just keep the wait from feeling frozen.
+// Deliberate choice (revised from an earlier, stricter version of this list): these
+// ARE staged/specific per-tier messages, not literal real-time backend status - the
+// backend doesn't report progress at this granularity, and an earlier version of this
+// project treated that as a reason to keep messages vague/generic on principle. Product
+// decision since then: the ~1 minute wait feels more engaging with specific, varied
+// messages than with honest-but-vague ones, even knowing they're not strictly telemetry.
+// Order roughly follows the tier display order (Premium, Mid-Range, Economical).
 const PROGRESS_MESSAGES = [
-  "Creating your three redesigns…",
-  "Reading the room's walls and layout…",
-  "Applying materials and finishes…",
-  "Balancing lighting and color…",
-  "Good redesigns take a moment — still working…",
+  "Analyzing your room's layout…",
+  "Generating your Premium image…",
+  "Fetching designer material options…",
+  "Generating your Mid-Range image…",
+  "Fetching real-time price data…",
+  "Generating your Economical image…",
+  "Balancing lighting and textures…",
+  "Finalizing your three redesigns…",
+  "Almost ready — just a little longer…",
 ];
 
 let selectedFile = null;
@@ -128,22 +136,29 @@ form.addEventListener("submit", async (e) => {
 });
 
 /* ---------- Progress messaging ---------- */
-/* Cycles through general, honest status lines (see PROGRESS_MESSAGES) so a ~1-2 minute
-   wait doesn't feel frozen on one static sentence. Settles into the last "still working"
-   line on repeat if generation runs long, rather than looping back to the start. */
+/* Cycles through PROGRESS_MESSAGES with a fade transition between each, so a ~1 minute
+   wait feels animated/engaged rather than a single frozen sentence. Settles on the last
+   ("Almost ready...") line on repeat if generation runs long, rather than looping back
+   to the start - avoids the awkwardness of "Generating your Premium image..." reappearing
+   after results should plausibly already be close to done. */
 
 function startProgressMessages() {
   let index = 0;
   progressMessageEl.textContent = PROGRESS_MESSAGES[0];
   progressTimer = setInterval(() => {
     index = Math.min(index + 1, PROGRESS_MESSAGES.length - 1);
-    progressMessageEl.textContent = PROGRESS_MESSAGES[index];
-  }, 7000);
+    progressMessageEl.classList.add("is-changing");
+    setTimeout(() => {
+      progressMessageEl.textContent = PROGRESS_MESSAGES[index];
+      progressMessageEl.classList.remove("is-changing");
+    }, 250);
+  }, 4500);
 }
 
 function stopProgressMessages() {
   clearInterval(progressTimer);
   progressTimer = null;
+  progressMessageEl.classList.remove("is-changing");
 }
 
 async function pollProject(projectId) {

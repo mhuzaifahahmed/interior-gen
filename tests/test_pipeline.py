@@ -65,7 +65,7 @@ def test_run_pipeline_success(monkeypatch):
         assert project.room_description == "A rectangular room with one window and one door."
         for tier in TIERS:
             key = getattr(project, f"{tier}_key")
-            assert key == f"p1/{tier}.png"
+            assert key == f"local.output/p1/{tier}.png"
             assert storage.get(key) == b"fake-image-bytes"
 
     assert len(provider.image_calls) == 3

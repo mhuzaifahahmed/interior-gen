@@ -46,17 +46,31 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
   a `structure_reminder` field (empty for the other tiers) that `build_prompt()` inserts right before the
   heaviest material tokens - a repeated structure-preservation anchor placed where the luxury vocabulary's
   pull is strongest. Don't raise premium's strength back up without re-verifying against a real generation.
-  - **Investigated alternate image providers** (none currently wired in - Cloudflare remains primary):
-    Pixazo (Flux Schnell img2img) was abandoned - their API gateway Cloudflare-bot-blocks server-side
-    requests (403 challenge page even with a valid key), unusable for backend integration. NVIDIA NIM's
-    Qwen-Image-Edit (real instruction-based editing, open-weight, comparable structure-preservation to
-    closed-source models per published benchmarks) is the current candidate - `NVIDIA_API_KEY` placeholder
-    exists in `.env`/`.env.example` but no provider code exists yet. Its hosted invocation shape is still
-    unconfirmed: image-edit models aren't in the standard `/v1/models` OpenAI-compatible catalog (that only
-    lists chat/LLM models), so it likely goes through NVIDIA's NVCF function-ID-based invocation instead of
-    a friendly model-name string - needs the exact request shape from the model's own API tab on
-    `build.nvidia.com/qwen/qwen-image-edit` (a JS-rendered page that automated fetching can't scrape) before
-    a `NvidiaQwenProvider` can be built.
+  - **Alternate image providers**: selectable via `IMAGE_PROVIDER` (`cloudflare` default/free, or
+    `openai`) in `get_provider()` (`app/providers/__init__.py`), which injects the chosen image backend
+    into `HybridProvider(image_provider=...)` - text (Gemini) is unaffected either way. **OpenAI**
+    (`app/providers/openai.py`, `OpenAIImageProvider`) is real and wired in - paid, `gpt-image-2`, not
+    `gpt-image-1` which retires Oct 2026. Architecturally different from Cloudflare's SD1.5: it's an
+    instruction-following edit model (like Nano Banana), not raw diffusion, so `negative_prompt` is
+    folded into the positive prompt text (expected to actually work here, unlike SD1.5) and `strength`
+    has no equivalent (accepted for interface compatibility, ignored).
+    **Real cost trap, found via a live test call, not docs**: `OPENAI_IMAGE_QUALITY` alone does NOT
+    control cost the way it looks like it should - `OPENAI_IMAGE_INPUT_FIDELITY` is a SEPARATE param
+    that also drives cost heavily and silently defaults to the expensive tier if omitted from the
+    request. A real smoke test with only `quality="low"` set cost **$0.10/image**, ~20x the ~$0.005
+    "low quality" figure quoted in third-party pricing articles (which describe generation cost, not
+    edit/image-input cost). Both params are now always sent explicitly (`openai.py` includes
+    `input_fidelity` unconditionally) - `test_generate_image_always_sends_input_fidelity_explicitly`
+    guards this regression. `input_fidelity` isn't purely a cost knob either - OpenAI describes it as
+    controlling "fidelity to the original input image(s)", i.e. structure preservation, so if a
+    real-money-driven push toward `"low"` starts showing structural drift, that's the first thing to
+    revert to `"high"`, accepting the cost jump, before touching prompts/anything else.
+    Two abandoned investigations, kept on record: Pixazo (Flux Schnell img2img) - their API gateway
+    Cloudflare-bot-blocks server-side requests (403 even with a valid key), unusable for backend
+    integration. NVIDIA NIM's Qwen-Image-Edit - `NVIDIA_API_KEY` placeholder exists but no provider code;
+    its hosted invocation shape was never confirmed (image-edit models aren't in the standard `/v1/models`
+    catalog, likely needs NVCF function-ID-based invocation instead of a friendly model name - the exact
+    request shape lives on a JS-rendered `build.nvidia.com` page automated fetching couldn't scrape).
 - **Tier notes (room-specific prompt customization)**: `GeminiProvider.generate_tier_notes` analyzes the
   actual uploaded photo once and returns a short, tier-specific instruction per tier (e.g. "repaint over
   visible water stains" for economical) that `build_prompt()` inserts at high priority. This exists because
@@ -88,30 +102,59 @@ Three deliberate seams keep the free/solo build swappable — respect them when 
    (`generate_image`, `describe_room`, `generate_tier_notes`). See "Provider split" above for the current
    hybrid wiring. Swapping a model/vendor should only ever mean touching this directory.
 2. **Storage seam** (`app/storage/`): image **bytes** go through a `Storage` interface — `local.py`
-   (filesystem, dev default) or `s3.py` (boto3, S3-compatible → **Cloudflare R2** recommended, or AWS S3).
-   SQLite stores **metadata + storage keys only**, never image blobs.
+   (filesystem, dev default) or `s3.py` (boto3, S3-compatible → currently a real **AWS S3** bucket in
+   `.env`, R2 still viable). SQLite stores **metadata + storage keys only**, never image blobs. Keys are
+   namespaced by purpose: uploads under `local.input/{project_id}/original.png`, generated tiers under
+   `local.output/{project_id}/{tier}.png` (`app/main.py` and `app/pipeline/generate.py` respectively) -
+   keeps "things the user gave us" separate from "things we generated" instead of one flat pile of UUID
+   folders.
+   **Test isolation, hard-learned**: `get_storage()` reads `settings.storage_backend` from `.env` - which
+   has been `s3` for real local dev use for a while. Any test that exercises the real app
+   (`TestClient(app)`) but only mocks `get_provider()` without also mocking `get_storage()` will silently
+   write real objects into the live S3 bucket on every `pytest` run. This actually happened - the bucket
+   filled up with tiny 4x4 placeholder images from `test_api.py`'s `FakeProvider` before it was caught
+   (bucket was wiped clean after). `tests/test_api.py`'s `FakeStorage` + `monkeypatch.setattr(main_module,
+   "get_storage", ...)` is the fix - any new test hitting `TestClient(app)` must mock **both**
+   `get_provider` and `get_storage`, not just the former.
 3. **Tier/prompt seam** (`app/pipeline/prompts.py`): tier differentiation is driven by a structured
-   per-tier **style spec** dict plus a shared `PRESERVE_STRUCTURE` block. This dict is intentionally the
-   seed of the future materials/pricing DB — keep it structured, not free-text. Encodes a real renovation
-   cost-impact methodology (material quality ladder + lighting-temperature ladder, prioritized
-   paint -> flooring -> lighting -> feature walls -> decor), not arbitrary tier adjectives.
+   per-tier **style spec** dict (`TIER_SPECS`) plus a shared `PRESERVE_STRUCTURE` block. This dict is
+   intentionally the seed of the future materials/pricing DB — keep it structured, not free-text. Encodes
+   a real renovation cost-impact methodology (material quality ladder + lighting-temperature ladder,
+   prioritized paint -> flooring -> lighting -> feature walls -> decor), not arbitrary tier adjectives.
 
-   Two hard-won lessons from real testing, both still load-bearing — don't undo them:
-   - **SD1.5's CLIP text encoder hard-truncates prompts at 77 tokens.** `build_prompt()` orders fields by
-     priority (paint/color first, decor last) so the top-priority fields always survive truncation. The
-     tier's *distinguishing color* lives inside the `paint` field itself (not a separate `palette` field
-     alone) specifically so it can't be truncated away — an earlier version kept color only in `palette`
-     and every tier rendered visually similar as a result.
-   - **Diffusion models don't reliably obey negation in the positive prompt.** "no chandelier" written
-     into `prompt` still primes a chandelier. Exclusions (no chandelier/marble/gold-trim for budget+mid,
-     and a **universal** damage/disrepair exclusion applied to every tier so no render looks like the
-     un-renovated input) must go through `build_negative_prompt(tier)` → the provider's `negative_prompt`
-     param, never as "no X" text inside `build_prompt()`. `test_positive_prompt_never_mentions_chandelier`
-     guards this.
+   **v6 prompt format: natural-language edit instructions, not SD1.5 keyword soup.** `build_prompt()`
+   composes `TIER_SPECS` into a paragraph of imperatives ("Paint the walls with...", "Do not include...")
+   because the active image backend is now OpenAI `gpt-image-1` (`IMAGE_PROVIDER=openai`) — an
+   instruction-following editor (like Nano Banana), not raw diffusion. This replaced the old
+   comma-separated descriptor format after a **real failure**: that format read to an instruction model
+   as a generation spec for a target image, not an edit instruction for the input photo, so a real 3-tier
+   generation came back with Premium/Mid as entirely different rooms (only Economical, with the weakest
+   vocabulary, loosely resembled the input) — same "luxury vocabulary overpowers structure" failure shape
+   as SD1.5, worse here since there's no strength dial to compensate.
 
-   `tier_note` (optional 3rd arg to `build_prompt()`) carries the room-specific instruction from
-   `generate_tier_notes` — see "Provider split" above. It's inserted right before `paint` (high priority,
-   since it's usually a prerequisite qualifier for the paint step).
+   **Accepted, deliberate tradeoff**: this format is used for ALL providers now, including the free
+   Cloudflare/SD1.5 fallback (declined building a second per-provider renderer to keep one code path) —
+   which reopens two SD1.5-specific dangers the old format was built to avoid: CLIP's 77-token truncation
+   (these paragraphs are well over that; trailing content silently drops on Cloudflare, not OpenAI) and
+   diffusion's unreliable negation handling (partially mitigated - `build_negative_prompt()` /
+   `NEGATIVE_ADDITIONS` / `STRENGTH_BY_TIER` are all still kept and still used for Cloudflare's dedicated
+   `negative_prompt` param; the tier-exclusion sentence in `build_prompt()` is *additional* positive-prompt
+   text, not a replacement). If Cloudflare quality matters again, the fix is a second keyword-style
+   renderer selected per-provider, not implemented.
+
+   `tier_note` and `user_notes` (optional 3rd/4th args to `build_prompt()`) are inserted right after the
+   structural lock, ahead of the tier's own generic content, same priority reasoning as before just in
+   instruction-sentence form now. `structure_reminder` (a premium-only SD1.5-era patch) is unused by v6 —
+   the always-present structural lock covers what it used to patch — but the field stays in `TIER_SPECS`
+   rather than being deleted.
+
+   **Real cost trap on the OpenAI side, found via a live test call, not docs**: `OPENAI_IMAGE_QUALITY`
+   alone does NOT control cost - `OPENAI_IMAGE_INPUT_FIDELITY` is a separate param that also drives cost
+   heavily (and controls "fidelity to the original input image(s)", i.e. structure preservation itself) -
+   see `app/providers/openai.py`'s module docstring for the full story and current `low`/`low` setting.
+   Also: `gpt-image-2` does not accept `input_fidelity` at all (400 error) - only `gpt-image-1` (and
+   presumably `-mini`/`-1.5`) support it, which is why `OPENAI_IMAGE_MODEL=gpt-image-1` despite its
+   Oct 2026 deprecation - a deliberate, informed choice, not an oversight.
 
 Async: FastAPI `BackgroundTasks` + client polling (no real queue yet — hardening-phase item). Each
 Project's `meta_json` carries `PROMPT_VERSION` so outputs are reproducible/defensible.
@@ -130,10 +173,16 @@ every 3s until `status: "done"`, rendering `images.{original,economical,mid,prem
 `room_description` from the response — no separate/mocked frontend data path. Deliberately restrained
 by design decision (not an oversight): all four result cards are visually uniform (image + text label +
 one-line descriptor, no per-tier color coding) so the *generated images* carry the tier differences,
-not the UI chrome. The progress screen cycles through `PROGRESS_MESSAGES` in `app.js` every 7s -
-deliberately **general** ("Applying materials and finishes…"), never claiming specific per-tier progress
-the backend doesn't actually report (an earlier version faked "now designing Premium..." steps - keep
-these honest if edited). The landing screen carries a nav bar (`Examples` anchor + a CTA scrolling to
+not the UI chrome. The progress screen cycles (with a fade transition, `.is-changing` in `style.css`)
+through `PROGRESS_MESSAGES` in `app.js` every 4.5s. **Revised decision, worth knowing if this reads
+inconsistently elsewhere in this doc's git history**: an earlier version kept these deliberately vague/
+generic on principle (the backend doesn't report per-tier progress, so specific claims like "now
+designing Premium..." would be fabricated telemetry). That was explicitly overturned - messages are now
+specific and varied ("Generating your Premium image…", "Fetching real-time price data…") including some
+that aren't literally true (no live pricing/internet lookups happen), because a ~1 minute wait feels more
+engaging with plausible specific-sounding status than with honest-but-vague filler. If revisiting this
+tension later, that's the tradeoff being made, not an oversight. The landing screen carries a nav bar
+(`Overview`/`Examples` anchors + a CTA scrolling to
 `#upload-card`), a real **example showcase** (`static/examples/*.jpg` - actual pipeline output, not
 mockups, picked for good structure preservation) at `#examples`, a three-card **tier explainer band**
 (Economical/Mid/Premium finish descriptions), and per-result descriptors - copy for the explainer band

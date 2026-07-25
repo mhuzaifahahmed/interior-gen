@@ -84,7 +84,7 @@ async def create_project(
     session.commit()
     session.refresh(project)
 
-    original_key = f"{project.id}/original.png"
+    original_key = f"local.input/{project.id}/original.png"
     storage.put(original_key, data, content_type=file.content_type)
     project.original_key = original_key
     session.add(project)

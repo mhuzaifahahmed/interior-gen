@@ -50,18 +50,24 @@ def test_premium_does_not_exclude_chandelier():
     assert "chandelier" not in build_negative_prompt("premium")
 
 
-def test_positive_prompt_never_mentions_chandelier():
-    # Regression guard: chandelier exclusion must live in the negative prompt only.
-    # Diffusion models don't reliably obey "no chandelier" stated in the positive
-    # prompt, so it must never be (re-)added there for budget/mid.
+def test_positive_prompt_states_chandelier_exclusion_for_budget_and_mid():
+    # v6 inversion: instruction-following models (unlike SD1.5/diffusion) are built
+    # to follow exclusions stated directly in the prompt, so the tier exclusion is
+    # now ALSO a positive-prompt "Do not include: ..." sentence (on top of, not
+    # instead of, the negative_prompt channel below, which Cloudflare/SD1.5 still
+    # uses). Premium has no exclusions, so it should still never mention chandelier.
     for tier in ("economical", "mid"):
-        assert "chandelier" not in build_prompt(tier)
+        prompt = build_prompt(tier)
+        assert "chandelier" in prompt
+        assert "Do not include" in prompt
+    assert "chandelier" not in build_prompt("premium")
 
 
-def test_color_is_frontloaded_in_paint_field_not_only_palette():
-    # Regression guard for the "everything looks the same color" bug: the tier's
-    # distinguishing color must appear in `paint` (survives 77-token truncation),
-    # not only in the separate, truncatable `palette` field.
+def test_tier_paint_field_names_the_distinguishing_color():
+    # Sanity check that each tier's `paint` field actually names its distinguishing
+    # color/material - this field is the first thing build_prompt() states about the
+    # tier's look (right after the structural lock), so it anchors the tier's
+    # identity regardless of prompt format.
     assert "sage" in TIER_SPECS["economical"]["paint"].lower()
     assert "beige" in TIER_SPECS["mid"]["paint"].lower()
     assert "marble" in TIER_SPECS["premium"]["paint"].lower()
@@ -103,26 +109,25 @@ def test_premium_strength_is_lower_than_economical_despite_bigger_material_chang
     # different room (no window, wrong shape) while economical preserved structure
     # fine at that same value. Premium's luxury vocabulary needs LESS freedom, not
     # more, to stay anchored to the input - don't raise this back up without
-    # re-verifying against a real generation first.
+    # re-verifying against a real generation first. Only meaningful for the
+    # Cloudflare/SD1.5 fallback path (OpenAI ignores strength entirely).
     assert get_strength("premium") < get_strength("economical")
 
 
-def test_only_premium_has_a_structure_reminder():
+def test_only_premium_has_a_structure_reminder_in_the_spec():
+    # This field still exists in TIER_SPECS (kept for reference/possible future
+    # use) but v6's build_prompt() no longer reads it - see test below.
     assert TIER_SPECS["economical"]["structure_reminder"] == ""
     assert TIER_SPECS["mid"]["structure_reminder"] == ""
     assert TIER_SPECS["premium"]["structure_reminder"] != ""
 
 
-def test_build_prompt_includes_premium_structure_reminder():
+def test_build_prompt_does_not_use_the_legacy_structure_reminder_field():
+    # v6: the universal PRESERVE_STRUCTURE instruction (always present) replaced
+    # this SD1.5-era per-tier patch. Confirms it's genuinely unused now, not just
+    # coincidentally absent.
     prompt = build_prompt("premium")
-    assert TIER_SPECS["premium"]["structure_reminder"] in prompt
-
-
-def test_build_prompt_omits_structure_reminder_for_tiers_without_one():
-    for tier in ("economical", "mid"):
-        prompt = build_prompt(tier)
-        # the double comma that would result from appending an empty token
-        assert ", , " not in prompt
+    assert TIER_SPECS["premium"]["structure_reminder"] not in prompt
 
 
 def test_build_prompt_includes_user_notes_when_given():
@@ -157,3 +162,41 @@ def test_user_notes_appear_before_tier_paint_field():
     # not just get appended after the tier's defaults have already been stated.
     prompt = build_prompt("mid", user_notes="scandinavian style")
     assert prompt.index("scandinavian style") < prompt.index(TIER_SPECS["mid"]["paint"])
+
+
+# ---- v6 instruction-format invariants ----
+
+
+def test_build_prompt_reads_as_an_edit_instruction_not_a_generation_spec():
+    # This is the whole point of v6: the prompt must frame itself as editing the
+    # input photo, not describing a target image to generate from scratch - the
+    # root cause of a real failure where gpt-image-1 rendered entirely different
+    # rooms for Premium/Mid instead of redecorating the actual uploaded photo.
+    for tier in TIER_SPECS:
+        prompt = build_prompt(tier)
+        assert "Edit this photograph" in prompt
+        assert "same physical room" in prompt
+
+
+def test_build_prompt_includes_each_tiers_key_materials():
+    for tier in TIER_SPECS:
+        prompt = build_prompt(tier)
+        assert TIER_SPECS[tier]["materials"] in prompt
+        assert TIER_SPECS[tier]["flooring"] in prompt
+
+
+def test_build_prompt_includes_positive_damage_repair_instruction():
+    # v6: states UNIVERSAL_DAMAGE_NEGATIVE's intent positively in the prompt itself
+    # (instruction models respond better to a direct command than negation) -
+    # every tier's render should look renovated, never like the input's condition.
+    for tier in TIER_SPECS:
+        prompt = build_prompt(tier)
+        assert "Repair and clean" in prompt
+        assert "move-in ready" in prompt
+
+
+def test_build_prompt_is_natural_language_sentences_not_comma_keywords():
+    # Distinguishes v6 from the old SD1.5 keyword-soup format: real sentences
+    # (period-terminated), not one long comma-joined descriptor list.
+    prompt = build_prompt("mid")
+    assert prompt.count(". ") > 5

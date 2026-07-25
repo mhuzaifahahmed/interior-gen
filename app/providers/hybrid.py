@@ -5,14 +5,16 @@ from app.providers.gemini import GeminiProvider
 
 class HybridProvider(Provider):
     """Room description + tier-notes analysis via Gemini (still free, separate
-    quota from image gen). Image generation via Cloudflare Workers AI (free tier)
-    since Google removed free-tier Gemini image generation in Dec 2025.
-    See app/providers/cloudflare.py.
+    quota from image gen). Image generation via an injectable image backend -
+    Cloudflare Workers AI (free tier, default) unless a different one is passed
+    in - see get_provider() in app/providers/__init__.py, which selects based on
+    IMAGE_PROVIDER. Google removed free-tier Gemini image generation in Dec 2025,
+    which is why image gen isn't just Gemini too.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, image_provider=None) -> None:
         self._gemini = GeminiProvider()
-        self._cloudflare = CloudflareImageProvider()
+        self._image_provider = image_provider or CloudflareImageProvider()
 
     def describe_room(self, image_bytes: bytes) -> str:
         return self._gemini.describe_room(image_bytes)
@@ -27,4 +29,4 @@ class HybridProvider(Provider):
         negative_prompt: str = "",
         strength: float | None = None,
     ) -> bytes:
-        return self._cloudflare.generate_image(image_bytes, prompt, negative_prompt, strength)
+        return self._image_provider.generate_image(image_bytes, prompt, negative_prompt, strength)

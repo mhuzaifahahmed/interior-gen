@@ -11,23 +11,38 @@ Each spec is a structured dict, not free text, because it is intentionally the s
 of the future materials/pricing database (deferred feature - see the plan's Long-Term
 Plan section): these fields will later map to itemized, priceable line items.
 
-Prompt format is tuned for SD1.5 img2img (the current image backend, see
-app/providers/cloudflare.py), which conditions on short descriptive phrases rather
-than reasoning over natural-language instructions - so build_prompt() compresses the
-tier spec into a comma-separated descriptive string, not paragraphs.
+PROMPT FORMAT (v6): natural-language EDIT INSTRUCTIONS, not SD1.5-style keyword soup.
+The active image backend is now OpenAI gpt-image-1 (an instruction-following editor,
+like Nano Banana), not raw diffusion - build_prompt() composes the same structured
+TIER_SPECS into a coherent paragraph of imperatives ("Paint the walls with...", "Do
+not include...") instead of a comma-separated descriptor list.
 
-Two SD1.5-specific lessons baked in below (both found by testing real output):
-1. CLIP hard-truncates prompts at 77 tokens, so token order = priority order, and
-   the tier's DISTINGUISHING COLOR is folded directly into `paint` (priority #1)
-   instead of a separate `palette` field, so it can never be truncated away - a
-   generic "palette" field this far back was why early renders looked same-ish.
-2. Diffusion models don't reliably obey negation in the positive prompt ("no
-   chandelier" still primes a chandelier). Exclusions like "no chandelier" for
-   budget/mid must go through the NEGATIVE prompt channel instead - see
-   NEGATIVE_ADDITIONS and build_negative_prompt() below.
+Why the switch (real failure, not theory): the old keyword-soup format read to an
+instruction model as a *generation spec for a target image*, not an *edit instruction
+for the input photo* - a real 3-tier generation through gpt-image-1 came back with
+Premium/Mid as entirely different rooms (generic luxury interiors), only Economical
+(weakest vocabulary) loosely resembling the input. Same failure shape as the SD1.5
+"luxury vocabulary overpowers structure" problem, worse here.
+
+ACCEPTED TRADEOFF: this format is used for ALL providers now, including the free
+Cloudflare/SD1.5 fallback - a deliberate, known regression of that path (declined a
+per-provider renderer to keep one code path). SD1.5-specific dangers this format
+walks back into:
+1. CLIP hard-truncates prompts at 77 tokens - these paragraphs are well over that,
+   so on Cloudflare/SD1.5 specifically, trailing content (decor, tier exclusions)
+   will silently get cut. Not a problem for OpenAI (large context).
+2. Diffusion models don't reliably obey negation in the positive prompt ("do not
+   include a chandelier" can still prime one). The tier exclusion sentence built
+   from NEGATIVE_ADDITIONS is positive-prompt text now, on top of (not instead of)
+   the existing build_negative_prompt() channel below - keep using the negative
+   channel for Cloudflare; for OpenAI, negative_prompt gets folded into the prompt
+   too (see app/providers/openai.py) since there's no dedicated field there either.
+If Cloudflare quality matters again later, the fix is a second, keyword-style
+renderer selected per-provider - not implemented (explicit user decision to replace
+the format entirely rather than maintain two).
 """
 
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v6"
 
 TIER_SPECS: dict[str, dict[str, str]] = {
     "economical": {
@@ -67,50 +82,56 @@ TIER_SPECS: dict[str, dict[str, str]] = {
         "palette": "rich dark wood tones with gold and brass metallic accents",
         "density": "furniture arranged in curated symmetrical conversation zones, restrained, not overfilled",
         "decor": "floor-to-ceiling heavy fabric curtains, framed art, symmetrical furniture placement",
-        # Repeated structure anchor placed right before the heaviest luxury vocabulary
-        # (marble/brass/chandelier-adjacent words) - a real failure was traced to this
-        # word cluster overpowering PRESERVE_STRUCTURE and causing SD1.5 to hallucinate
-        # a whole different room (a "luxury vanity nook") instead of redecorating the
-        # actual input room. Repeating the anchor here reinforces it via CLIP
-        # conditioning weight, right where it's needed most. Only premium needs this -
-        # economical/mid don't carry the same luxury-vocabulary pull.
+        # Unused by v6's build_prompt() - the universal structural lock (PRESERVE_STRUCTURE,
+        # always present) now covers what this was patching. Left in TIER_SPECS rather than
+        # deleted: harmless, and documents the SD1.5-era failure this used to guard against
+        # (see git history / CLAUDE.md) in case the keyword-style renderer is ever revived.
         "structure_reminder": "still the same original room shape and window, do not enlarge or change the space",
     },
 }
 
+# v6: an imperative structural-lock instruction (was a comma-fragment for SD1.5's
+# keyword format) - this is the single most important sentence in the whole prompt,
+# always placed right after the edit framing, before any tier content.
 PRESERVE_STRUCTURE = (
-    "same room structure, same walls, same windows, same doors, same ceiling height, "
-    "same camera angle and perspective as the original photo, unchanged room dimensions"
+    "Keep the exact walls, windows, doors, columns or pillars, ceiling shape and height, "
+    "floor layout, and proportions unchanged. Do not add, remove, move, or resize any "
+    "structural element, and do not change the camera angle or perspective."
 )
 
-# Tier-specific NEGATIVE prompt additions (not positive-prompt phrasing - see module
-# docstring point 2). Budget/mid must actively steer away from luxury fixtures that
-# read as "real add-on costs"; premium has no such restriction.
+# Tier-specific exclusions. Used two ways in v6: (a) still passed through
+# build_negative_prompt() below for Cloudflare/SD1.5's dedicated negative_prompt
+# channel, and (b) also rendered as a positive-prompt "Do not include: ..." sentence
+# in build_prompt() itself, since instruction-following models (unlike diffusion)
+# are built to follow exclusions stated directly in the instruction.
 NEGATIVE_ADDITIONS: dict[str, str] = {
     "economical": "chandelier, crystal chandelier, pendant light, gold trim, marble, luxury, ornate, wainscoting",
     "mid": "chandelier, crystal chandelier, gold trim, marble, ornate luxury details",
     "premium": "",
 }
 
-# Applies to every tier, positive prompt cannot reliably express this (same reason
-# chandelier exclusion needs the negative channel): every render should look
-# renovated/clean, never like the (possibly damaged/derelict) input photo's condition.
+# Kept for build_negative_prompt() (Cloudflare's dedicated channel). Also restated
+# positively inside build_prompt() itself now (see _DAMAGE_REPAIR_INSTRUCTION) - the
+# instruction that directly fixes "economical tier barely transforms a damaged room",
+# the original reason generate_tier_notes()/tier_note exists.
 UNIVERSAL_DAMAGE_NEGATIVE = (
     "damaged, dirty, stained, cracked walls, cracked ceiling, mold, mildew, water "
     "damage, peeling paint, debris, rubble, dust, disrepair, abandoned, derelict"
 )
 
-# img2img "strength": 0.0 = unchanged input, 1.0 = ignores input entirely. Tiers need
-# different values, not one shared constant - a badly damaged input photo needs MORE
-# strength for the (visually minimal) economical tier to actually paint over the
-# damage. Premium is deliberately LOWER, not higher, despite having the biggest
-# material change: a real test showed economical (0.65) preserved structure fine,
-# but premium at the SAME 0.65 hallucinated an entirely different room (no window,
-# wrong shape) - the rich luxury vocabulary (marble/brass/chandelier) combined with
-# that much freedom let SD1.5 fully reinterpret the scene toward a generic "luxury
-# vanity" archetype instead of redecorating the actual input. Counterintuitive but
-# real: premium needs LESS freedom to stay anchored, not more, precisely because its
-# vocabulary has the strongest pull away from the input geometry.
+_DAMAGE_REPAIR_INSTRUCTION = (
+    "Repair and clean any damage, stains, cracks, mould, or debris visible in the "
+    "original photo. The result must look fully renovated and move-in ready, never "
+    "like the original's condition."
+)
+
+# img2img "strength" - only meaningful for Cloudflare/SD1.5 (diffusion noise-strength
+# dial); OpenAI's instruction-following API has no equivalent and ignores it (see
+# app/providers/openai.py). Kept for the Cloudflare fallback path. Counterintuitive,
+# hard-won lesson from real SD1.5 testing, still relevant if that path is used:
+# premium is LOWER (0.45) than economical/mid (0.65/0.6) despite the biggest material
+# change - rich luxury vocabulary + high freedom let SD1.5 hallucinate a different
+# room entirely; premium needs LESS freedom to stay anchored, not more.
 STRENGTH_BY_TIER: dict[str, float] = {
     "economical": 0.65,
     "mid": 0.6,
@@ -127,68 +148,63 @@ def build_prompt(
     tier_note: str | None = None,
     user_notes: str | None = None,
 ) -> str:
-    """Compose the SD1.5 prompt.
+    """Compose a natural-language EDIT instruction for the given tier (v6 - see
+    module docstring for why this replaced the SD1.5 keyword-soup format).
 
-    SD1.5's CLIP text encoder hard-truncates at 77 tokens - anything past that is
-    silently dropped. A full tier spec is well over that (~130-145 words), so token
-    order here is priority order, not spec order: PRESERVE_STRUCTURE goes first
-    (non-negotiable, must survive truncation), then fields in the same
-    impact-per-dollar ranking the tier methodology itself uses (paint -> flooring ->
-    lighting -> feature walls -> materials/palette -> decor last, since decor is the
-    lowest-priority item and the one safest to lose if truncation happens).
+    Sentence order:
+      1. Edit framing - this is a photo edit, not a fresh generation.
+      2. PRESERVE_STRUCTURE - the structural lock, always present, non-negotiable.
+      3. room_description / tier_note / user_notes, if given (each optional).
+      4. Tier renovation instructions, derived from TIER_SPECS in the same
+         impact-per-dollar order the methodology itself uses (paint -> flooring ->
+         lighting -> ceiling -> feature wall -> materials/palette -> density -> decor).
+      5. Positive damage-repair instruction (see _DAMAGE_REPAIR_INSTRUCTION) - states
+         UNIVERSAL_DAMAGE_NEGATIVE's intent positively, since instruction models
+         respond better to a direct command than negation.
+      6. Tier exclusions as a direct "Do not include" command (from NEGATIVE_ADDITIONS),
+         only for tiers that have one (budget/mid; premium has none).
 
-    tier_note is an optional short, room-specific instruction (e.g. "repaint over
-    visible water stains on the ceiling") produced by analyzing the actual uploaded
-    photo per tier - see Provider.generate_tier_notes(). It is placed right before
-    `paint` since it's usually a prerequisite/qualifier for that step, and is high
-    enough priority to survive truncation alongside paint/flooring/lighting.
-
-    user_notes is optional free text the user typed themselves (e.g. "modern, blue
-    accents") - see the style-prompt input in static/index.html. Placed right after
-    tier_note, ahead of the tier's own generic `paint` field, so an explicit user
-    request can actually override/steer the tier's default look rather than being
-    truncated away or drowned out. Capped at USER_NOTES_MAX_CHARS and defensively
-    re-truncated here (not just in the frontend's `maxlength`) since this reaches
-    build_prompt() from the API too, where a client could send arbitrary length text
-    and eat the whole 77-token budget by itself.
-
-    `structure_reminder` (per-tier, usually empty) is inserted right before
-    `materials`/`palette` - i.e. right before the heaviest, most scene-defining
-    vocabulary for that tier. It exists because a single PRESERVE_STRUCTURE mention
-    wasn't enough to counteract premium's marble/brass/chandelier vocabulary in real
-    testing; repeating the anchor closer to the words that threaten it reinforces it.
+    tier_note is a short, room-specific instruction from Provider.generate_tier_notes()
+    (e.g. "repaint over visible water stains on the ceiling"). user_notes is optional
+    free text the user typed in (static/index.html's style-prompt input) - capped at
+    USER_NOTES_MAX_CHARS and re-truncated here defensively (also enforced in
+    app/main.py) since a client could call the API directly with arbitrary length text.
     """
     if tier not in TIER_SPECS:
         raise ValueError(f"unknown tier: {tier}")
 
     spec = TIER_SPECS[tier]
-    tokens = [
-        f"{spec['label']} of the same room",
+    sentences = [
+        f"Edit this photograph of a real room to create a {spec['label']}. "
+        "The output must be the same physical room, clearly recognizable - only redecorated.",
         PRESERVE_STRUCTURE,
     ]
     if room_description:
-        tokens.append(room_description)
+        sentences.append(room_description)
     if tier_note:
-        tokens.append(tier_note)
+        sentences.append(tier_note)
     if user_notes:
-        tokens.append(user_notes.strip()[:USER_NOTES_MAX_CHARS])
-    tokens += [
-        spec["paint"],
-        spec["flooring"],
-        spec["lighting_temp"],
-        spec["ceiling"],
-        spec["feature_wall"],
-    ]
-    if spec.get("structure_reminder"):
-        tokens.append(spec["structure_reminder"])
-    tokens += [
-        spec["materials"],
-        spec["palette"],
-        spec["density"],
-        spec["decor"],
+        sentences.append(user_notes.strip()[:USER_NOTES_MAX_CHARS])
+
+    sentences += [
+        f"Paint the walls with {spec['paint']}.",
+        f"Install {spec['flooring']}.",
+        f"Light the room with {spec['lighting_temp']}.",
+        f"For the ceiling, use {spec['ceiling']}.",
+        f"For the feature wall, use {spec['feature_wall']}.",
+        f"Use these materials throughout: {spec['materials']}.",
+        f"The overall color palette should be {spec['palette']}.",
+        f"Furniture density: {spec['density']}.",
+        f"Add this decor: {spec['decor']}.",
     ]
 
-    return ", ".join(tokens)
+    sentences.append(_DAMAGE_REPAIR_INSTRUCTION)
+
+    exclusions = NEGATIVE_ADDITIONS[tier]
+    if exclusions:
+        sentences.append(f"Do not include: {exclusions}.")
+
+    return " ".join(sentences)
 
 
 def build_negative_prompt(tier: str) -> str:
