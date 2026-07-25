@@ -25,6 +25,11 @@
 
 html {
   height: 100%;
+  /* Safety net for the full-bleed .examples breakout below: 100vw doesn't
+     account for the scrollbar's own width, which can cause a few stray
+     pixels of horizontal overflow. Clipping it here is the standard fix -
+     nothing visible is lost, it just prevents a horizontal scrollbar. */
+  overflow-x: hidden;
 }
 
 body {
@@ -226,15 +231,25 @@ body {
 /* ---- Examples showcase ---- */
 
 .examples {
-  max-width: 1080px;
+  /* Full-bleed breakout so this section reads noticeably bigger than the
+     rest of the page - runs almost edge-to-edge, still centered. Safe this
+     time: html has overflow-x:hidden above specifically to absorb the few
+     stray pixels 100vw miscalculates around the scrollbar. */
+  width: 100vw;
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 1700px;
+  padding: 0 2rem;
   margin: 0 auto 4rem;
+  box-sizing: border-box;
   scroll-margin-top: 2rem;
 }
 
 .examples-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 1rem;
+  gap: 1.25rem;
 }
 
 @media (max-width: 800px) {
