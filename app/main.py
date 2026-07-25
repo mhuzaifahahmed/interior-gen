@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, UploadFile, File
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
@@ -10,6 +10,7 @@ from app.config import settings
 from app.db import get_session, init_db
 from app.models import Project
 from app.pipeline.generate import TIERS, run_pipeline
+from app.pipeline.prompts import USER_NOTES_MAX_CHARS
 from app.providers import get_provider
 from app.schemas import ProjectCreateResponse, ProjectStatusResponse
 from app.storage import get_storage
@@ -61,6 +62,7 @@ def privacy():
 async def create_project(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    style_notes: str = Form(""),
     session: Session = Depends(get_session),
 ):
     if file.content_type not in ALLOWED_CONTENT_TYPES:
@@ -70,10 +72,14 @@ async def create_project(
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, "file too large (max 15MB)")
 
+    # Defensive re-truncation (also enforced in build_prompt()) - the frontend's
+    # <input maxlength> is trivially bypassable by anyone calling the API directly.
+    style_notes = style_notes.strip()[:USER_NOTES_MAX_CHARS] or None
+
     storage = get_storage()
     provider = get_provider()
 
-    project = Project(status="queued")
+    project = Project(status="queued", user_style_notes=style_notes)
     session.add(project)
     session.commit()
     session.refresh(project)
@@ -84,7 +90,7 @@ async def create_project(
     session.add(project)
     session.commit()
 
-    background_tasks.add_task(run_pipeline, project.id, provider, storage)
+    background_tasks.add_task(run_pipeline, project.id, provider, storage, style_notes)
 
     return ProjectCreateResponse(project_id=project.id)
 

@@ -66,6 +66,14 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
 - `get_provider()` (`app/providers/__init__.py`) returns `HybridProvider` — this is the composition root.
   `GeminiProvider.generate_image` still exists but is unused/dormant (would work again if billing is ever
   enabled on the Gemini project) — don't delete it without checking with the user first.
+- **User style prompt**: `static/index.html`'s style-prompt `<input>` (above the Generate button) lets the
+  user type free text (e.g. "modern, blue accents") that's sent as `style_notes` form data on
+  `POST /api/projects`, stored on `Project.user_style_notes`, and threaded through
+  `run_pipeline(..., user_style_notes=...)` into every tier's `build_prompt(..., user_notes=...)` call - see
+  `prompts.py`. Inserted right after `tier_note`, ahead of the tier's own generic `paint` field, so it can
+  actually steer the tier's default look rather than being truncated away or drowned out. Capped at
+  `USER_NOTES_MAX_CHARS` (150) - enforced in **both** `build_prompt()` and `main.py`'s endpoint, since the
+  frontend's `maxlength` is trivially bypassable by anyone calling the API directly.
 
 ## Architecture (big picture)
 

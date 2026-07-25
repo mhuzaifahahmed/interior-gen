@@ -8,6 +8,7 @@ const previewImg = document.getElementById("preview-img");
 const previewFilename = document.getElementById("preview-filename");
 const generateBtn = document.getElementById("generate-btn");
 const removePhotoBtn = document.getElementById("remove-photo-btn");
+const stylePromptInput = document.getElementById("style-prompt");
 
 const progressCard = document.getElementById("progress-card");
 const progressMessageEl = document.getElementById("progress-message");
@@ -111,6 +112,7 @@ form.addEventListener("submit", async (e) => {
 
   const formData = new FormData();
   formData.append("file", selectedFile);
+  formData.append("style_notes", stylePromptInput.value.trim());
 
   let projectId;
   try {
@@ -219,6 +221,7 @@ function showError(message) {
 function resetToUpload() {
   stopProgressMessages();
   clearSelectedFile();
+  stylePromptInput.value = "";
   showState("upload");
 }
 

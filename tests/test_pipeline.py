@@ -1,3 +1,5 @@
+import json
+
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.models import Project
@@ -70,6 +72,31 @@ def test_run_pipeline_success(monkeypatch):
 
     economical_prompt = next(p for p, _, _ in provider.image_calls if "budget renovation" in p)
     assert "repaint over visible stains" in economical_prompt
+
+
+def test_run_pipeline_passes_user_style_notes_to_every_tier(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["p3/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="p3", status="queued", original_key="p3/original.png")
+        session.add(project)
+        session.commit()
+
+    provider = FakeProvider()
+    run_pipeline("p3", provider, storage, user_style_notes="modern, blue accents")
+
+    assert len(provider.image_calls) == 3
+    for prompt, _, _ in provider.image_calls:
+        assert "modern, blue accents" in prompt
+
+    with Session(engine) as session:
+        project = session.get(Project, "p3")
+        meta = json.loads(project.meta_json)
+        assert meta["user_style_notes"] == "modern, blue accents"
 
 
 def test_run_pipeline_marks_failed_on_provider_error(monkeypatch):

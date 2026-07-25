@@ -226,15 +226,24 @@ body {
 /* ---- Examples showcase ---- */
 
 .examples {
-  max-width: 1080px;
+  /* Full-bleed breakout: lets this section run wider than .page's 1080px cap
+     (up to 1400px), still centered on the viewport - this is what makes the
+     showcase read as noticeably bigger than the rest of the page content. */
+  width: 100vw;
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 1400px;
+  padding: 0 1.5rem;
   margin: 0 auto 4rem;
+  box-sizing: border-box;
   scroll-margin-top: 2rem;
 }
 
 .examples-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 1.25rem;
+  gap: 1.5rem;
 }
 
 @media (max-width: 800px) {
@@ -259,7 +268,7 @@ body {
 
 .example-figure img {
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 1 / 1;
   object-fit: cover;
   display: block;
 }
@@ -381,6 +390,44 @@ body {
 
 .remove-photo-btn:hover {
   background: #a83e2c;
+}
+
+/* ---- Style prompt ---- */
+
+.style-prompt-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.style-prompt-label {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+#style-prompt {
+  appearance: none;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  color: var(--ink);
+  background: #fdfcfa;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+#style-prompt:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--paper);
+}
+
+#style-prompt::placeholder {
+  color: var(--ink-soft);
+  opacity: 0.55;
 }
 
 button#generate-btn {

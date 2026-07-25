@@ -3,6 +3,7 @@ from app.pipeline.prompts import (
     STRENGTH_BY_TIER,
     TIER_SPECS,
     UNIVERSAL_DAMAGE_NEGATIVE,
+    USER_NOTES_MAX_CHARS,
     build_negative_prompt,
     build_prompt,
     get_strength,
@@ -122,3 +123,37 @@ def test_build_prompt_omits_structure_reminder_for_tiers_without_one():
         prompt = build_prompt(tier)
         # the double comma that would result from appending an empty token
         assert ", , " not in prompt
+
+
+def test_build_prompt_includes_user_notes_when_given():
+    prompt = build_prompt("mid", user_notes="modern, blue accents")
+    assert "modern, blue accents" in prompt
+
+
+def test_build_prompt_omits_user_notes_when_not_given():
+    prompt = build_prompt("mid")
+    assert "None" not in prompt
+
+
+def test_build_prompt_truncates_overlong_user_notes():
+    # Defensive re-truncation matters here specifically because this reaches
+    # build_prompt() from the public API too (see app/main.py) - a client could
+    # send arbitrary-length text bypassing the frontend's <input maxlength>.
+    overlong = "x" * (USER_NOTES_MAX_CHARS + 50)
+    prompt = build_prompt("mid", user_notes=overlong)
+    assert "x" * (USER_NOTES_MAX_CHARS + 1) not in prompt
+    assert "x" * USER_NOTES_MAX_CHARS in prompt
+
+
+def test_build_prompt_strips_whitespace_from_user_notes():
+    prompt = build_prompt("mid", user_notes="   cozy farmhouse   ")
+    assert "cozy farmhouse" in prompt
+    assert "  cozy" not in prompt
+
+
+def test_user_notes_appear_before_tier_paint_field():
+    # user_notes should be high-priority (ahead of the tier's own generic paint
+    # description) so an explicit user request can actually steer the render,
+    # not just get appended after the tier's defaults have already been stated.
+    prompt = build_prompt("mid", user_notes="scandinavian style")
+    assert prompt.index("scandinavian style") < prompt.index(TIER_SPECS["mid"]["paint"])

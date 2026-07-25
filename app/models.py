@@ -17,6 +17,7 @@ class Project(SQLModel, table=True):
 
     original_key: Optional[str] = None
     room_description: Optional[str] = None
+    user_style_notes: Optional[str] = None
 
     economical_key: Optional[str] = None
     mid_key: Optional[str] = None

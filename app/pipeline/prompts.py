@@ -118,7 +118,15 @@ STRENGTH_BY_TIER: dict[str, float] = {
 }
 
 
-def build_prompt(tier: str, room_description: str | None = None, tier_note: str | None = None) -> str:
+USER_NOTES_MAX_CHARS = 150
+
+
+def build_prompt(
+    tier: str,
+    room_description: str | None = None,
+    tier_note: str | None = None,
+    user_notes: str | None = None,
+) -> str:
     """Compose the SD1.5 prompt.
 
     SD1.5's CLIP text encoder hard-truncates at 77 tokens - anything past that is
@@ -134,6 +142,15 @@ def build_prompt(tier: str, room_description: str | None = None, tier_note: str 
     photo per tier - see Provider.generate_tier_notes(). It is placed right before
     `paint` since it's usually a prerequisite/qualifier for that step, and is high
     enough priority to survive truncation alongside paint/flooring/lighting.
+
+    user_notes is optional free text the user typed themselves (e.g. "modern, blue
+    accents") - see the style-prompt input in static/index.html. Placed right after
+    tier_note, ahead of the tier's own generic `paint` field, so an explicit user
+    request can actually override/steer the tier's default look rather than being
+    truncated away or drowned out. Capped at USER_NOTES_MAX_CHARS and defensively
+    re-truncated here (not just in the frontend's `maxlength`) since this reaches
+    build_prompt() from the API too, where a client could send arbitrary length text
+    and eat the whole 77-token budget by itself.
 
     `structure_reminder` (per-tier, usually empty) is inserted right before
     `materials`/`palette` - i.e. right before the heaviest, most scene-defining
@@ -153,6 +170,8 @@ def build_prompt(tier: str, room_description: str | None = None, tier_note: str 
         tokens.append(room_description)
     if tier_note:
         tokens.append(tier_note)
+    if user_notes:
+        tokens.append(user_notes.strip()[:USER_NOTES_MAX_CHARS])
     tokens += [
         spec["paint"],
         spec["flooring"],

@@ -20,10 +20,19 @@ logger = logging.getLogger(__name__)
 TIERS = ("economical", "mid", "premium")
 
 
-def run_pipeline(project_id: str, provider: Provider, storage: Storage) -> None:
+def run_pipeline(
+    project_id: str,
+    provider: Provider,
+    storage: Storage,
+    user_style_notes: str | None = None,
+) -> None:
     """Runs the full 3-tier generation for a project. Intended to run as a
     background task; opens its own DB session since the request-scoped one
     will already be closed by the time this executes.
+
+    user_style_notes is the optional free-text style prompt the user typed in
+    (static/index.html's style-prompt input) - passed through to every tier's
+    build_prompt() call, see prompts.py for exactly how it's incorporated.
     """
     with Session(engine) as session:
         project = session.get(Project, project_id)
@@ -55,7 +64,7 @@ def run_pipeline(project_id: str, provider: Provider, storage: Storage) -> None:
                 tier_notes = {}
 
             for tier in TIERS:
-                prompt = build_prompt(tier, room_description, tier_notes.get(tier))
+                prompt = build_prompt(tier, room_description, tier_notes.get(tier), user_style_notes)
                 negative_prompt = build_negative_prompt(tier)
                 strength = get_strength(tier)
                 image_bytes = provider.generate_image(original_bytes, prompt, negative_prompt, strength)
@@ -71,6 +80,7 @@ def run_pipeline(project_id: str, provider: Provider, storage: Storage) -> None:
                     "prompt_version": PROMPT_VERSION,
                     "tier_specs": list(TIER_SPECS.keys()),
                     "tier_notes": tier_notes,
+                    "user_style_notes": user_style_notes,
                 }
             )
             session.add(project)
