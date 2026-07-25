@@ -226,24 +226,15 @@ body {
 /* ---- Examples showcase ---- */
 
 .examples {
-  /* Full-bleed breakout: lets this section run wider than .page's 1080px cap
-     (up to 1400px), still centered on the viewport - this is what makes the
-     showcase read as noticeably bigger than the rest of the page content. */
-  width: 100vw;
-  position: relative;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: 1400px;
-  padding: 0 1.5rem;
+  max-width: 1080px;
   margin: 0 auto 4rem;
-  box-sizing: border-box;
   scroll-margin-top: 2rem;
 }
 
 .examples-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 1.5rem;
+  gap: 1rem;
 }
 
 @media (max-width: 800px) {
