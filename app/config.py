@@ -8,16 +8,13 @@ class Settings(BaseSettings):
     gemini_image_model: str = "gemini-2.5-flash-image"
     gemini_text_model: str = "gemini-2.5-flash"
 
-    # Image generation moved to Cloudflare Workers AI (free tier) after Google
-    # discontinued free-tier Gemini image generation in Dec 2025. Gemini is still
-    # used for the (separate-quota, still-free) room-description text call.
-    cloudflare_account_id: str = ""
-    cloudflare_api_token: str = ""
-    cloudflare_image_model: str = "@cf/runwayml/stable-diffusion-v1-5-img2img"
-
-    # Experimental alternate image backend (OpenAI's official Images API) - see
-    # app/providers/openai.py. Only used if image_provider="openai" below; Cloudflare
-    # remains the code default (this default is overridden to "openai" in .env).
+    # Image generation: OpenAI's official Images API (app/providers/openai.py) -
+    # the sole image backend. Google discontinued free-tier Gemini image generation
+    # in Dec 2025 (Gemini is still used for the separate-quota, still-free
+    # room-description text call), and the earlier Cloudflare Workers AI/SD1.5
+    # fallback was removed - its keyword-soup prompt format and diffusion-era
+    # negative_prompt/strength machinery were confusing the OpenAI integration
+    # with dead paths that no longer applied to it.
     #
     # COST WARNING (learned from a real test call, not docs): `quality` alone does
     # NOT control cost the way it looks like it should. `input_fidelity` is a
@@ -38,10 +35,6 @@ class Settings(BaseSettings):
     openai_image_model: str = "gpt-image-1"
     openai_image_quality: str = "low"
     openai_image_input_fidelity: str = "low"
-
-    # Which image backend HybridProvider uses - "cloudflare" (default, free) or
-    # "openai" (paid, see above). Text (Gemini) is unaffected either way.
-    image_provider: str = "cloudflare"
 
     storage_backend: str = "local"
     local_storage_dir: str = "data/storage"

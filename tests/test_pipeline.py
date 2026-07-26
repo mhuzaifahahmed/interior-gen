@@ -17,10 +17,8 @@ class FakeProvider:
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         return {"economical": "repaint over visible stains", "mid": "replace damaged flooring"}
 
-    def generate_image(
-        self, image_bytes: bytes, prompt: str, negative_prompt: str = "", strength: float | None = None
-    ) -> bytes:
-        self.image_calls.append((prompt, negative_prompt, strength))
+    def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
+        self.image_calls.append(prompt)
         return b"fake-image-bytes"
 
 
@@ -70,7 +68,7 @@ def test_run_pipeline_success(monkeypatch):
 
     assert len(provider.image_calls) == 3
 
-    economical_prompt = next(p for p, _, _ in provider.image_calls if "budget renovation" in p)
+    economical_prompt = next(p for p in provider.image_calls if "budget renovation" in p)
     assert "repaint over visible stains" in economical_prompt
 
 
@@ -90,7 +88,7 @@ def test_run_pipeline_passes_user_style_notes_to_every_tier(monkeypatch):
     run_pipeline("p3", provider, storage, user_style_notes="modern, blue accents")
 
     assert len(provider.image_calls) == 3
-    for prompt, _, _ in provider.image_calls:
+    for prompt in provider.image_calls:
         assert "modern, blue accents" in prompt
 
     with Session(engine) as session:
@@ -112,7 +110,7 @@ def test_run_pipeline_marks_failed_on_provider_error(monkeypatch):
         session.commit()
 
     class FailingProvider(FakeProvider):
-        def generate_image(self, image_bytes, prompt, negative_prompt="", strength=None):
+        def generate_image(self, image_bytes, prompt, tier=None):
             raise RuntimeError("quota exceeded")
 
     run_pipeline("p2", FailingProvider(), storage)

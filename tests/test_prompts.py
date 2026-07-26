@@ -1,13 +1,9 @@
 from app.pipeline.prompts import (
     PRESERVE_STRUCTURE,
     ROOM_TYPE_COMMON_SENSE,
-    STRENGTH_BY_TIER,
     TIER_SPECS,
-    UNIVERSAL_DAMAGE_NEGATIVE,
     USER_NOTES_MAX_CHARS,
-    build_negative_prompt,
     build_prompt,
-    get_strength,
 )
 
 
@@ -42,21 +38,10 @@ def test_build_prompt_unknown_tier_raises():
     assert False, "expected ValueError for unknown tier"
 
 
-def test_budget_and_mid_exclude_chandelier_via_negative_prompt():
-    assert "chandelier" in build_negative_prompt("economical")
-    assert "chandelier" in build_negative_prompt("mid")
-
-
-def test_premium_does_not_exclude_chandelier():
-    assert "chandelier" not in build_negative_prompt("premium")
-
-
 def test_positive_prompt_states_chandelier_exclusion_for_budget_and_mid():
-    # v6 inversion: instruction-following models (unlike SD1.5/diffusion) are built
-    # to follow exclusions stated directly in the prompt, so the tier exclusion is
-    # now ALSO a positive-prompt "Do not include: ..." sentence (on top of, not
-    # instead of, the negative_prompt channel below, which Cloudflare/SD1.5 still
-    # uses). Premium has no exclusions, so it should still never mention chandelier.
+    # Instruction-following models are built to follow exclusions stated directly
+    # in the prompt, so the tier exclusion is a positive-prompt "Do not include: ..."
+    # sentence. Premium has no exclusions, so it should never mention chandelier.
     for tier in ("economical", "mid"):
         prompt = build_prompt(tier)
         assert "chandelier" in prompt
@@ -74,11 +59,6 @@ def test_tier_paint_field_names_the_distinguishing_color():
     assert "marble" in TIER_SPECS["premium"]["paint"].lower()
 
 
-def test_negative_prompt_always_excludes_damage_regardless_of_tier():
-    for tier in TIER_SPECS:
-        assert UNIVERSAL_DAMAGE_NEGATIVE in build_negative_prompt(tier)
-
-
 def test_build_prompt_includes_tier_note_when_given():
     prompt = build_prompt("economical", tier_note="repaint over visible water stains")
     assert "repaint over visible water stains" in prompt
@@ -88,47 +68,6 @@ def test_build_prompt_omits_tier_note_when_not_given():
     prompt = build_prompt("economical")
     # sanity: no stray "None" or empty-note artifact leaks into the prompt
     assert "None" not in prompt
-
-
-def test_all_tiers_have_a_strength_value():
-    assert set(STRENGTH_BY_TIER.keys()) == {"economical", "mid", "premium"}
-    for tier in STRENGTH_BY_TIER:
-        assert 0.0 < get_strength(tier) <= 1.0
-
-
-def test_get_strength_unknown_tier_raises():
-    try:
-        get_strength("luxury-plus")
-    except ValueError:
-        return
-    assert False, "expected ValueError for unknown tier"
-
-
-def test_premium_strength_is_lower_than_economical_despite_bigger_material_change():
-    # Regression guard for a real observed failure: economical and premium once
-    # shared the same (higher) strength, and premium hallucinated an entirely
-    # different room (no window, wrong shape) while economical preserved structure
-    # fine at that same value. Premium's luxury vocabulary needs LESS freedom, not
-    # more, to stay anchored to the input - don't raise this back up without
-    # re-verifying against a real generation first. Only meaningful for the
-    # Cloudflare/SD1.5 fallback path (OpenAI ignores strength entirely).
-    assert get_strength("premium") < get_strength("economical")
-
-
-def test_only_premium_has_a_structure_reminder_in_the_spec():
-    # This field still exists in TIER_SPECS (kept for reference/possible future
-    # use) but v6's build_prompt() no longer reads it - see test below.
-    assert TIER_SPECS["economical"]["structure_reminder"] == ""
-    assert TIER_SPECS["mid"]["structure_reminder"] == ""
-    assert TIER_SPECS["premium"]["structure_reminder"] != ""
-
-
-def test_build_prompt_does_not_use_the_legacy_structure_reminder_field():
-    # v6: the universal PRESERVE_STRUCTURE instruction (always present) replaced
-    # this SD1.5-era per-tier patch. Confirms it's genuinely unused now, not just
-    # coincidentally absent.
-    prompt = build_prompt("premium")
-    assert TIER_SPECS["premium"]["structure_reminder"] not in prompt
 
 
 def test_build_prompt_includes_user_notes_when_given():
@@ -165,14 +104,14 @@ def test_user_notes_appear_before_tier_paint_field():
     assert prompt.index("scandinavian style") < prompt.index(TIER_SPECS["mid"]["paint"])
 
 
-# ---- v6 instruction-format invariants ----
+# ---- instruction-format invariants ----
 
 
 def test_build_prompt_reads_as_an_edit_instruction_not_a_generation_spec():
-    # This is the whole point of v6: the prompt must frame itself as editing the
-    # input photo, not describing a target image to generate from scratch - the
-    # root cause of a real failure where gpt-image-1 rendered entirely different
-    # rooms for Premium/Mid instead of redecorating the actual uploaded photo.
+    # The prompt must frame itself as editing the input photo, not describing a
+    # target image to generate from scratch - the root cause of a real failure
+    # where gpt-image-1 rendered entirely different rooms for Premium/Mid instead
+    # of redecorating the actual uploaded photo.
     for tier in TIER_SPECS:
         prompt = build_prompt(tier)
         assert "Edit this photograph" in prompt
@@ -187,7 +126,7 @@ def test_build_prompt_includes_each_tiers_key_materials():
 
 
 def test_build_prompt_includes_positive_damage_repair_instruction():
-    # v6: states UNIVERSAL_DAMAGE_NEGATIVE's intent positively in the prompt itself
+    # States the damage-repair intent positively in the prompt itself
     # (instruction models respond better to a direct command than negation) -
     # every tier's render should look renovated, never like the input's condition.
     for tier in TIER_SPECS:
@@ -197,13 +136,12 @@ def test_build_prompt_includes_positive_damage_repair_instruction():
 
 
 def test_build_prompt_is_natural_language_sentences_not_comma_keywords():
-    # Distinguishes v6 from the old SD1.5 keyword-soup format: real sentences
-    # (period-terminated), not one long comma-joined descriptor list.
+    # Real sentences (period-terminated), not one long comma-joined descriptor list.
     prompt = build_prompt("mid")
     assert prompt.count(". ") > 5
 
 
-# ---- v7: room-type common sense ----
+# ---- room-type common sense ----
 
 
 def test_build_prompt_always_includes_room_type_common_sense():
@@ -227,3 +165,35 @@ def test_preserve_structure_explicitly_locks_room_depth():
     # Regression guard for a real failure: a hallway's depth changed (became
     # shorter/longer) between tiers, effectively changing the room's architecture.
     assert "depth" in PRESERVE_STRUCTURE.lower()
+
+
+# ---- structure_reminder reactivation ----
+
+
+def test_only_premium_has_a_structure_reminder_in_the_spec():
+    assert TIER_SPECS["economical"]["structure_reminder"] == ""
+    assert TIER_SPECS["mid"]["structure_reminder"] == ""
+    assert TIER_SPECS["premium"]["structure_reminder"] != ""
+
+
+def test_build_prompt_reactivates_structure_reminder_for_tiers_that_have_one():
+    # Regression guard: PRESERVE_STRUCTURE alone (stated once, near the top) wasn't
+    # enough to stop premium's vivid luxury vocabulary from pulling gpt-image-1
+    # toward a hallucinated generic room. structure_reminder is restated for any
+    # tier that defines one (currently premium only) - economical/mid have none.
+    premium_prompt = build_prompt("premium")
+    assert TIER_SPECS["premium"]["structure_reminder"] in premium_prompt
+
+    for tier in ("economical", "mid"):
+        assert TIER_SPECS[tier]["structure_reminder"] == ""
+        assert "Even with these material upgrades" not in build_prompt(tier)
+
+
+def test_structure_reminder_appears_after_the_tiers_material_instructions():
+    # Placement matters, not just presence: it must land AFTER the marble/brass/
+    # lighting sentences so it counteracts that vocabulary's pull, not get buried
+    # before it where PRESERVE_STRUCTURE already sits.
+    prompt = build_prompt("premium")
+    assert prompt.index(TIER_SPECS["premium"]["materials"]) < prompt.index(
+        TIER_SPECS["premium"]["structure_reminder"]
+    )

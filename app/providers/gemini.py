@@ -37,16 +37,9 @@ class GeminiProvider(Provider):
             self._client = genai.Client(api_key=settings.gemini_api_key)
         return self._client
 
-    def generate_image(
-        self,
-        image_bytes: bytes,
-        prompt: str,
-        negative_prompt: str = "",
-        strength: float | None = None,
-    ) -> bytes:
-        # Gemini's instruction-based image editing has no separate negative-prompt
-        # or strength channel; both would need to be folded into `prompt` itself if
-        # this path is ever reactivated (see CLAUDE.md - currently dormant/unused).
+    def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
+        # tier is unused here - Gemini's instruction-based editing has no
+        # per-tier fidelity/quality knob to vary (see Provider.generate_image).
         image = Image.open(BytesIO(image_bytes))
         response = self.client.models.generate_content(
             model=settings.gemini_image_model,

@@ -5,13 +5,7 @@ from sqlmodel import Session
 
 from app.db import engine
 from app.models import Project
-from app.pipeline.prompts import (
-    PROMPT_VERSION,
-    TIER_SPECS,
-    build_negative_prompt,
-    build_prompt,
-    get_strength,
-)
+from app.pipeline.prompts import PROMPT_VERSION, TIER_SPECS, build_prompt
 from app.providers.base import Provider
 from app.storage.base import Storage
 
@@ -65,9 +59,7 @@ def run_pipeline(
 
             for tier in TIERS:
                 prompt = build_prompt(tier, room_description, tier_notes.get(tier), user_style_notes)
-                negative_prompt = build_negative_prompt(tier)
-                strength = get_strength(tier)
-                image_bytes = provider.generate_image(original_bytes, prompt, negative_prompt, strength)
+                image_bytes = provider.generate_image(original_bytes, prompt, tier=tier)
                 key = f"local.output/{project_id}/{tier}.png"
                 storage.put(key, image_bytes, content_type="image/png")
                 setattr(project, f"{tier}_key", key)

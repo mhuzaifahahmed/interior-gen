@@ -12,8 +12,8 @@ that reliably produces and saves those 3 tiers. Materials-list + city-pricing is
 
 Full plan: `C:\Users\User\.claude\plans\act-as-senior-technical-purrfect-globe.md`.
 
-Hard constraint: **free tiers only.** Provider setup (see "Provider split" below) reflects a real
-mid-build policy change and is not the original design — read it before touching `app/providers/`.
+Originally built on **free tiers only**; that constraint was later dropped for image generation (see
+"Provider split" below) — read it before touching `app/providers/`.
 
 ## Commands
 
@@ -33,44 +33,38 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
 
 - **Room description (text)**: `app/providers/gemini.py` — Gemini `gemini-2.5-flash`, still free
   (separate quota from image gen).
-- **Image generation**: `app/providers/cloudflare.py` — **Cloudflare Workers AI**,
-  `@cf/runwayml/stable-diffusion-v1-5-img2img` (free tier: 10,000 neurons/day, no card). This is
-  **SD1.5 img2img**, not Nano Banana's instruction-based editing — structure preservation is controlled by
-  a **per-tier `strength`** (`STRENGTH_BY_TIER` in `prompts.py`, not one shared constant). Tuning these
-  values is the main lever if outputs drift too far or too little. **Counterintuitive, hard-won lesson**:
-  premium is *lower* (0.45) than economical/mid (0.65/0.6), not higher, despite having the biggest material
-  change. A real generation showed economical and premium at the same 0.65 - economical preserved structure
-  fine, but premium hallucinated an entirely different room (no window, wrong shape), because its luxury
-  vocabulary (marble/brass/chandelier) combined with that much freedom let SD1.5 fully reinterpret the scene
-  toward a generic "luxury vanity" archetype instead of redecorating the actual input. Premium also carries
-  a `structure_reminder` field (empty for the other tiers) that `build_prompt()` inserts right before the
-  heaviest material tokens - a repeated structure-preservation anchor placed where the luxury vocabulary's
-  pull is strongest. Don't raise premium's strength back up without re-verifying against a real generation.
-  - **Alternate image providers**: selectable via `IMAGE_PROVIDER` (`cloudflare` default/free, or
-    `openai`) in `get_provider()` (`app/providers/__init__.py`), which injects the chosen image backend
-    into `HybridProvider(image_provider=...)` - text (Gemini) is unaffected either way. **OpenAI**
-    (`app/providers/openai.py`, `OpenAIImageProvider`) is real and wired in - paid, `gpt-image-2`, not
-    `gpt-image-1` which retires Oct 2026. Architecturally different from Cloudflare's SD1.5: it's an
-    instruction-following edit model (like Nano Banana), not raw diffusion, so `negative_prompt` is
-    folded into the positive prompt text (expected to actually work here, unlike SD1.5) and `strength`
-    has no equivalent (accepted for interface compatibility, ignored).
-    **Real cost trap, found via a live test call, not docs**: `OPENAI_IMAGE_QUALITY` alone does NOT
-    control cost the way it looks like it should - `OPENAI_IMAGE_INPUT_FIDELITY` is a SEPARATE param
-    that also drives cost heavily and silently defaults to the expensive tier if omitted from the
-    request. A real smoke test with only `quality="low"` set cost **$0.10/image**, ~20x the ~$0.005
-    "low quality" figure quoted in third-party pricing articles (which describe generation cost, not
-    edit/image-input cost). Both params are now always sent explicitly (`openai.py` includes
-    `input_fidelity` unconditionally) - `test_generate_image_always_sends_input_fidelity_explicitly`
-    guards this regression. `input_fidelity` isn't purely a cost knob either - OpenAI describes it as
-    controlling "fidelity to the original input image(s)", i.e. structure preservation, so if a
-    real-money-driven push toward `"low"` starts showing structural drift, that's the first thing to
-    revert to `"high"`, accepting the cost jump, before touching prompts/anything else.
-    Two abandoned investigations, kept on record: Pixazo (Flux Schnell img2img) - their API gateway
-    Cloudflare-bot-blocks server-side requests (403 even with a valid key), unusable for backend
-    integration. NVIDIA NIM's Qwen-Image-Edit - `NVIDIA_API_KEY` placeholder exists but no provider code;
-    its hosted invocation shape was never confirmed (image-edit models aren't in the standard `/v1/models`
-    catalog, likely needs NVCF function-ID-based invocation instead of a friendly model name - the exact
-    request shape lives on a JS-rendered `build.nvidia.com` page automated fetching couldn't scrape).
+- **Image generation**: `app/providers/openai.py` (`OpenAIImageProvider`) — OpenAI's Images API, the sole
+  image backend. Paid; model is `gpt-image-1`, not `gpt-image-2` which retires Oct 2026. It's an
+  instruction-following edit model (like Nano Banana), not raw diffusion — no `negative_prompt`/`strength`
+  channel exists; `Provider.generate_image(image_bytes, prompt)` takes only a fully-composed prompt, and
+  exclusions ("no chandelier") are stated directly inside it by `build_prompt()`.
+  **Real cost trap, found via a live test call, not docs**: `OPENAI_IMAGE_QUALITY` alone does NOT
+  control cost the way it looks like it should - `OPENAI_IMAGE_INPUT_FIDELITY` is a SEPARATE param
+  that also drives cost heavily and silently defaults to the expensive tier if omitted from the
+  request. A real smoke test with only `quality="low"` set cost **$0.10/image**, ~20x the ~$0.005
+  "low quality" figure quoted in third-party pricing articles (which describe generation cost, not
+  edit/image-input cost). Both params are now always sent explicitly (`openai.py` includes
+  `input_fidelity` unconditionally) - `test_generate_image_always_sends_input_fidelity_explicitly`
+  guards this regression. `input_fidelity` isn't purely a cost knob either - OpenAI describes it as
+  controlling "fidelity to the original input image(s)", i.e. structure preservation, so if a
+  real-money-driven push toward `"low"` starts showing structural drift, that's the first thing to
+  revert to `"high"`, accepting the cost jump, before touching prompts/anything else.
+  **A free Cloudflare Workers AI/SD1.5 img2img fallback existed earlier and was deliberately removed
+  entirely** (not disabled/dormant — the module, its tests, `STRENGTH_BY_TIER`, `build_negative_prompt`,
+  `IMAGE_PROVIDER` switching, and all config/env entries are gone) once OpenAI became the real backend,
+  because SD1.5-era concepts (diffusion `strength` dial, negative-prompt channel, 77-token CLIP limit)
+  don't apply to an instruction-following editor and were only adding confusion. If a free image fallback
+  is ever wanted again, it needs a fresh implementation, not a revival of the old `cloudflare.py`.
+  Three abandoned investigations, kept on record: Pixazo (Flux Schnell img2img) - their API gateway
+  Cloudflare-bot-blocks server-side requests (403 even with a valid key), unusable for backend
+  integration. NVIDIA NIM's Qwen-Image-Edit - `NVIDIA_API_KEY` placeholder exists but no provider code;
+  its hosted invocation shape was never confirmed (image-edit models aren't in the standard `/v1/models`
+  catalog, likely needs NVCF function-ID-based invocation instead of a friendly model name - the exact
+  request shape lives on a JS-rendered `build.nvidia.com` page automated fetching couldn't scrape). Two
+  exploratory Colab notebooks (`colab/qwen_image_edit_experiment.ipynb`,
+  `colab/mage_flow_edit_turbo_experiment.ipynb`) compare alternate open-weight edit models against the
+  old Cloudflare/SD1.5 pipeline they were written against — historical experiment records, not part of
+  the runtime; left as-is even though the pipeline they compare against no longer exists in the app.
 - **Tier notes (room-specific prompt customization)**: `GeminiProvider.generate_tier_notes` analyzes the
   actual uploaded photo once and returns a short, tier-specific instruction per tier (e.g. "repaint over
   visible water stains" for economical) that `build_prompt()` inserts at high priority. This exists because
@@ -122,31 +116,24 @@ Three deliberate seams keep the free/solo build swappable — respect them when 
    a real renovation cost-impact methodology (material quality ladder + lighting-temperature ladder,
    prioritized paint -> flooring -> lighting -> feature walls -> decor), not arbitrary tier adjectives.
 
-   **v6 prompt format: natural-language edit instructions, not SD1.5 keyword soup.** `build_prompt()`
-   composes `TIER_SPECS` into a paragraph of imperatives ("Paint the walls with...", "Do not include...")
-   because the active image backend is now OpenAI `gpt-image-1` (`IMAGE_PROVIDER=openai`) — an
-   instruction-following editor (like Nano Banana), not raw diffusion. This replaced the old
-   comma-separated descriptor format after a **real failure**: that format read to an instruction model
-   as a generation spec for a target image, not an edit instruction for the input photo, so a real 3-tier
-   generation came back with Premium/Mid as entirely different rooms (only Economical, with the weakest
-   vocabulary, loosely resembled the input) — same "luxury vocabulary overpowers structure" failure shape
-   as SD1.5, worse here since there's no strength dial to compensate.
+   **Prompt format: natural-language edit instructions, not keyword soup.** `build_prompt()` composes
+   `TIER_SPECS` into a paragraph of imperatives ("Paint the walls with...", "Do not include...") because
+   the image backend, OpenAI `gpt-image-1`, is an instruction-following editor (like Nano Banana), not raw
+   diffusion. This replaced an earlier comma-separated descriptor format after a **real failure**: that
+   format read to an instruction model as a generation spec for a target image, not an edit instruction
+   for the input photo, so a real 3-tier generation came back with Premium/Mid as entirely different rooms
+   (only Economical, with the weakest vocabulary, loosely resembled the input).
 
-   **Accepted, deliberate tradeoff**: this format is used for ALL providers now, including the free
-   Cloudflare/SD1.5 fallback (declined building a second per-provider renderer to keep one code path) —
-   which reopens two SD1.5-specific dangers the old format was built to avoid: CLIP's 77-token truncation
-   (these paragraphs are well over that; trailing content silently drops on Cloudflare, not OpenAI) and
-   diffusion's unreliable negation handling (partially mitigated - `build_negative_prompt()` /
-   `NEGATIVE_ADDITIONS` / `STRENGTH_BY_TIER` are all still kept and still used for Cloudflare's dedicated
-   `negative_prompt` param; the tier-exclusion sentence in `build_prompt()` is *additional* positive-prompt
-   text, not a replacement). If Cloudflare quality matters again, the fix is a second keyword-style
-   renderer selected per-provider, not implemented.
+   `NEGATIVE_ADDITIONS` (tier-specific exclusions like "chandelier" for budget/mid) is rendered as a
+   positive-prompt "Do not include: ..." sentence in `build_prompt()` — instruction-following models are
+   built to follow exclusions stated directly in plain language, unlike diffusion models. There is no
+   separate negative-prompt channel or `strength` param anywhere in this codebase — both were SD1.5-only
+   concepts tied to the removed Cloudflare fallback (see "Provider split" above) and were deleted along
+   with it, not kept for interface compatibility.
 
    `tier_note` and `user_notes` (optional 3rd/4th args to `build_prompt()`) are inserted right after the
-   structural lock, ahead of the tier's own generic content, same priority reasoning as before just in
-   instruction-sentence form now. `structure_reminder` (a premium-only SD1.5-era patch) is unused by v6 —
-   the always-present structural lock covers what it used to patch — but the field stays in `TIER_SPECS`
-   rather than being deleted.
+   structural lock, ahead of the tier's own generic content, so they can actually steer the render instead
+   of being drowned out by the tier's defaults.
 
    **Real cost trap on the OpenAI side, found via a live test call, not docs**: `OPENAI_IMAGE_QUALITY`
    alone does NOT control cost - `OPENAI_IMAGE_INPUT_FIDELITY` is a separate param that also drives cost
@@ -178,7 +165,7 @@ Async: FastAPI `BackgroundTasks` + client polling (no real queue yet — hardeni
 Project's `meta_json` carries `PROMPT_VERSION` so outputs are reproducible/defensible.
 
 Layout: `app/{main,config,db,models,schemas}.py`, `app/pipeline/` (prompts + orchestration),
-`app/providers/` (base + gemini + cloudflare + hybrid), `app/storage/` (base + local + s3), `static/`
+`app/providers/` (base + gemini + openai + hybrid), `app/storage/` (base + local + s3), `static/`
 (vanilla HTML/JS — no build step), `data/` (sqlite + local storage, gitignored), `tests/`.
 
 ### Frontend (`static/`)
@@ -214,21 +201,23 @@ depends on; `test_terms_page_serves`/`test_privacy_page_serves` cover the new ro
 
 ## Testing convention
 
-All provider calls in tests are **mocked** — no real Gemini or Cloudflare network calls in the test suite
-(quotas are limited/finite and must never be burned by CI). Pattern: monkeypatch the module-level client
-call (see `tests/test_cloudflare_provider.py`, `tests/test_pipeline.py` for the FakeProvider pattern).
+All provider calls in tests are **mocked** — no real Gemini or OpenAI network calls in the test suite
+(costs money / quotas are limited and must never be burned by CI). Pattern: monkeypatch the module-level
+client call (see `tests/test_openai_provider.py`, `tests/test_pipeline.py` for the FakeProvider pattern).
 Prompt tests assert the three tier specs are mutually distinct and each carries the preserve-structure
 instruction.
 
 ## Known limitations to keep in mind (not bugs to "fix" silently)
 
-- SD1.5 img2img (Cloudflare fallback only, not the active backend) preserves structure via the `strength`
-  parameter, not a hard geometric lock — expect more drift than gpt-image-1's instruction-following if
-  that path is ever used. ControlNet+depth is the eventual hardening upgrade if this proves insufficient.
-  Current prompt version is `v7` (`PROMPT_VERSION` in `prompts.py`) - see the Tier/prompt seam section
-  above for the full v6/v7 history.
-- Free-tier caps (Cloudflare: 10,000 neurons/day; Gemini text: separate free quota) and localhost-only
-  deployment are intentional for Phase 1.
+- gpt-image-1 preserves structure via prompt instructions + `input_fidelity`, not a hard geometric lock
+  (e.g. ControlNet-depth) — real generations have shown drift (wrong room type, changed depth), addressed
+  so far via prompt fixes (see Tier/prompt seam section above). ControlNet-depth is the eventual hardening
+  upgrade if prompt-only fixes prove insufficient, but it requires direct access to a diffusion model's
+  denoising loop (self-hosted, e.g. `diffusers` + a controlnet-depth checkpoint) - neither gpt-image-1 nor
+  any previously-used hosted API exposes that, so it can't be bolted onto the current provider seam without
+  new self-hosted infrastructure. Current prompt version is `v7` (`PROMPT_VERSION` in `prompts.py`).
+- Gemini text quota (room description) is free/separate from image gen; image generation is paid
+  (OpenAI). Localhost-only deployment is intentional for Phase 1.
 - `GEMINI_IMAGE_MODEL` env var / Gemini image path is dormant, not deleted — kept for a possible future
   billing-enabled fallback.
 

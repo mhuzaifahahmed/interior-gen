@@ -12,6 +12,7 @@ const stylePromptInput = document.getElementById("style-prompt");
 
 const progressCard = document.getElementById("progress-card");
 const progressMessageEl = document.getElementById("progress-message");
+const progressBarFill = document.getElementById("progress-bar-fill");
 
 const errorCard = document.getElementById("error-card");
 const errorDetail = document.getElementById("error-detail");
@@ -40,7 +41,8 @@ const TIERS = [
 // project treated that as a reason to keep messages vague/generic on principle. Product
 // decision since then: the ~1 minute wait feels more engaging with specific, varied
 // messages than with honest-but-vague ones, even knowing they're not strictly telemetry.
-// Order roughly follows the tier display order (Premium, Mid-Range, Economical).
+// Shown in a shuffled order each run (see startProgressMessages) rather than this fixed
+// sequence, so it doesn't read as an obviously scripted, always-identical script.
 const PROGRESS_MESSAGES = [
   "Analyzing your room's layout…",
   "Generating your Premium image…",
@@ -54,7 +56,15 @@ const PROGRESS_MESSAGES = [
 ];
 
 let selectedFile = null;
-let progressTimer = null;
+let progressMessageTimer = null;
+let messageQueue = [];
+
+let progressBarTimer = null;
+let progressBarPercent = 0;
+
+// Never quite reaches 100% on its own - only a real "done" response snaps it there.
+// Classic loading-bar trick so it doesn't look "stuck" if generation runs long.
+const PROGRESS_BAR_CAP = 92;
 
 /* ---------- File selection ---------- */
 
@@ -137,28 +147,89 @@ form.addEventListener("submit", async (e) => {
 
 /* ---------- Progress messaging ---------- */
 /* Cycles through PROGRESS_MESSAGES with a fade transition between each, so a ~1 minute
-   wait feels animated/engaged rather than a single frozen sentence. Settles on the last
-   ("Almost ready...") line on repeat if generation runs long, rather than looping back
-   to the start - avoids the awkwardness of "Generating your Premium image..." reappearing
-   after results should plausibly already be close to done. */
+   wait feels animated/engaged rather than a single frozen sentence. Each message holds
+   for ~9-10 seconds (randomized, not a fixed beat) and the order is reshuffled every run
+   instead of always playing in the same sequence - both are there so the cycle doesn't
+   read as an obviously premade script. If generation runs long enough to exhaust one
+   shuffle, it reshuffles and keeps going rather than freezing on the last line. */
 
-function startProgressMessages() {
-  let index = 0;
-  progressMessageEl.textContent = PROGRESS_MESSAGES[0];
-  progressTimer = setInterval(() => {
-    index = Math.min(index + 1, PROGRESS_MESSAGES.length - 1);
+function shuffle(array) {
+  const arr = array.slice();
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function nextMessage() {
+  if (messageQueue.length === 0) {
+    const last = progressMessageEl.textContent;
+    messageQueue = shuffle(PROGRESS_MESSAGES);
+    if (messageQueue[0] === last && messageQueue.length > 1) {
+      [messageQueue[0], messageQueue[1]] = [messageQueue[1], messageQueue[0]];
+    }
+  }
+  return messageQueue.shift();
+}
+
+function scheduleNextMessage() {
+  const holdMs = 9000 + Math.random() * 1000; // ~9-10s, not a metronome
+  progressMessageTimer = setTimeout(() => {
     progressMessageEl.classList.add("is-changing");
     setTimeout(() => {
-      progressMessageEl.textContent = PROGRESS_MESSAGES[index];
+      progressMessageEl.textContent = nextMessage();
       progressMessageEl.classList.remove("is-changing");
+      scheduleNextMessage();
     }, 250);
-  }, 4500);
+  }, holdMs);
+}
+
+function startProgressMessages() {
+  messageQueue = shuffle(PROGRESS_MESSAGES);
+  progressMessageEl.textContent = messageQueue.shift();
+  scheduleNextMessage();
+  startProgressBar();
 }
 
 function stopProgressMessages() {
-  clearInterval(progressTimer);
-  progressTimer = null;
+  clearTimeout(progressMessageTimer);
+  progressMessageTimer = null;
   progressMessageEl.classList.remove("is-changing");
+  stopProgressBar();
+}
+
+/* ---------- Progress bar ---------- */
+/* Fills toward PROGRESS_BAR_CAP over roughly a minute, in small irregular steps/ticks
+   (both the step size and the delay between ticks are randomized) rather than a smooth
+   linear animation, so it reads as real progress rather than an obviously fake timer.
+   Steps shrink as the bar approaches the cap (an easing curve), which is what makes ~65s
+   land near the cap without a hard-coded frame-by-frame schedule. */
+
+function tickProgressBar() {
+  const remaining = PROGRESS_BAR_CAP - progressBarPercent;
+  const step = Math.max(0.15, remaining * (0.012 + Math.random() * 0.02));
+  progressBarPercent = Math.min(PROGRESS_BAR_CAP, progressBarPercent + step);
+  progressBarFill.style.width = `${progressBarPercent}%`;
+
+  const tickMs = 500 + Math.random() * 700; // ~0.5-1.2s, irregular
+  progressBarTimer = setTimeout(tickProgressBar, tickMs);
+}
+
+function startProgressBar() {
+  progressBarPercent = 0;
+  progressBarFill.style.width = "0%";
+  tickProgressBar();
+}
+
+function stopProgressBar() {
+  clearTimeout(progressBarTimer);
+  progressBarTimer = null;
+}
+
+function finishProgressBar() {
+  stopProgressBar();
+  progressBarFill.style.width = "100%";
 }
 
 async function pollProject(projectId) {
@@ -177,9 +248,14 @@ async function pollProject(projectId) {
   }
 
   if (data.status === "done") {
+    finishProgressBar();
     stopProgressMessages();
-    renderResults(data);
-    showState("results");
+    // Brief pause so the bar's jump to 100% is actually visible before the
+    // progress card gets hidden in favor of the results view.
+    setTimeout(() => {
+      renderResults(data);
+      showState("results");
+    }, 300);
     return;
   }
 

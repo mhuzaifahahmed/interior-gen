@@ -72,9 +72,46 @@ def test_generate_image_always_sends_input_fidelity_explicitly(monkeypatch):
     assert captured["input_fidelity"] == "low"
 
 
-def test_generate_image_folds_negative_prompt_into_positive_prompt(monkeypatch):
-    # Unlike Cloudflare's SD1.5 provider, OpenAI's API has no dedicated
-    # negative_prompt field - it must be folded into the positive prompt text.
+def test_generate_image_uses_high_fidelity_for_premium_tier(monkeypatch):
+    # Regression guard: premium's vivid luxury vocabulary was observed pulling
+    # gpt-image-1 toward a hallucinated generic room at the default "low"
+    # fidelity, even with the structural-lock text present in the prompt. Premium
+    # must get "high" fidelity regardless of the configured default.
+    captured = {}
+
+    def fake_post(url, headers=None, data=None, files=None, timeout=None):
+        captured["input_fidelity"] = data["input_fidelity"]
+        return FakeResponse(json_data={"data": [{"b64_json": ""}]})
+
+    monkeypatch.setattr(openai_module.httpx, "post", fake_post)
+    monkeypatch.setattr(openai_module.settings, "openai_image_input_fidelity", "low")
+
+    OpenAIImageProvider().generate_image(b"input-bytes", "prompt", tier="premium")
+
+    assert captured["input_fidelity"] == "high"
+
+
+def test_generate_image_uses_configured_fidelity_for_other_tiers(monkeypatch):
+    # Economical/mid should NOT pay the high-fidelity cost - only the tier that
+    # actually showed the drift should.
+    captured = {}
+
+    def fake_post(url, headers=None, data=None, files=None, timeout=None):
+        captured["input_fidelity"] = data["input_fidelity"]
+        return FakeResponse(json_data={"data": [{"b64_json": ""}]})
+
+    monkeypatch.setattr(openai_module.httpx, "post", fake_post)
+    monkeypatch.setattr(openai_module.settings, "openai_image_input_fidelity", "low")
+
+    for tier in ("economical", "mid", None):
+        OpenAIImageProvider().generate_image(b"input-bytes", "prompt", tier=tier)
+        assert captured["input_fidelity"] == "low"
+
+
+def test_generate_image_sends_prompt_unmodified(monkeypatch):
+    # No negative_prompt/strength channel exists anymore - the prompt sent is
+    # exactly what build_prompt() produced, with exclusions already stated
+    # directly in it (see app/pipeline/prompts.py).
     captured = {}
 
     def fake_post(url, headers=None, data=None, files=None, timeout=None):
@@ -83,26 +120,9 @@ def test_generate_image_folds_negative_prompt_into_positive_prompt(monkeypatch):
 
     monkeypatch.setattr(openai_module.httpx, "post", fake_post)
 
-    OpenAIImageProvider().generate_image(
-        b"input-bytes", "budget renovation", negative_prompt="chandelier, marble"
-    )
+    OpenAIImageProvider().generate_image(b"input-bytes", "budget renovation. Do not include: chandelier.")
 
-    assert "budget renovation" in captured["prompt"]
-    assert "chandelier, marble" in captured["prompt"]
-
-
-def test_generate_image_omits_avoid_clause_when_no_negative_prompt(monkeypatch):
-    captured = {}
-
-    def fake_post(url, headers=None, data=None, files=None, timeout=None):
-        captured["prompt"] = data["prompt"]
-        return FakeResponse(json_data={"data": [{"b64_json": ""}]})
-
-    monkeypatch.setattr(openai_module.httpx, "post", fake_post)
-
-    OpenAIImageProvider().generate_image(b"input-bytes", "prompt")
-
-    assert "Avoid:" not in captured["prompt"]
+    assert captured["prompt"] == "budget renovation. Do not include: chandelier."
 
 
 def test_generate_image_unexpected_response_shape_raises(monkeypatch):

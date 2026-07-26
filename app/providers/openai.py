@@ -4,17 +4,11 @@ import httpx
 
 from app.config import settings
 
-# GPT-image models are instruction-following edit models (like Nano Banana),
-# not raw noise-based diffusion like SD1.5 - so unlike Cloudflare's provider,
-# there's no dedicated negative_prompt or strength API parameter here:
-#   - negative_prompt is folded into the positive prompt as an explicit "Avoid:"
-#     instruction. This is expected to actually work here, unlike the SD1.5 case
-#     documented in app/pipeline/prompts.py's module docstring (diffusion models
-#     don't reliably obey in-prompt negation) - instruction-following models are
-#     built specifically to follow exclusions stated in plain language.
-#   - strength has no equivalent in this API at all. Accepted (for Provider
-#     interface compatibility, so this can be swapped in for Cloudflare without
-#     touching the pipeline) but silently ignored.
+# GPT-image models are instruction-following edit models (like Nano Banana), not
+# raw noise-based diffusion - there's no negative_prompt or strength API parameter
+# here. Exclusions ("no chandelier") are stated directly in the positive prompt
+# text by build_prompt() (app/pipeline/prompts.py) instead, since instruction-
+# following models are built to follow exclusions stated in plain language.
 #
 # COST LESSON (found via a real test call, not docs): `quality` alone does NOT
 # control cost the way it first appears to. There's a SEPARATE `input_fidelity`
@@ -40,33 +34,33 @@ from app.config import settings
 # reconsidered, know upfront it can't do a cheap-input-processing tier at all.
 IMAGES_EDITS_URL = "https://api.openai.com/v1/images/edits"
 
+# Tiers that must stay tightly anchored to the input photo, so they're worth the
+# input_fidelity="high" cost jump above (real observed failure: premium's vivid
+# luxury vocabulary - marble, brass, "designer ceiling" - pulled gpt-image-1
+# toward a hallucinated generic luxury room, wrong column layout, narrower space
+# - at the default "low" fidelity, even with prompts.py's structural-lock text
+# present). Deliberately per-tier, not global, so the extra cost is spent only
+# where the drift was actually observed.
+HIGH_FIDELITY_TIERS = {"premium"}
+
 
 class OpenAIImageProvider:
-    """Image-to-image editing via OpenAI's official Images API - an experimental
-    alternate image backend, not the default (see IMAGE_PROVIDER in config.py).
-    Model/quality/input_fidelity are all configurable - see the cost lesson above
-    before changing input_fidelity casually.
+    """Image-to-image editing via OpenAI's official Images API - the sole image
+    generation backend. Model/quality/input_fidelity are all configurable - see
+    the cost lesson above before changing input_fidelity casually.
     """
 
-    def generate_image(
-        self,
-        image_bytes: bytes,
-        prompt: str,
-        negative_prompt: str = "",
-        strength: float | None = None,
-    ) -> bytes:
-        full_prompt = prompt
-        if negative_prompt:
-            full_prompt = f"{prompt}. Avoid: {negative_prompt}."
+    def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
+        input_fidelity = "high" if tier in HIGH_FIDELITY_TIERS else settings.openai_image_input_fidelity
 
         response = httpx.post(
             IMAGES_EDITS_URL,
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
             data={
                 "model": settings.openai_image_model,
-                "prompt": full_prompt,
+                "prompt": prompt,
                 "quality": settings.openai_image_quality,
-                "input_fidelity": settings.openai_image_input_fidelity,
+                "input_fidelity": input_fidelity,
             },
             files={"image": ("room.png", image_bytes, "image/png")},
             timeout=120,

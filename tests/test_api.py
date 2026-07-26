@@ -17,9 +17,7 @@ class FakeProvider:
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         return {}
 
-    def generate_image(
-        self, image_bytes: bytes, prompt: str, negative_prompt: str = "", strength: float | None = None
-    ) -> bytes:
+    def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
         self.image_prompts.append(prompt)
         buf = io.BytesIO()
         Image.new("RGB", (4, 4), color=(200, 200, 200)).save(buf, format="PNG")

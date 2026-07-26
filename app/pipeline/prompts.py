@@ -11,38 +11,27 @@ Each spec is a structured dict, not free text, because it is intentionally the s
 of the future materials/pricing database (deferred feature - see the plan's Long-Term
 Plan section): these fields will later map to itemized, priceable line items.
 
-PROMPT FORMAT (v6): natural-language EDIT INSTRUCTIONS, not SD1.5-style keyword soup.
-The active image backend is now OpenAI gpt-image-1 (an instruction-following editor,
-like Nano Banana), not raw diffusion - build_prompt() composes the same structured
-TIER_SPECS into a coherent paragraph of imperatives ("Paint the walls with...", "Do
-not include...") instead of a comma-separated descriptor list.
+PROMPT FORMAT (v6+): natural-language EDIT INSTRUCTIONS. The image backend is OpenAI
+gpt-image-1, an instruction-following editor (like Nano Banana), not raw diffusion -
+build_prompt() composes the structured TIER_SPECS into a coherent paragraph of
+imperatives ("Paint the walls with...", "Do not include...") instead of a
+comma-separated descriptor list.
 
-Why the switch (real failure, not theory): the old keyword-soup format read to an
-instruction model as a *generation spec for a target image*, not an *edit instruction
-for the input photo* - a real 3-tier generation through gpt-image-1 came back with
+Why this format (real failure, not theory): an earlier comma-separated keyword-soup
+format read to the instruction model as a *generation spec for a target image*, not
+an *edit instruction for the input photo* - a real 3-tier generation came back with
 Premium/Mid as entirely different rooms (generic luxury interiors), only Economical
-(weakest vocabulary) loosely resembling the input. Same failure shape as the SD1.5
-"luxury vocabulary overpowers structure" problem, worse here.
+(weakest vocabulary) loosely resembling the input.
 
-ACCEPTED TRADEOFF: this format is used for ALL providers now, including the free
-Cloudflare/SD1.5 fallback - a deliberate, known regression of that path (declined a
-per-provider renderer to keep one code path). SD1.5-specific dangers this format
-walks back into:
-1. CLIP hard-truncates prompts at 77 tokens - these paragraphs are well over that,
-   so on Cloudflare/SD1.5 specifically, trailing content (decor, tier exclusions)
-   will silently get cut. Not a problem for OpenAI (large context).
-2. Diffusion models don't reliably obey negation in the positive prompt ("do not
-   include a chandelier" can still prime one). The tier exclusion sentence built
-   from NEGATIVE_ADDITIONS is positive-prompt text now, on top of (not instead of)
-   the existing build_negative_prompt() channel below - keep using the negative
-   channel for Cloudflare; for OpenAI, negative_prompt gets folded into the prompt
-   too (see app/providers/openai.py) since there's no dedicated field there either.
-If Cloudflare quality matters again later, the fix is a second, keyword-style
-renderer selected per-provider - not implemented (explicit user decision to replace
-the format entirely rather than maintain two).
+An earlier version of this pipeline also supported Cloudflare Workers AI/SD1.5 as a
+free fallback image backend, with its own negative_prompt/strength diffusion-specific
+machinery. That path has been removed entirely (not just disabled) - it was a source
+of confusion once OpenAI became the real backend: SD1.5-era concepts like a 77-token
+CLIP limit, negation-unreliable diffusion, and a "strength" noise dial don't apply to
+an instruction-following editor and had no reason to keep shaping this file's design.
 """
 
-PROMPT_VERSION = "v7"
+PROMPT_VERSION = "v8"
 
 TIER_SPECS: dict[str, dict[str, str]] = {
     "economical": {
@@ -75,24 +64,27 @@ TIER_SPECS: dict[str, dict[str, str]] = {
         "label": "premium luxury renovation",
         "paint": "dark wood panel and marble feature wall with brass trim accents",
         "flooring": "polished Italian marble flooring, reflective and bright",
-        "lighting_temp": "warm luxury lighting, 2700-3000K, like a luxury hotel lobby",
+        "lighting_temp": "warm luxury lighting, 2700-3000K, layered recessed and cove fixtures",
         "feature_wall": "marble and dark wood panel wall with brass inlay",
         "ceiling": "designer multi-layer cove ceiling with warm gold-lit trim",
         "materials": "real marble, brass trim, dark wood paneling",
         "palette": "rich dark wood tones with gold and brass metallic accents",
         "density": "furniture arranged in curated symmetrical conversation zones, restrained, not overfilled",
         "decor": "floor-to-ceiling heavy fabric curtains, framed art, symmetrical furniture placement",
-        # Unused by v6's build_prompt() - the universal structural lock (PRESERVE_STRUCTURE,
-        # always present) now covers what this was patching. Left in TIER_SPECS rather than
-        # deleted: harmless, and documents the SD1.5-era failure this used to guard against
-        # (see git history / CLAUDE.md) in case the keyword-style renderer is ever revived.
+        # Reactivated after a real observed failure: premium's vivid luxury vocabulary
+        # (marble, brass, "designer ceiling") pulled gpt-image-1 toward a hallucinated
+        # generic luxury lobby (different column layout, narrower room) even with the
+        # universal PRESERVE_STRUCTURE present earlier in the prompt. Restating the
+        # structural lock tier-specifically, AFTER the tempting vocabulary rather than
+        # only before it, is what actually anchors it back to the input photo - see
+        # build_prompt() step 4b. Empty for economical/mid, which don't show this pull.
         "structure_reminder": "still the same original room shape and window, do not enlarge or change the space",
     },
 }
 
-# v6: an imperative structural-lock instruction (was a comma-fragment for SD1.5's
-# keyword format) - this is the single most important sentence in the whole prompt,
-# always placed right after the edit framing, before any tier content.
+# An imperative structural-lock instruction - the single most important sentence
+# in the whole prompt, always placed right after the edit framing, before any
+# tier content.
 PRESERVE_STRUCTURE = (
     "Keep the exact walls, windows, doors, columns or pillars, ceiling shape and height, "
     "floor layout, and proportions unchanged. Do not add, remove, move, or resize any "
@@ -116,44 +108,21 @@ ROOM_TYPE_COMMON_SENSE = (
     "room or space this is."
 )
 
-# Tier-specific exclusions. Used two ways in v6: (a) still passed through
-# build_negative_prompt() below for Cloudflare/SD1.5's dedicated negative_prompt
-# channel, and (b) also rendered as a positive-prompt "Do not include: ..." sentence
-# in build_prompt() itself, since instruction-following models (unlike diffusion)
-# are built to follow exclusions stated directly in the instruction.
+# Tier-specific exclusions, rendered as a positive-prompt "Do not include: ..."
+# sentence in build_prompt() - instruction-following models are built to follow
+# exclusions stated directly in the instruction (unlike diffusion models, which
+# need a separate negative-prompt channel; this codebase no longer has one).
 NEGATIVE_ADDITIONS: dict[str, str] = {
     "economical": "chandelier, crystal chandelier, pendant light, gold trim, marble, luxury, ornate, wainscoting",
     "mid": "chandelier, crystal chandelier, gold trim, marble, ornate luxury details",
     "premium": "",
 }
 
-# Kept for build_negative_prompt() (Cloudflare's dedicated channel). Also restated
-# positively inside build_prompt() itself now (see _DAMAGE_REPAIR_INSTRUCTION) - the
-# instruction that directly fixes "economical tier barely transforms a damaged room",
-# the original reason generate_tier_notes()/tier_note exists.
-UNIVERSAL_DAMAGE_NEGATIVE = (
-    "damaged, dirty, stained, cracked walls, cracked ceiling, mold, mildew, water "
-    "damage, peeling paint, debris, rubble, dust, disrepair, abandoned, derelict"
-)
-
 _DAMAGE_REPAIR_INSTRUCTION = (
     "Repair and clean any damage, stains, cracks, mould, or debris visible in the "
     "original photo. The result must look fully renovated and move-in ready, never "
     "like the original's condition."
 )
-
-# img2img "strength" - only meaningful for Cloudflare/SD1.5 (diffusion noise-strength
-# dial); OpenAI's instruction-following API has no equivalent and ignores it (see
-# app/providers/openai.py). Kept for the Cloudflare fallback path. Counterintuitive,
-# hard-won lesson from real SD1.5 testing, still relevant if that path is used:
-# premium is LOWER (0.45) than economical/mid (0.65/0.6) despite the biggest material
-# change - rich luxury vocabulary + high freedom let SD1.5 hallucinate a different
-# room entirely; premium needs LESS freedom to stay anchored, not more.
-STRENGTH_BY_TIER: dict[str, float] = {
-    "economical": 0.65,
-    "mid": 0.6,
-    "premium": 0.45,
-}
 
 
 USER_NOTES_MAX_CHARS = 150
@@ -165,8 +134,7 @@ def build_prompt(
     tier_note: str | None = None,
     user_notes: str | None = None,
 ) -> str:
-    """Compose a natural-language EDIT instruction for the given tier (v6 - see
-    module docstring for why this replaced the SD1.5 keyword-soup format).
+    """Compose a natural-language EDIT instruction for the given tier.
 
     Sentence order:
       1. Edit framing - this is a photo edit, not a fresh generation.
@@ -178,9 +146,13 @@ def build_prompt(
       4. Tier renovation instructions, derived from TIER_SPECS in the same
          impact-per-dollar order the methodology itself uses (paint -> flooring ->
          lighting -> ceiling -> feature wall -> materials/palette -> density -> decor).
-      5. Positive damage-repair instruction (see _DAMAGE_REPAIR_INSTRUCTION) - states
-         UNIVERSAL_DAMAGE_NEGATIVE's intent positively, since instruction models
-         respond better to a direct command than negation.
+      4b. structure_reminder, if the tier has one (currently premium only) - restated
+         AFTER the material/lighting instructions rather than only up in step 2,
+         specifically to counteract vivid tier vocabulary (marble/brass/etc.) that's
+         strong enough to pull the model toward a hallucinated generic room.
+      5. Positive damage-repair instruction (see _DAMAGE_REPAIR_INSTRUCTION) - a
+         direct command, since instruction models respond better to that than
+         negation.
       6. Tier exclusions as a direct "Do not include" command (from NEGATIVE_ADDITIONS),
          only for tiers that have one (budget/mid; premium has none).
 
@@ -219,6 +191,9 @@ def build_prompt(
         f"Add this decor: {spec['decor']}.",
     ]
 
+    if spec["structure_reminder"]:
+        sentences.append(f"Even with these material upgrades, this is {spec['structure_reminder']}.")
+
     sentences.append(_DAMAGE_REPAIR_INSTRUCTION)
 
     exclusions = NEGATIVE_ADDITIONS[tier]
@@ -226,18 +201,3 @@ def build_prompt(
         sentences.append(f"Do not include: {exclusions}.")
 
     return " ".join(sentences)
-
-
-def build_negative_prompt(tier: str) -> str:
-    if tier not in TIER_SPECS:
-        raise ValueError(f"unknown tier: {tier}")
-    addition = NEGATIVE_ADDITIONS[tier]
-    if addition:
-        return f"{UNIVERSAL_DAMAGE_NEGATIVE}, {addition}"
-    return UNIVERSAL_DAMAGE_NEGATIVE
-
-
-def get_strength(tier: str) -> float:
-    if tier not in STRENGTH_BY_TIER:
-        raise ValueError(f"unknown tier: {tier}")
-    return STRENGTH_BY_TIER[tier]

@@ -7,24 +7,19 @@ class Provider(ABC):
     """
 
     @abstractmethod
-    def generate_image(
-        self,
-        image_bytes: bytes,
-        prompt: str,
-        negative_prompt: str = "",
-        strength: float | None = None,
-    ) -> bytes:
+    def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
         """Edit/redecorate the given room photo per the prompt. Returns PNG bytes.
 
-        negative_prompt steers the model away from unwanted elements (e.g. a
-        chandelier appearing in a budget-tier render). This is a distinct channel
-        from the positive prompt because diffusion models are unreliable at
-        obeying negation ("no chandelier") stated inside the positive prompt.
+        prompt is a complete natural-language edit instruction (see
+        app/pipeline/prompts.py's build_prompt()) - exclusions like "no chandelier"
+        are already stated directly in it, since the active backend is an
+        instruction-following editor, not raw diffusion.
 
-        strength controls how much the output may diverge from the input image
-        (0.0 = unchanged, 1.0 = ignores input); None means "use the implementation's
-        default". Different tiers may need different strength - see
-        app/pipeline/prompts.py's STRENGTH_BY_TIER.
+        tier (economical/mid/premium) is optional, best-effort context for
+        implementations that vary backend-specific behavior per tier (e.g.
+        OpenAIImageProvider raising input_fidelity for tiers that need to stay
+        more tightly anchored to the input - see its module docstring). Not every
+        implementation needs to use it.
         """
         ...
 
