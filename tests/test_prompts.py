@@ -170,23 +170,28 @@ def test_preserve_structure_explicitly_locks_room_depth():
 # ---- structure_reminder reactivation ----
 
 
-def test_only_premium_has_a_structure_reminder_in_the_spec():
+def test_only_economical_has_no_structure_reminder_in_the_spec():
+    # Economical is the only tier that never touches the ceiling plane (its
+    # ceiling field is explicitly "no false ceiling") - mid and premium both
+    # rework it (false ceiling / designer cove ceiling respectively), which is
+    # the kind of depth-carrying-surface change that needs the reminder.
     assert TIER_SPECS["economical"]["structure_reminder"] == ""
-    assert TIER_SPECS["mid"]["structure_reminder"] == ""
+    assert TIER_SPECS["mid"]["structure_reminder"] != ""
     assert TIER_SPECS["premium"]["structure_reminder"] != ""
 
 
 def test_build_prompt_reactivates_structure_reminder_for_tiers_that_have_one():
     # Regression guard: PRESERVE_STRUCTURE alone (stated once, near the top) wasn't
-    # enough to stop premium's vivid luxury vocabulary from pulling gpt-image-1
+    # enough to stop vivid tier vocabulary/ceiling rework from pulling gpt-image-1
     # toward a hallucinated generic room. structure_reminder is restated for any
-    # tier that defines one (currently premium only) - economical/mid have none.
-    premium_prompt = build_prompt("premium")
-    assert TIER_SPECS["premium"]["structure_reminder"] in premium_prompt
+    # tier that defines one (mid and premium) - economical has none, since it never
+    # reworks the ceiling.
+    for tier in ("mid", "premium"):
+        prompt = build_prompt(tier)
+        assert TIER_SPECS[tier]["structure_reminder"] in prompt
 
-    for tier in ("economical", "mid"):
-        assert TIER_SPECS[tier]["structure_reminder"] == ""
-        assert "Even with these material upgrades" not in build_prompt(tier)
+    assert TIER_SPECS["economical"]["structure_reminder"] == ""
+    assert "Even with these material upgrades" not in build_prompt("economical")
 
 
 def test_structure_reminder_appears_after_the_tiers_material_instructions():

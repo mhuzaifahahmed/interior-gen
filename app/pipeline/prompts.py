@@ -31,7 +31,7 @@ CLIP limit, negation-unreliable diffusion, and a "strength" noise dial don't app
 an instruction-following editor and had no reason to keep shaping this file's design.
 """
 
-PROMPT_VERSION = "v8"
+PROMPT_VERSION = "v9"
 
 TIER_SPECS: dict[str, dict[str, str]] = {
     "economical": {
@@ -58,7 +58,14 @@ TIER_SPECS: dict[str, dict[str, str]] = {
         "palette": "warm beige, olive green, and light wood tones",
         "density": "balanced furniture arrangement, tidy and comfortable, not crowded",
         "decor": "an area rug, framed art prints, a few potted plants",
-        "structure_reminder": "",
+        # Mid's "false ceiling" instruction reworks the ceiling plane - the same
+        # kind of depth-carrying surface change that required premium's reminder
+        # below. A real generation showed mid's ceiling change flattening the
+        # room's receding depth lines with no counter-anchor after the ceiling
+        # instruction (economical stays empty because it never touches the
+        # ceiling plane at all - "no false ceiling"). Same generic wording as
+        # premium's, not reworded for any specific room type.
+        "structure_reminder": "still the same original room shape and window, do not enlarge or change the space",
     },
     "premium": {
         "label": "premium luxury renovation",

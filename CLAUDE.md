@@ -161,6 +161,31 @@ Three deliberate seams keep the free/solo build swappable — respect them when 
    instruction leans on the model's own common sense about the specific photo, so it generalizes to
    whatever room type actually appears. `PROMPT_VERSION` bumped to `v7`.
 
+   **v8/v9: per-tier `structure_reminder`, restated after the material instructions, for any tier that
+   reworks the ceiling plane.** A real generation showed Premium hallucinating a different room (wrong
+   column layout, narrower space) - its vivid luxury vocabulary (marble, brass, "designer ceiling") was
+   strong enough to pull `gpt-image-1` off the input photo even with the universal structural lock present
+   earlier in the prompt. Fix: `TIER_SPECS[tier]["structure_reminder"]`, when non-empty, is appended by
+   `build_prompt()` right after the material/lighting/ceiling instructions - specifically *after* the
+   vocabulary that causes the pull, not just alongside `PRESERVE_STRUCTURE` near the top (`v8`, Premium
+   only at first). Threaded a `tier` argument through `Provider.generate_image()` -> `HybridProvider` ->
+   `OpenAIImageProvider` so Premium also requests `input_fidelity="high"` from the real API call
+   (`HIGH_FIDELITY_TIERS` in `openai.py`) while Economical/Mid keep the cheap configured default - a real
+   API-parameter difference, not just prompt wording, deliberately scoped to only the tier that showed
+   drift (costs more per the input_fidelity cost trap above).
+
+   Side-by-side comparison of all three tiers (`v9`) surfaced the same failure mode in Mid: its `ceiling`
+   field is `"false ceiling with a warm cove lighting strip"` - a real rework of the ceiling plane, same
+   category of change as Premium's designer cove ceiling - but Mid's `structure_reminder` was still empty,
+   so it had no counter-anchor after that instruction. A real generation showed Mid's room depth (indicated
+   by receding ceiling/floor lines) flattening compared to Economical and Premium. Economical's `ceiling`
+   field is explicitly `"no false ceiling"` - it never touches that surface, which is why it's the one tier
+   that correctly needs no reminder. Fix: gave Mid the same generic reminder text Premium already uses (not
+   reworded for any specific room type - the trigger is "this tier reworks the ceiling," which threatens
+   depth in any room, not just hallways). Did **not** raise Mid to `input_fidelity="high"` - the free
+   prompt-level fix should be tried first, per the same reasoning as the cost trap above. `PROMPT_VERSION`
+   bumped to `v9`.
+
 Async: FastAPI `BackgroundTasks` + client polling (no real queue yet — hardening-phase item). Each
 Project's `meta_json` carries `PROMPT_VERSION` so outputs are reproducible/defensible.
 
@@ -215,7 +240,8 @@ instruction.
   upgrade if prompt-only fixes prove insufficient, but it requires direct access to a diffusion model's
   denoising loop (self-hosted, e.g. `diffusers` + a controlnet-depth checkpoint) - neither gpt-image-1 nor
   any previously-used hosted API exposes that, so it can't be bolted onto the current provider seam without
-  new self-hosted infrastructure. Current prompt version is `v7` (`PROMPT_VERSION` in `prompts.py`).
+  new self-hosted infrastructure. Current prompt version is `v9` (`PROMPT_VERSION` in `prompts.py`) - see
+  the Tier/prompt seam section above for the full v7/v8/v9 history.
 - Gemini text quota (room description) is free/separate from image gen; image generation is paid
   (OpenAI). Localhost-only deployment is intentional for Phase 1.
 - `GEMINI_IMAGE_MODEL` env var / Gemini image path is dormant, not deleted — kept for a possible future
