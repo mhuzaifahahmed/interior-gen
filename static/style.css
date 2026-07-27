@@ -539,7 +539,7 @@ button#generate-btn:disabled {
 /* ---- Progress ---- */
 
 .progress-card {
-  max-width: 560px;
+  max-width: 480px;
   margin: 3rem auto 0;
   text-align: center;
   padding: 2.5rem;
@@ -562,15 +562,30 @@ button#generate-btn:disabled {
 }
 
 .progress-message {
-  color: var(--ink-soft);
-  font-size: 1rem;
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-weight: 600;
   margin: 0;
   min-height: 1.4em;
+  opacity: 1;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.progress-message.is-changing {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.progress-subtitle {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  margin: 0.4rem 0 0;
+  min-height: 1.3em;
   opacity: 1;
   transition: opacity 0.25s ease;
 }
 
-.progress-message.is-changing {
+.progress-subtitle.is-changing {
   opacity: 0;
 }
 
@@ -588,7 +603,84 @@ button#generate-btn:disabled {
   width: 0%;
   border-radius: 999px;
   background: var(--accent);
-  transition: width 0.5s ease-out;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.progress-checklist {
+  list-style: none;
+  margin: 1.75rem 0 0;
+  padding: 0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.check-icon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+
+.check-icon::after {
+  content: "";
+  position: absolute;
+  top: 48%;
+  left: 50%;
+  width: 8px;
+  height: 5px;
+  border-left: 2px solid var(--accent-dark-ink);
+  border-bottom: 2px solid var(--accent-dark-ink);
+  transform: translate(-50%, -60%) rotate(-45deg) scale(0);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.checklist-item.is-done .check-icon {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.checklist-item.is-done .check-icon::after {
+  transform: translate(-50%, -60%) rotate(-45deg) scale(1);
+}
+
+.checklist-item.is-active .check-icon {
+  border-color: var(--accent);
+}
+
+.checklist-item.is-active .check-icon::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-bg);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+.check-label {
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+  transition: color 0.25s ease;
+}
+
+.checklist-item.is-done .check-label {
+  color: var(--ink);
+}
+
+.checklist-item.is-active .check-label {
+  color: var(--ink);
+  font-style: italic;
 }
 
 /* ---- Error ---- */
@@ -699,9 +791,39 @@ button#generate-btn:disabled {
 }
 
 .result-card .img-wrap {
+  position: relative;
   aspect-ratio: 4 / 3;
   overflow: hidden;
   background: #f0ece5;
+}
+
+.download-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(4px);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.download-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.download-btn:hover,
+.download-btn:focus-visible {
+  background: var(--accent);
+  color: var(--accent-dark-ink);
+  transform: scale(1.08);
 }
 
 .result-card img {

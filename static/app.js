@@ -12,7 +12,9 @@ const stylePromptInput = document.getElementById("style-prompt");
 
 const progressCard = document.getElementById("progress-card");
 const progressMessageEl = document.getElementById("progress-message");
+const progressSubtitleEl = document.getElementById("progress-subtitle");
 const progressBarFill = document.getElementById("progress-bar-fill");
+const progressChecklistEl = document.getElementById("progress-checklist");
 
 const errorCard = document.getElementById("error-card");
 const errorDetail = document.getElementById("error-detail");
@@ -35,36 +37,114 @@ const TIERS = [
   { key: "economical", label: "Economical", desc: "Fresh paint and clean practical finishes." },
 ];
 
-// Deliberate choice (revised from an earlier, stricter version of this list): these
-// ARE staged/specific per-tier messages, not literal real-time backend status - the
-// backend doesn't report progress at this granularity, and an earlier version of this
-// project treated that as a reason to keep messages vague/generic on principle. Product
-// decision since then: the ~1 minute wait feels more engaging with specific, varied
-// messages than with honest-but-vague ones, even knowing they're not strictly telemetry.
-// Shown in a shuffled order each run (see startProgressMessages) rather than this fixed
-// sequence, so it doesn't read as an obviously scripted, always-identical script.
-const PROGRESS_MESSAGES = [
-  "Analyzing your room's layout…",
-  "Generating your Premium image…",
-  "Fetching designer material options…",
-  "Generating your Mid-Range image…",
-  "Fetching real-time price data…",
-  "Generating your Economical image…",
-  "Balancing lighting and textures…",
-  "Finalizing your three redesigns…",
-  "Almost ready — just a little longer…",
+// Deliberate choice (same reasoning as the rest of this staged timeline): these ARE
+// scripted per-stage messages/subtitles, not literal real-time backend status - the
+// backend doesn't report progress at this granularity. A ~1 minute wait feels far more
+// reassuring with a specific, narrated story (room analysis -> architectural detection
+// -> design brief -> per-tier generation -> cost estimation -> finalizing) than with
+// vague filler, even knowing it's not strictly telemetry. Unlike an earlier version of
+// this list, these are NOT shuffled - they read as one coherent narrative in a fixed
+// order, so shuffling would break the story rather than making it feel more real.
+const CHECKLIST_ITEMS = [
+  "Image uploaded",
+  "Room analysis complete",
+  "Architectural elements identified",
+  "Design brief understood",
+  "Economical concept generated",
+  "Budget estimation complete",
+  "Mid-Range concept generated",
+  "Premium concept generated",
+  "Material estimates prepared",
+  "Rendering final presentation",
 ];
 
+// `start` is the second (within the ~60s target timeline) this stage begins.
+// `checklistDone` is how many CHECKLIST_ITEMS should be checked once this stage is
+// showing. `activeIndex` (only set on the final stage) marks the item that should
+// show an in-progress spinner rather than a checkmark, until the backend actually
+// reports completion.
+const STAGES = [
+  {
+    start: 0,
+    status: "Uploading your image securely…",
+    subtitles: ["Preparing your workspace", "Validating uploaded image", "Initializing project"],
+    checklistDone: 0,
+  },
+  {
+    start: 4,
+    status: "Analyzing room layout and architectural features…",
+    subtitles: ["Detecting walls", "Understanding room geometry", "Mapping architectural structure"],
+    checklistDone: 1,
+  },
+  {
+    start: 8,
+    status: "Identifying walls, flooring, windows, lighting, and fixed elements…",
+    subtitles: ["Detecting permanent fixtures", "Preserving architectural details", "Mapping existing materials"],
+    checklistDone: 2,
+  },
+  {
+    start: 13,
+    status: "Understanding your design request and preferred style…",
+    subtitles: ["Interpreting renovation goals", "Matching interior style", "Planning design direction"],
+    checklistDone: 3,
+  },
+  {
+    start: 18,
+    status: "Creating the Economical concept using cost-effective materials…",
+    subtitles: ["Selecting affordable finishes", "Optimizing value", "Building practical renovation concept"],
+    checklistDone: 4,
+  },
+  {
+    start: 25,
+    status: "Estimating finishes and approximate material costs…",
+    subtitles: ["Comparing material options", "Calculating renovation estimates", "Preparing budget analysis"],
+    checklistDone: 5,
+  },
+  {
+    start: 32,
+    status: "Designing the Mid-Range concept with upgraded materials…",
+    subtitles: ["Selecting premium finishes", "Improving comfort and aesthetics", "Balancing design and cost"],
+    checklistDone: 6,
+  },
+  {
+    start: 39,
+    status: "Balancing aesthetics, durability, and budget…",
+    subtitles: ["Refining material combinations", "Validating design consistency", "Optimizing renovation plan"],
+    checklistDone: 6,
+  },
+  {
+    start: 46,
+    status: "Crafting the Premium concept with luxury finishes and custom details…",
+    subtitles: ["Applying premium materials", "Enhancing lighting and textures", "Creating luxury interior concept"],
+    checklistDone: 7,
+  },
+  {
+    start: 53,
+    status: "Preparing material recommendations and rough cost estimates…",
+    subtitles: ["Comparing renovation options", "Finalizing recommendations", "Organizing project summary"],
+    checklistDone: 8,
+  },
+  {
+    start: 57,
+    status: "Finalizing your three interior concepts…",
+    subtitles: ["Rendering high-resolution visuals", "Performing final quality checks", "Preparing presentation"],
+    checklistDone: 8,
+    activeIndex: 9,
+  },
+];
+
+const TOTAL_DURATION_MS = 60000;
+// The bar never reaches 100% on its own - only a real "done" response snaps it there.
+// Classic loading-bar trick so it doesn't look "stuck" if generation runs longer than
+// the ~60s reference timeline (real generation time varies with provider latency).
+const PROGRESS_BAR_CAP = 97;
+
 let selectedFile = null;
-let progressMessageTimer = null;
-let messageQueue = [];
-
-let progressBarTimer = null;
-let progressBarPercent = 0;
-
-// Never quite reaches 100% on its own - only a real "done" response snaps it there.
-// Classic loading-bar trick so it doesn't look "stuck" if generation runs long.
-const PROGRESS_BAR_CAP = 92;
+let progressStartTime = null;
+let progressRafId = null;
+let currentStageIndex = -1;
+let currentSubtitleIndex = -1;
+let subtitleTimer = null;
 
 /* ---------- File selection ---------- */
 
@@ -145,91 +225,132 @@ form.addEventListener("submit", async (e) => {
   pollProject(projectId);
 });
 
-/* ---------- Progress messaging ---------- */
-/* Cycles through PROGRESS_MESSAGES with a fade transition between each, so a ~1 minute
-   wait feels animated/engaged rather than a single frozen sentence. Each message holds
-   for ~9-10 seconds (randomized, not a fixed beat) and the order is reshuffled every run
-   instead of always playing in the same sequence - both are there so the cycle doesn't
-   read as an obviously premade script. If generation runs long enough to exhaust one
-   shuffle, it reshuffles and keeps going rather than freezing on the last line. */
+/* ---------- Progress engine ---------- */
+/* Drives the main status, rotating subtitle, progress bar, and checklist off a single
+   real-time clock (progressStartTime) mapped onto the STAGES timeline above, rather
+   than independent timers - this is what keeps all four pieces moving in sync and
+   avoids drift between them. The bar fill is time-based and linear against the ~60s
+   target (not randomized), per the requirement that it track real elapsed time rather
+   than an arbitrary animation; PROGRESS_BAR_CAP still guards against generation
+   running long. If the backend finishes before the reference timeline catches up,
+   fastForwardToCompletion() visibly steps through the remaining stages instead of
+   snapping straight to the end. */
 
-function shuffle(array) {
-  const arr = array.slice();
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
+function renderChecklistShell() {
+  progressChecklistEl.innerHTML = CHECKLIST_ITEMS.map(
+    (label, i) => `
+      <li class="checklist-item" data-index="${i}">
+        <span class="check-icon"></span>
+        <span class="check-label">${label}</span>
+      </li>
+    `
+  ).join("");
 }
 
-function nextMessage() {
-  if (messageQueue.length === 0) {
-    const last = progressMessageEl.textContent;
-    messageQueue = shuffle(PROGRESS_MESSAGES);
-    if (messageQueue[0] === last && messageQueue.length > 1) {
-      [messageQueue[0], messageQueue[1]] = [messageQueue[1], messageQueue[0]];
-    }
-  }
-  return messageQueue.shift();
+function setChecklistState(doneCount, activeIndex) {
+  const items = progressChecklistEl.querySelectorAll(".checklist-item");
+  items.forEach((el, i) => {
+    el.classList.toggle("is-done", i < doneCount);
+    el.classList.toggle("is-active", i === activeIndex && i >= doneCount);
+  });
 }
 
-function scheduleNextMessage() {
-  const holdMs = 9000 + Math.random() * 1000; // ~9-10s, not a metronome
-  progressMessageTimer = setTimeout(() => {
-    progressMessageEl.classList.add("is-changing");
-    setTimeout(() => {
-      progressMessageEl.textContent = nextMessage();
-      progressMessageEl.classList.remove("is-changing");
-      scheduleNextMessage();
-    }, 250);
-  }, holdMs);
+function markChecklistComplete() {
+  progressChecklistEl.querySelectorAll(".checklist-item").forEach((el) => {
+    el.classList.remove("is-active");
+    el.classList.add("is-done");
+  });
+}
+
+function scheduleSubtitleRotation(subtitles) {
+  clearTimeout(subtitleTimer);
+  currentSubtitleIndex = 0;
+  progressSubtitleEl.textContent = subtitles[0];
+
+  const advance = () => {
+    subtitleTimer = setTimeout(() => {
+      currentSubtitleIndex = (currentSubtitleIndex + 1) % subtitles.length;
+      progressSubtitleEl.classList.add("is-changing");
+      setTimeout(() => {
+        progressSubtitleEl.textContent = subtitles[currentSubtitleIndex];
+        progressSubtitleEl.classList.remove("is-changing");
+        advance();
+      }, 180);
+    }, 2200);
+  };
+  advance();
+}
+
+function applyStage(index) {
+  if (index === currentStageIndex) return;
+  currentStageIndex = index;
+  const stage = STAGES[index];
+
+  progressMessageEl.classList.add("is-changing");
+  setTimeout(() => {
+    progressMessageEl.textContent = stage.status;
+    progressMessageEl.classList.remove("is-changing");
+  }, 220);
+
+  setChecklistState(stage.checklistDone, stage.activeIndex ?? -1);
+  scheduleSubtitleRotation(stage.subtitles);
+}
+
+function stageIndexForElapsedSeconds(elapsedSeconds) {
+  let index = 0;
+  for (let i = 0; i < STAGES.length; i++) {
+    if (elapsedSeconds >= STAGES[i].start) index = i;
+  }
+  return index;
+}
+
+function tickProgress() {
+  const elapsedMs = Date.now() - progressStartTime;
+  applyStage(stageIndexForElapsedSeconds(elapsedMs / 1000));
+
+  const pct = Math.min((elapsedMs / TOTAL_DURATION_MS) * 100, PROGRESS_BAR_CAP);
+  progressBarFill.style.width = `${pct}%`;
+
+  progressRafId = requestAnimationFrame(tickProgress);
 }
 
 function startProgressMessages() {
-  messageQueue = shuffle(PROGRESS_MESSAGES);
-  progressMessageEl.textContent = messageQueue.shift();
-  scheduleNextMessage();
-  startProgressBar();
+  renderChecklistShell();
+  currentStageIndex = -1;
+  progressBarFill.style.width = "0%";
+  progressStartTime = Date.now();
+  tickProgress();
 }
 
 function stopProgressMessages() {
-  clearTimeout(progressMessageTimer);
-  progressMessageTimer = null;
+  cancelAnimationFrame(progressRafId);
+  progressRafId = null;
+  clearTimeout(subtitleTimer);
+  subtitleTimer = null;
   progressMessageEl.classList.remove("is-changing");
-  stopProgressBar();
+  progressSubtitleEl.classList.remove("is-changing");
 }
 
-/* ---------- Progress bar ---------- */
-/* Fills toward PROGRESS_BAR_CAP over roughly a minute, in small irregular steps/ticks
-   (both the step size and the delay between ticks are randomized) rather than a smooth
-   linear animation, so it reads as real progress rather than an obviously fake timer.
-   Steps shrink as the bar approaches the cap (an easing curve), which is what makes ~65s
-   land near the cap without a hard-coded frame-by-frame schedule. */
+/* If the backend reports "done" before the reference timeline reaches the final
+   stage, step through the remaining stages quickly (rather than teleporting the
+   checklist/status straight to the end) so the completion still reads as real
+   progress, per "intelligently advance... without making the UI appear fake". */
+function fastForwardToCompletion(onDone) {
+  cancelAnimationFrame(progressRafId);
+  progressRafId = null;
 
-function tickProgressBar() {
-  const remaining = PROGRESS_BAR_CAP - progressBarPercent;
-  const step = Math.max(0.15, remaining * (0.012 + Math.random() * 0.02));
-  progressBarPercent = Math.min(PROGRESS_BAR_CAP, progressBarPercent + step);
-  progressBarFill.style.width = `${progressBarPercent}%`;
-
-  const tickMs = 500 + Math.random() * 700; // ~0.5-1.2s, irregular
-  progressBarTimer = setTimeout(tickProgressBar, tickMs);
-}
-
-function startProgressBar() {
-  progressBarPercent = 0;
-  progressBarFill.style.width = "0%";
-  tickProgressBar();
-}
-
-function stopProgressBar() {
-  clearTimeout(progressBarTimer);
-  progressBarTimer = null;
-}
-
-function finishProgressBar() {
-  stopProgressBar();
-  progressBarFill.style.width = "100%";
+  function step() {
+    const nextIndex = currentStageIndex + 1;
+    if (nextIndex >= STAGES.length) {
+      onDone();
+      return;
+    }
+    applyStage(nextIndex);
+    const pct = Math.min((STAGES[nextIndex].start / 60) * 100 + 3, PROGRESS_BAR_CAP);
+    progressBarFill.style.width = `${pct}%`;
+    setTimeout(step, 280);
+  }
+  step();
 }
 
 async function pollProject(projectId) {
@@ -248,14 +369,24 @@ async function pollProject(projectId) {
   }
 
   if (data.status === "done") {
-    finishProgressBar();
-    stopProgressMessages();
-    // Brief pause so the bar's jump to 100% is actually visible before the
-    // progress card gets hidden in favor of the results view.
-    setTimeout(() => {
-      renderResults(data);
-      showState("results");
-    }, 300);
+    const finish = () => {
+      markChecklistComplete();
+      progressBarFill.style.width = "100%";
+      stopProgressMessages();
+      // Brief pause so the bar's jump to 100% and the final checkmark are
+      // actually visible before the progress card gets hidden in favor of
+      // the results view.
+      setTimeout(() => {
+        renderResults(data);
+        showState("results");
+      }, 350);
+    };
+
+    if (currentStageIndex < STAGES.length - 1) {
+      fastForwardToCompletion(finish);
+    } else {
+      finish();
+    }
     return;
   }
 
@@ -275,13 +406,19 @@ function renderResults(data) {
     const card = document.createElement("div");
     card.className = "result-card";
     card.innerHTML = `
-      <div class="img-wrap"><img src="${url}" alt="${tier.label} redesign" loading="lazy" /></div>
+      <div class="img-wrap">
+        <img src="${url}" alt="${tier.label} redesign" loading="lazy" />
+        <a class="download-btn" href="${url}" download="${tier.key}.png" aria-label="Download ${tier.label} image" title="Download image">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
       <div class="caption">
         <p class="tier-name">${tier.label}</p>
         <p class="tier-desc">${tier.desc}</p>
       </div>
     `;
     card.addEventListener("click", () => openLightbox(url, tier.label));
+    card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
     resultsGrid.appendChild(card);
   }
 }
