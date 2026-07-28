@@ -552,16 +552,6 @@ button#generate-btn:disabled {
   padding: 2.5rem;
 }
 
-.spinner {
-  width: 36px;
-  height: 36px;
-  margin: 0 auto 1.5rem;
-  border-radius: 50%;
-  border: 3px solid var(--line);
-  border-top-color: var(--accent);
-  animation: spin 0.9s linear infinite;
-}
-
 @keyframes spin {
   to {
     transform: rotate(360deg);

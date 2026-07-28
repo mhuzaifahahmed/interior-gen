@@ -1,9 +1,11 @@
 import json
 import logging
+import time
 import urllib.parse
 from io import BytesIO
 
 from google import genai
+from google.genai import errors as genai_errors
 from PIL import Image
 
 from app.config import settings
@@ -11,6 +13,15 @@ from app.providers import serpapi
 from app.providers.base import Provider
 
 logger = logging.getLogger(__name__)
+
+# Retry knobs for the materials-synthesis Gemini call specifically. Real,
+# live-observed reason: gemini-3.5-flash intermittently returns a 503
+# ("currently experiencing high demand") - a transient Google-side overload,
+# not a code bug (hit twice during this project's own testing). Without a
+# retry, one transient 503 discarded 6 already-successful, real SerpApi
+# searches and collapsed the whole tier straight to the generic fallback.
+MATERIALS_GEMINI_MAX_ATTEMPTS = 3
+MATERIALS_GEMINI_RETRY_DELAY_SECONDS = 2
 
 # MATERIALS PRICING DESIGN (real, live-tested reason this isn't Gemini's own
 # Google Search grounding tool): grounding hit a 429 RESOURCE_EXHAUSTED wall on
@@ -173,7 +184,7 @@ class GeminiProvider(Provider):
 
         try:
             client = self._client_for_key(api_key)
-            response = client.models.generate_content(model=settings.gemini_text_model, contents=[prompt])
+            response = _generate_content_with_retry(client, settings.gemini_text_model, [prompt])
             parsed = parse_materials(response.text or "")
             if parsed is not None:
                 all_real_results = [r for results in item_results.values() for r in results]
@@ -182,6 +193,29 @@ class GeminiProvider(Provider):
             logger.exception("generate_materials failed for tier %s in %s", tier, city)
 
         return fallback_materials(tier_spec, city)
+
+
+def _generate_content_with_retry(client: genai.Client, model: str, contents: list) -> object:
+    """Retries the materials-synthesis Gemini call on genai_errors.ServerError
+    (5xx - see MATERIALS_GEMINI_MAX_ATTEMPTS's comment for the real 503 this
+    guards against). Deliberately narrow: only retries server-side errors,
+    not e.g. auth/bad-request errors that would just fail identically again.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, MATERIALS_GEMINI_MAX_ATTEMPTS + 1):
+        try:
+            return client.models.generate_content(model=model, contents=contents)
+        except genai_errors.ServerError as exc:
+            last_exc = exc
+            logger.warning(
+                "Gemini server error on materials call, attempt %d/%d: %s",
+                attempt,
+                MATERIALS_GEMINI_MAX_ATTEMPTS,
+                exc,
+            )
+            if attempt < MATERIALS_GEMINI_MAX_ATTEMPTS:
+                time.sleep(MATERIALS_GEMINI_RETRY_DELAY_SECONDS)
+    raise last_exc
 
 
 def _tier_line_items(tier_spec: dict[str, str]) -> list[tuple[str, str]]:

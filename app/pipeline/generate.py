@@ -16,14 +16,15 @@ logger = logging.getLogger(__name__)
 
 TIERS = ("economical", "mid", "premium")
 
-# Generous timeout for a single tier's materials lookup. Bumped from 45s after
-# generate_materials() moved to 6 sequential per-item SerpApi searches plus 1
-# Gemini synthesis call (was 1 search + 1 call) - real per-tier latency is
-# higher now. generate_materials() already catches its own exceptions
+# Generous timeout for a single tier's materials lookup. Bumped again (45->75
+# ->100) after adding a retry for Gemini's transient 503s (up to 3 attempts,
+# 2s apart - see gemini.py's MATERIALS_GEMINI_MAX_ATTEMPTS) plus a 30s (was
+# 20s) SerpApi per-search timeout, both of which raise the real worst-case
+# per-tier latency. generate_materials() already catches its own exceptions
 # internally and returns a never-empty fallback on failure - this timeout only
 # guards against a hung network call that never raises, so it should rarely
 # if ever fire in practice.
-MATERIALS_TIMEOUT_SECONDS = 75
+MATERIALS_TIMEOUT_SECONDS = 100
 
 
 def run_pipeline(

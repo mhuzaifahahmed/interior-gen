@@ -33,7 +33,11 @@ def search(query: str, location: str | None = None) -> list[dict]:
     if location:
         params["location"] = location
 
-    response = httpx.get(SEARCH_URL, params=params, timeout=20)
+    # Bumped from 20s after a real observed ReadTimeout on one item's search
+    # during live testing - that one item's search failing is non-fatal (see
+    # generate_materials's per-item try/except) but still worth padding to
+    # cut down on losing real coverage to a slow-but-would-have-succeeded call.
+    response = httpx.get(SEARCH_URL, params=params, timeout=30)
     response.raise_for_status()
     data = response.json()
 

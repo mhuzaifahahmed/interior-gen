@@ -149,12 +149,24 @@ screen** (not after — see below).
   returned item `name` back to the exact fixed label, and a minor rename would then wrongly strip an
   otherwise-real link; cross-item link reuse is a smaller, lower-stakes failure mode (still a real,
   resolving URL) than that false-negative. If a single item's search fails (quota/network), that's not
-  fatal - the rest of the tier's items are unaffected, that one item just can't be marked real. If the
-  Gemini call fails entirely, `fallback_materials()` synthesizes the same fixed item list straight from
-  `tier_spec`'s own fields, each with a guaranteed-to-resolve Google-search URL (not a guessed product
-  link) - so the UI never renders a blank price or a dead link even in the worst case. Both prices and the
-  total are **plain strings** (not strictly numeric), a deliberate simplification since real-world listings
-  mix currencies/formats freely - the frontend just displays them as-is.
+  fatal - the rest of the tier's items are unaffected, that one item just can't be marked real. SerpApi's
+  per-request timeout is 30s (bumped from 20s after a real observed `ReadTimeout` on one item during live
+  testing).
+  **Retry on transient Gemini 503s** (`_generate_content_with_retry()`, `MATERIALS_GEMINI_MAX_ATTEMPTS`):
+  a real, live-observed failure during testing - `gemini-3.5-flash` intermittently returns a 503
+  ("currently experiencing high demand"), a transient Google-side overload, not a code bug (hit twice in
+  this project's own testing). Without a retry, a single transient 503 on the synthesis call discarded 6
+  already-successful, real SerpApi searches and collapsed the whole tier straight to
+  `fallback_materials()`'s generic estimates - a real user-visible incident this fixed (up to 3 attempts,
+  2s apart, retrying only `genai_errors.ServerError`/5xx, not auth/bad-request errors that would just fail
+  identically again). `MATERIALS_TIMEOUT_SECONDS` in `generate.py` was bumped accordingly (45→75→100) to
+  give the retries and the longer SerpApi timeout room to actually complete before the outer future times
+  out. If the Gemini call still fails after retries are exhausted, `fallback_materials()` synthesizes the
+  same fixed item list straight from `tier_spec`'s own fields, each with a guaranteed-to-resolve
+  Google-search URL (not a guessed product link) - so the UI never renders a blank price or a dead link
+  even in the worst case. Both prices and the total are **plain strings** (not strictly numeric), a
+  deliberate simplification since real-world listings mix currencies/formats freely - the frontend just
+  displays them as-is.
   **If grounding is ever revisited** (e.g. billing genuinely fixes it on a project): the fix is swapping
   the SerpApi call + prompt back for the `types.Tool(google_search=...)` config this replaced - the rest
   of the pipeline (parse/sanitize/fallback, the per-tier key selection, the concurrency design) doesn't
@@ -295,15 +307,22 @@ every 3s until `status: "done"`, rendering `images.{original,economical,mid,prem
 `room_description` from the response — no separate/mocked frontend data path. Deliberately restrained
 by design decision (not an oversight): all four result cards are visually uniform (image + text label +
 one-line descriptor, no per-tier color coding) so the *generated images* carry the tier differences,
-not the UI chrome. The progress screen cycles (with a fade transition, `.is-changing` in `style.css`)
-through `PROGRESS_MESSAGES` in `app.js` every 4.5s. **Revised decision, worth knowing if this reads
-inconsistently elsewhere in this doc's git history**: an earlier version kept these deliberately vague/
-generic on principle (the backend doesn't report per-tier progress, so specific claims like "now
-designing Premium..." would be fabricated telemetry). That was explicitly overturned - messages are now
-specific and varied ("Generating your Premium image…", "Fetching real-time price data…") including some
-that aren't literally true (no live pricing/internet lookups happen), because a ~1 minute wait feels more
-engaging with plausible specific-sounding status than with honest-but-vague filler. If revisiting this
-tension later, that's the tradeoff being made, not an oversight. The landing screen carries a nav bar
+not the UI chrome. **The progress screen is real-signal-driven, not a fixed timer or scripted checklist**
+(this replaced two earlier designs - a `PROGRESS_MESSAGES` rotation, then a 9-item growing checklist -
+both noted here only so this doc's history doesn't read as contradictory). Current design: a compact,
+always-visible 4-stage stepper (`STAGES` in `app.js` - Analyzing/Generating/Estimating/Finalizing, each
+with a pending/active-spinner/done icon, never a growing list) plus live concept preview cards
+(`CONCEPT_PREVIEW_TIERS`) that resolve from a shimmering skeleton to the real thumbnail. Both are driven
+by REAL data already present on every poll of `GET /api/projects/{id}` - per-tier image keys,
+`materials_status`, `room_description` - not a script or a countdown; `deriveStageIndex()` computes the
+current stage from that real data each poll, and the progress bar jumps in 4 discrete 25% increments as
+stages complete (100% reserved for the real `done` response) rather than animating on a clock. Only the
+very first stage has no finer-grained real signal to key off (describe_room/tier_notes run before the
+image loop) - it shows immediately at submit and yields the moment anything real appears. A 15s
+stall-reassurance timer fades in "Still working — almost there…" if nothing real has happened recently,
+rather than leaving a bare spinner with no text. The standalone rotating `.spinner` that used to sit above
+the main status text was removed as redundant once the stepper had its own active-stage spinner icon.
+The landing screen carries a nav bar
 (`Overview`/`Examples` anchors + a CTA scrolling to
 `#upload-card`), a real **example showcase** (`static/examples/*.jpg` - actual pipeline output, not
 mockups, picked for good structure preservation) at `#examples`, a three-card **tier explainer band**

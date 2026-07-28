@@ -1,3 +1,5 @@
+from google.genai import errors as genai_errors
+
 import app.providers.gemini as gemini_module
 from app.providers.gemini import GeminiProvider, fallback_materials, parse_materials
 
@@ -347,3 +349,58 @@ def test_generate_materials_uses_distinct_client_per_api_key(monkeypatch):
     # also creates exactly one client (cached in _clients_by_key), reused too.
     assert created_keys.count("default-key") == 1
     assert created_keys.count("key-2") == 1
+
+
+def test_generate_materials_retries_on_transient_server_error(monkeypatch):
+    # Regression guard for a real, live-observed failure: gemini-3.5-flash
+    # returned a transient 503 ("currently experiencing high demand") after 6
+    # real, already-successful SerpApi searches, and with no retry that threw
+    # away all 6 real results and collapsed straight to the generic fallback.
+    call_count = {"n": 0}
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Flooring", "price": "PKR 1000", "is_estimate": false}], "total": "PKR 1000"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            call_count["n"] += 1
+            if call_count["n"] < 2:
+                raise genai_errors.ServerError(503, {"error": {"message": "high demand"}})
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
+
+    provider = GeminiProvider()
+    result = provider.generate_materials("economical", {"label": "x", "flooring": "tile"}, None, "Karachi")
+
+    assert call_count["n"] == 2
+    assert result["items"][0]["name"] == "Flooring"
+    assert result["items"][0]["is_estimate"] is False
+
+
+def test_generate_materials_falls_back_after_exhausting_retries(monkeypatch):
+    class FakeModels:
+        def generate_content(self, model, contents):
+            raise genai_errors.ServerError(503, {"error": {"message": "high demand"}})
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
+
+    provider = GeminiProvider()
+    tier_spec = {"label": "x", "flooring": "tile", "paint": "cream"}
+    result = provider.generate_materials("economical", tier_spec, None, "Karachi")
+
+    # Never-empty fallback still kicks in once retries are genuinely exhausted.
+    assert len(result["items"]) > 0
+    assert all(item["is_estimate"] for item in result["items"])
