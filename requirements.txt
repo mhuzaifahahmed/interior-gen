@@ -1,7 +1,11 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 python-multipart>=0.0.9
-google-genai>=0.3.0
+# >=1.0.0 (not the originally-pinned 0.3.0): materials/pricing (app/providers/gemini.py's
+# generate_materials) needs types.Tool(google_search=types.GoogleSearch()) for Google Search
+# grounding - verified present on the actually-installed 2.13.0, bumping the floor so a fresh
+# install can't land on an old 0.3.x that predates it.
+google-genai>=1.0.0
 Pillow>=10.4
 sqlmodel>=0.0.22
 pydantic-settings>=2.4

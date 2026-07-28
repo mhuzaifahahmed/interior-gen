@@ -23,3 +23,13 @@ class HybridProvider(Provider):
 
     def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
         return self._image_provider.generate_image(image_bytes, prompt, tier)
+
+    def generate_materials(
+        self,
+        tier: str,
+        tier_spec: dict[str, str],
+        room_description: str | None,
+        city: str,
+        api_key: str | None = None,
+    ) -> dict:
+        return self._gemini.generate_materials(tier, tier_spec, room_description, city, api_key)

@@ -37,3 +37,30 @@ class Provider(ABC):
         best-effort and degrade gracefully, same as describe_room.
         """
         ...
+
+    @abstractmethod
+    def generate_materials(
+        self,
+        tier: str,
+        tier_spec: dict[str, str],
+        room_description: str | None,
+        city: str,
+        api_key: str | None = None,
+    ) -> dict:
+        """Return an itemized materials/furniture list with local pricing for one
+        tier, localized to `city`. Shape: {"items": [{"name", "spec", "price",
+        "currency", "source_url", "is_estimate"}], "total", "currency"}.
+
+        Must NEVER leave a price blank - if a real price/link can't be found for
+        an item, it still appears with a labeled estimate. This is a harder
+        guarantee than describe_room/generate_tier_notes's "best effort, degrade
+        to {}" - implementations must synthesize a fallback list (still
+        never-empty) rather than returning nothing, since a bare/empty result
+        renders as broken UI, not as "feature unavailable."
+
+        api_key optionally selects which underlying API key/client to use (see
+        Settings.gemini_materials_api_keys) - implementations that support
+        concurrent per-tier calls on separate quotas use this; others may
+        ignore it.
+        """
+        ...

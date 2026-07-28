@@ -29,7 +29,7 @@
         <section class="hero">
           <h1>See your room, three ways.</h1>
           <p class="hero-sub">
-            Upload a photo to get three redesigns — Premium, Mid&#8209;Range, and Economical.
+            Upload a photo to get three redesigns — Economical, Mid&#8209;Range, and Premium.
           </p>
         </section>
 
@@ -51,7 +51,7 @@
               <span class="overview-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l8 4-8 4-8-4 8-4z" stroke-linejoin="round"/><path d="M4 11l8 4 8-4M4 15l8 4 8-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </span>
-              <span><strong>Three tiers, one click</strong> — Premium, Mid&#8209;Range, and Economical, generated together so you can compare.</span>
+              <span><strong>Three tiers, one click</strong> — Economical, Mid&#8209;Range, and Premium, generated together so you can compare.</span>
             </li>
           </ul>
           <a href="#upload-card" class="overview-cta">Start Redesigning &rarr;</a>
@@ -65,16 +65,16 @@
               <figcaption>Original</figcaption>
             </figure>
             <figure class="example-figure" data-reveal data-reveal-delay="90">
-              <img src="/static/examples/premium.jpg" alt="Premium redesign" loading="lazy" />
-              <figcaption>Premium</figcaption>
+              <img src="/static/examples/economical.jpg" alt="Economical redesign" loading="lazy" />
+              <figcaption>Economical</figcaption>
             </figure>
             <figure class="example-figure" data-reveal data-reveal-delay="180">
               <img src="/static/examples/mid.jpg" alt="Mid-Range redesign" loading="lazy" />
               <figcaption>Mid&#8209;Range</figcaption>
             </figure>
             <figure class="example-figure" data-reveal data-reveal-delay="270">
-              <img src="/static/examples/economical.jpg" alt="Economical redesign" loading="lazy" />
-              <figcaption>Economical</figcaption>
+              <img src="/static/examples/premium.jpg" alt="Premium redesign" loading="lazy" />
+              <figcaption>Premium</figcaption>
             </figure>
           </div>
           <p class="examples-note">One real upload, unedited — the same walls, windows, and layout carried through all three tiers.</p>
@@ -108,6 +108,17 @@
               />
             </div>
 
+            <div class="style-prompt-wrap">
+              <label for="city-input" class="style-prompt-label">Your city (for local material prices)</label>
+              <input
+                type="text"
+                id="city-input"
+                name="city"
+                maxlength="80"
+                placeholder="e.g. Karachi"
+              />
+            </div>
+
             <button type="submit" id="generate-btn" disabled>
               <span class="btn-label">Generate 3 Tiers</span>
             </button>
@@ -119,8 +130,8 @@
           <div class="tiers-grid">
             <article class="tier-explainer" data-reveal data-reveal-delay="0">
               <span class="tier-number">01</span>
-              <h3>Premium</h3>
-              <p>Marble, brass accents, and warm designer lighting.</p>
+              <h3>Economical</h3>
+              <p>Fresh paint, plain tile floors, and clean practical lighting.</p>
             </article>
             <article class="tier-explainer" data-reveal data-reveal-delay="120">
               <span class="tier-number">02</span>
@@ -129,8 +140,8 @@
             </article>
             <article class="tier-explainer" data-reveal data-reveal-delay="240">
               <span class="tier-number">03</span>
-              <h3>Economical</h3>
-              <p>Fresh paint, plain tile floors, and clean practical lighting.</p>
+              <h3>Premium</h3>
+              <p>Marble, brass accents, and warm designer lighting.</p>
             </article>
           </div>
         </section>
@@ -138,12 +149,13 @@
 
       <section class="progress-card" id="progress-card" hidden>
         <div class="spinner"></div>
-        <p class="progress-message" id="progress-message">Uploading your image securely&hellip;</p>
-        <p class="progress-subtitle" id="progress-subtitle">Preparing your workspace</p>
+        <p class="progress-message" id="progress-message">Analyzing your room&hellip;</p>
+        <p class="progress-subtitle" id="progress-subtitle"></p>
         <div class="progress-bar" id="progress-bar">
           <div class="progress-bar-fill" id="progress-bar-fill"></div>
         </div>
-        <ul class="progress-checklist" id="progress-checklist"></ul>
+        <ol class="stage-stepper" id="stage-stepper"></ol>
+        <div class="concept-previews" id="concept-previews"></div>
       </section>
 
       <section class="error-card" id="error-card" hidden>
@@ -181,6 +193,14 @@
     <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
     <img id="lightbox-img" alt="" />
     <p class="lightbox-caption" id="lightbox-caption"></p>
+  </div>
+
+  <div class="materials-modal-overlay" id="materials-modal-overlay" hidden>
+    <div class="materials-modal">
+      <button type="button" class="materials-modal-close" id="materials-modal-close" aria-label="Close">&times;</button>
+      <h3 class="materials-modal-title" id="materials-modal-title"></h3>
+      <div class="materials-modal-body" id="materials-modal-body"></div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

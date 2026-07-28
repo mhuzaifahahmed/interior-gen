@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 B2B AI interior-design tool. A user uploads a room photo; the backend returns **3 visually distinct
 redesigns** — **Economical / Mid / Premium** — that preserve the real room structure (walls, windows,
 doors, layout, camera angle). Phase 1 (current) is the backend pipeline + a bare-bones localhost frontend
-that reliably produces and saves those 3 tiers. Materials-list + city-pricing is **explicitly deferred**
-(spec preserved in the plan, §9) — do not build it unless asked.
+that reliably produces and saves those 3 tiers. Materials-list + city-pricing (originally deferred, spec
+preserved in the plan §9) is now **built** — see "Materials & pricing feature" below.
 
 Full plan: `C:\Users\User\.claude\plans\act-as-senior-technical-purrfect-globe.md`.
 
@@ -83,6 +83,97 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
   `USER_NOTES_MAX_CHARS` (150) - enforced in **both** `build_prompt()` and `main.py`'s endpoint, since the
   frontend's `maxlength` is trivially bypassable by anyone calling the API directly.
 
+## Materials & pricing feature
+
+After the 3 tiers are generated, each tier (except the original) can show an itemized materials list
+with local pricing + source links + a rough total, localized to a city the user types on the **upload
+screen** (not after — see below).
+
+- **City input** (`static/index.html`'s `#city-input`, above Generate): persisted to `localStorage`
+  (`CITY_STORAGE_KEY` in `app.js`) so it only shows the `e.g. Karachi` placeholder the first time - after
+  that it stays filled with whatever was last entered until the user changes it. **Empty city is a
+  deliberate, supported choice**: `app.js`'s submit handler shows a `confirm()` warning ("pricing & local
+  material info won't be available - only images will be generated") and, if confirmed, submits with an
+  empty `city` - this is the **images-only path**, and it must result in **zero Gemini materials calls**
+  (see below), not just an empty result.
+- **`POST /api/projects` gained a `city` Form field** (`app/main.py`) - trimmed/length-capped
+  (`CITY_MAX_CHARS`), empty allowed. No separate materials endpoint - city is known at upload time, so it
+  threads straight into `run_pipeline(..., city=city)`.
+- **Concurrency design (the reason this isn't a second `BackgroundTasks` call)**: FastAPI's
+  `BackgroundTasks` run **sequentially** (Starlette awaits them in order), so adding a second background
+  task for materials would NOT overlap image generation - it would just run strictly after. Instead,
+  `run_pipeline()` (`app/pipeline/generate.py`) opens a `ThreadPoolExecutor(max_workers=3)` **at the
+  start** (right after `room_description`/`tier_notes`), submitting one `generate_materials` call per
+  tier, and joins the futures (`future.result(timeout=MATERIALS_TIMEOUT_SECONDS)`) **after** the image
+  loop - so the 3 materials lookups genuinely overlap the ~30-60s of image generation instead of adding to
+  it. If `city` is empty/falsy, this whole block is skipped entirely - `materials_status="skipped"`, and
+  `provider.generate_materials` is never called (verified by
+  `test_run_pipeline_without_city_skips_materials`).
+- **3 DEDICATED Gemini API keys, one fixed per tier** (`gemini_materials_api_key_economical`/`_mid`/
+  `_premium` in `app/config.py`, exposed via the `Settings.gemini_materials_api_keys` property - a
+  `{tier: key}` dict, not a round-robin list): each tier always hits its own, same key every run, so it
+  gets a genuinely **separate rate-limit quota** with zero contention between tiers. Deliberately kept
+  separate from `gemini_api_key` (used only for the text calls - `describe_room`/`generate_tier_notes`,
+  which run on every project regardless of city) so materials never competes with those either. Degrades
+  gracefully per-tier: any tier without its own dedicated key configured falls back to `gemini_api_key`.
+  `GeminiProvider` caches one `genai.Client` per distinct key (`_clients_by_key` in `gemini.py`) so
+  concurrent calls actually use distinct clients, not one shared connection.
+- **Real pricing via SerpApi + Gemini synthesis, NOT Gemini's own grounding tool** (`GeminiProvider.
+  generate_materials` in `gemini.py`, `app/providers/serpapi.py`). **Real, live-tested reason for this
+  design**: `types.Tool(google_search=types.GoogleSearch())` grounding hit a 429 `RESOURCE_EXHAUSTED` wall
+  on every Gemini key/project tested (main key, and 3 brand-new never-used materials-key projects) - not a
+  quota-exhaustion issue, an immediate hard block, and Google's own AI developer forum has multiple current
+  reports of billing NOT fixing this (a platform-side bug, not user/config error). So materials pricing
+  does its own search instead via SerpApi (`serpapi.search()`, 250 searches/month free, no card).
+  **PER-ITEM search, not one combined search per tier** (`_tier_line_items()` in `gemini.py`) - a real,
+  live-observed reason: an earlier version fired ONE combined query per tier (e.g. "price of grey ceramic
+  tile, cream paint, cool lighting in Karachi"). A single query only ever returned real matches for
+  whichever term Google treats as the primary e-commerce category - almost always flooring/tile - so most
+  of a tier's other items (ceiling, feature wall, decor...) came back as pure LLM guesses no matter how the
+  prompt was worded. Fix: each tier's items are a FIXED, deterministic list of 6 (`_tier_line_items()` -
+  flooring, paint, lighting, ceiling, feature wall, decor, skipping empty fields) with **one dedicated
+  SerpApi search per item**, not a model-chosen free-form 5-9 item list. Cost: 6 searches/tier × 3 tiers =
+  18/generation, ~13-14 generations/month on the free tier (down from ~83 at 1-search-per-tier) - an
+  explicit, accepted tradeoff the user chose after seeing most items come back as guesses. `NUM_RESULTS` in
+  `serpapi.py` was also bumped 6→12 - a free improvement (SerpApi bills per call, not per result count)
+  that widens the odds a specific item's real price appears somewhere in its own dedicated results.
+  Each item's own results are labeled and kept separate in the prompt (`_format_line_items_with_results()`)
+  and the model is told to price each item ONLY from its own labeled results, never borrowing a link shown
+  under a different item - a **plain, non-grounded** Gemini call (cheap, no special tool, no
+  grounding-quota risk) synthesizes real prices where a real listing was found, or its own rough estimate
+  when it wasn't - never omitting an item or leaving a price blank either way.
+  **Defense in depth**: `_sanitize_source_urls()` strips any `source_url` the model returned that doesn't
+  match ANY of the real links returned across all of that tier's per-item searches, downgrading that item
+  to `is_estimate=True` instead of ever showing a possibly-hallucinated link as real. Checked against the
+  union of all items' real links, not strictly per-item - a stricter check would need to match the model's
+  returned item `name` back to the exact fixed label, and a minor rename would then wrongly strip an
+  otherwise-real link; cross-item link reuse is a smaller, lower-stakes failure mode (still a real,
+  resolving URL) than that false-negative. If a single item's search fails (quota/network), that's not
+  fatal - the rest of the tier's items are unaffected, that one item just can't be marked real. If the
+  Gemini call fails entirely, `fallback_materials()` synthesizes the same fixed item list straight from
+  `tier_spec`'s own fields, each with a guaranteed-to-resolve Google-search URL (not a guessed product
+  link) - so the UI never renders a blank price or a dead link even in the worst case. Both prices and the
+  total are **plain strings** (not strictly numeric), a deliberate simplification since real-world listings
+  mix currencies/formats freely - the frontend just displays them as-is.
+  **If grounding is ever revisited** (e.g. billing genuinely fixes it on a project): the fix is swapping
+  the SerpApi call + prompt back for the `types.Tool(google_search=...)` config this replaced - the rest
+  of the pipeline (parse/sanitize/fallback, the per-tier key selection, the concurrency design) doesn't
+  need to change either way.
+- **Data model**: `Project.city`, `Project.materials_json` (dict keyed by tier), `Project.materials_status`
+  (`idle` → `running` → `done`/`skipped`; `failed` reserved, not currently reachable since per-tier failures
+  degrade to fallback data instead). `ProjectStatusResponse` exposes `materials`/`materials_status`.
+  **Migration note**: `init_db()` (`app/db.py`) now runs a tiny additive `ALTER TABLE` migration after
+  `create_all()` for exactly this reason - `create_all()` only creates missing *tables*, never adds
+  columns to an existing one, so an existing dev DB from before this feature would 500 with "no such
+  column" without it.
+- **Frontend rendering** (`static/app.js`'s `renderMaterialsSection()`): each tier card gets a native
+  `<details>/<summary>` "View materials & cost" panel (zero extra JS for the expand/collapse) with an
+  itemized table (name/spec, price + an "Estimate" badge when `is_estimate`, a source link or `—`) and a
+  total. By the time results render, `run_pipeline()` has already joined the materials futures, so
+  `materials_status` should already be settled (`done` or `skipped`) - the `running` UI state exists
+  defensively but isn't the normal path. Clicks inside the panel `stopPropagation()` so they don't also
+  trigger the card's click-to-open-lightbox handler.
+
 ## Architecture (big picture)
 
 Upload → FastAPI stores the original + creates a `Project` row (SQLite) → a **background job** runs the
@@ -93,8 +184,9 @@ them.
 Three deliberate seams keep the free/solo build swappable — respect them when adding code:
 
 1. **Provider seam** (`app/providers/`): all model calls go through the `Provider` interface
-   (`generate_image`, `describe_room`, `generate_tier_notes`). See "Provider split" above for the current
-   hybrid wiring. Swapping a model/vendor should only ever mean touching this directory.
+   (`generate_image`, `describe_room`, `generate_tier_notes`, `generate_materials`). See "Provider split"
+   above for the current hybrid wiring. Swapping a model/vendor should only ever mean touching this
+   directory.
 2. **Storage seam** (`app/storage/`): image **bytes** go through a `Storage` interface — `local.py`
    (filesystem, dev default) or `s3.py` (boto3, S3-compatible → currently a real **AWS S3** bucket in
    `.env`, R2 still viable). SQLite stores **metadata + storage keys only**, never image blobs. Keys are
@@ -226,11 +318,14 @@ depends on; `test_terms_page_serves`/`test_privacy_page_serves` cover the new ro
 
 ## Testing convention
 
-All provider calls in tests are **mocked** — no real Gemini or OpenAI network calls in the test suite
-(costs money / quotas are limited and must never be burned by CI). Pattern: monkeypatch the module-level
-client call (see `tests/test_openai_provider.py`, `tests/test_pipeline.py` for the FakeProvider pattern).
-Prompt tests assert the three tier specs are mutually distinct and each carries the preserve-structure
-instruction.
+All provider calls in tests are **mocked** — no real Gemini, OpenAI, or SerpApi network calls in the test
+suite (costs money / quotas are limited and must never be burned by CI). Pattern: monkeypatch the
+module-level client call (see `tests/test_openai_provider.py`, `tests/test_pipeline.py` for the
+FakeProvider pattern; `tests/test_gemini_materials.py` monkeypatches both `genai.Client` and
+`gemini_module.serpapi.search` to test per-key client caching and the search→synthesis flow without a real
+network call; `tests/test_serpapi.py` monkeypatches `httpx.get` to test `serpapi.search()` in isolation).
+Prompt tests assert the three tier specs are mutually distinct and each
+carries the preserve-structure instruction.
 
 ## Known limitations to keep in mind (not bugs to "fix" silently)
 

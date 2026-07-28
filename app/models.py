@@ -23,4 +23,10 @@ class Project(SQLModel, table=True):
     mid_key: Optional[str] = None
     premium_key: Optional[str] = None
 
+    # Materials/pricing feature: city is optional (empty = user opted for
+    # images-only, no Gemini price calls at all - see run_pipeline).
+    city: Optional[str] = None
+    materials_json: Optional[str] = None
+    materials_status: str = Field(default="idle")  # idle | running | done | failed | skipped
+
     meta_json: Optional[str] = None

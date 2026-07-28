@@ -9,12 +9,14 @@ const previewFilename = document.getElementById("preview-filename");
 const generateBtn = document.getElementById("generate-btn");
 const removePhotoBtn = document.getElementById("remove-photo-btn");
 const stylePromptInput = document.getElementById("style-prompt");
+const cityInput = document.getElementById("city-input");
 
 const progressCard = document.getElementById("progress-card");
 const progressMessageEl = document.getElementById("progress-message");
 const progressSubtitleEl = document.getElementById("progress-subtitle");
 const progressBarFill = document.getElementById("progress-bar-fill");
-const progressChecklistEl = document.getElementById("progress-checklist");
+const progressStepperEl = document.getElementById("stage-stepper");
+const conceptPreviewsEl = document.getElementById("concept-previews");
 
 const errorCard = document.getElementById("error-card");
 const errorDetail = document.getElementById("error-detail");
@@ -30,121 +32,55 @@ const lightboxImg = document.getElementById("lightbox-img");
 const lightboxCaption = document.getElementById("lightbox-caption");
 const lightboxClose = document.getElementById("lightbox-close");
 
+const materialsModalOverlay = document.getElementById("materials-modal-overlay");
+const materialsModalTitle = document.getElementById("materials-modal-title");
+const materialsModalBody = document.getElementById("materials-modal-body");
+const materialsModalClose = document.getElementById("materials-modal-close");
+
 const TIERS = [
   { key: "original", label: "Original", desc: "Your uploaded room." },
-  { key: "premium", label: "Premium", desc: "Marble, brass, and designer lighting." },
-  { key: "mid", label: "Mid-Range", desc: "Warm woods and upgraded fixtures." },
   { key: "economical", label: "Economical", desc: "Fresh paint and clean practical finishes." },
+  { key: "mid", label: "Mid-Range", desc: "Warm woods and upgraded fixtures." },
+  { key: "premium", label: "Premium", desc: "Marble, brass, and designer lighting." },
 ];
 
-// Deliberate choice (same reasoning as the rest of this staged timeline): these ARE
-// scripted per-stage messages/subtitles, not literal real-time backend status - the
-// backend doesn't report progress at this granularity. A ~1 minute wait feels far more
-// reassuring with a specific, narrated story (room analysis -> architectural detection
-// -> design brief -> per-tier generation -> cost estimation -> finalizing) than with
-// vague filler, even knowing it's not strictly telemetry. Unlike an earlier version of
-// this list, these are NOT shuffled - they read as one coherent narrative in a fixed
-// order, so shuffling would break the story rather than making it feel more real.
-const CHECKLIST_ITEMS = [
-  "Image uploaded",
-  "Room analysis complete",
-  "Architectural elements identified",
-  "Design brief understood",
-  "Economical concept generated",
-  "Budget estimation complete",
-  "Mid-Range concept generated",
-  "Premium concept generated",
-  "Material estimates prepared",
-  "Rendering final presentation",
-];
-
-// `start` is the second (within the ~60s target timeline) this stage begins.
-// `checklistDone` is how many CHECKLIST_ITEMS should be checked once this stage is
-// showing. `activeIndex` (only set on the final stage) marks the item that should
-// show an in-progress spinner rather than a checkmark, until the backend actually
-// reports completion.
+// Real-signal-driven progress model. Replaced an earlier fixed-timeline/9-item
+// checklist design: showing 9 growing rows felt cluttered for a ~90s wait, and
+// (more importantly) grouping into 4 stages lets 3 of them key off state the
+// backend ALREADY returns on every poll (app/main.py's get_project already
+// includes per-tier image URLs the moment each finishes, plus materials_status
+// and room_description) - so stages 2-4 below track REALITY, not a script.
+// Only stage 1 ("Analyzing your room") has no finer-grained real signal to key
+// off (describe_room/tier_notes run before the image loop, with only
+// room_description observable) - it shows immediately at submit time and
+// yields the moment anything real shows up.
 const STAGES = [
-  {
-    start: 0,
-    status: "Uploading your image securely…",
-    subtitles: ["Preparing your workspace", "Validating uploaded image", "Initializing project"],
-    checklistDone: 0,
-  },
-  {
-    start: 4,
-    status: "Analyzing room layout and architectural features…",
-    subtitles: ["Detecting walls", "Understanding room geometry", "Mapping architectural structure"],
-    checklistDone: 1,
-  },
-  {
-    start: 8,
-    status: "Identifying walls, flooring, windows, lighting, and fixed elements…",
-    subtitles: ["Detecting permanent fixtures", "Preserving architectural details", "Mapping existing materials"],
-    checklistDone: 2,
-  },
-  {
-    start: 13,
-    status: "Understanding your design request and preferred style…",
-    subtitles: ["Interpreting renovation goals", "Matching interior style", "Planning design direction"],
-    checklistDone: 3,
-  },
-  {
-    start: 18,
-    status: "Creating the Economical concept using cost-effective materials…",
-    subtitles: ["Selecting affordable finishes", "Optimizing value", "Building practical renovation concept"],
-    checklistDone: 4,
-  },
-  {
-    start: 25,
-    status: "Estimating finishes and approximate material costs…",
-    subtitles: ["Comparing material options", "Calculating renovation estimates", "Preparing budget analysis"],
-    checklistDone: 5,
-  },
-  {
-    start: 32,
-    status: "Designing the Mid-Range concept with upgraded materials…",
-    subtitles: ["Selecting premium finishes", "Improving comfort and aesthetics", "Balancing design and cost"],
-    checklistDone: 6,
-  },
-  {
-    start: 39,
-    status: "Balancing aesthetics, durability, and budget…",
-    subtitles: ["Refining material combinations", "Validating design consistency", "Optimizing renovation plan"],
-    checklistDone: 6,
-  },
-  {
-    start: 46,
-    status: "Crafting the Premium concept with luxury finishes and custom details…",
-    subtitles: ["Applying premium materials", "Enhancing lighting and textures", "Creating luxury interior concept"],
-    checklistDone: 7,
-  },
-  {
-    start: 53,
-    status: "Preparing material recommendations and rough cost estimates…",
-    subtitles: ["Comparing renovation options", "Finalizing recommendations", "Organizing project summary"],
-    checklistDone: 8,
-  },
-  {
-    start: 57,
-    status: "Finalizing your three interior concepts…",
-    subtitles: ["Rendering high-resolution visuals", "Performing final quality checks", "Preparing presentation"],
-    checklistDone: 8,
-    activeIndex: 9,
-  },
+  { label: "Analyzing your room…" },
+  { label: "Generating concepts…" },
+  { label: "Preparing your cost estimates…" },
+  { label: "Finalizing your three concepts…" },
 ];
 
-const TOTAL_DURATION_MS = 60000;
-// The bar never reaches 100% on its own - only a real "done" response snaps it there.
-// Classic loading-bar trick so it doesn't look "stuck" if generation runs longer than
-// the ~60s reference timeline (real generation time varies with provider latency).
-const PROGRESS_BAR_CAP = 97;
+// Order matches TIERS above (Economical, Mid-Range, Premium) - the two were
+// briefly inconsistent (results grid led with Premium while this led with
+// Economical), which read as a bug once both were visible back to back;
+// both now use the same low-to-high order throughout the site.
+const CONCEPT_PREVIEW_TIERS = [
+  { key: "economical", label: "Economical" },
+  { key: "mid", label: "Mid-Range" },
+  { key: "premium", label: "Premium" },
+];
+
+// If nothing real has happened (no stage advance, no concept reveal, no
+// materials settling) for this long, fade in a reassurance line rather than
+// leaving a bare spinner with no text.
+const STALL_REASSURANCE_MS = 15000;
 
 let selectedFile = null;
-let progressStartTime = null;
-let progressRafId = null;
 let currentStageIndex = -1;
-let currentSubtitleIndex = -1;
-let subtitleTimer = null;
+let revealedConceptTiers = new Set();
+let materialsWereRunning = false;
+let stallTimer = null;
 
 /* ---------- File selection ---------- */
 
@@ -199,11 +135,38 @@ dropzone.addEventListener("drop", (e) => {
   if (file) setSelectedFile(file);
 });
 
+/* ---------- City persistence ---------- */
+/* City is asked once and remembered (localStorage) so returning users don't have to
+   retype it every time - the field only shows a placeholder ("e.g. Karachi") the very
+   first time; after that it stays filled with whatever was last entered/confirmed,
+   until the user changes it themselves. */
+
+const CITY_STORAGE_KEY = "interior-gen:city";
+
+const savedCity = localStorage.getItem(CITY_STORAGE_KEY);
+if (savedCity) cityInput.value = savedCity;
+
 /* ---------- Submit ---------- */
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!selectedFile) return;
+
+  const city = cityInput.value.trim();
+
+  if (!city) {
+    const proceedWithoutCity = confirm(
+      "Without a location, pricing and local material info won't be available - only the " +
+        "three redesign images will be generated. Continue without a location?"
+    );
+    if (!proceedWithoutCity) return;
+  } else {
+    localStorage.setItem(CITY_STORAGE_KEY, city);
+  }
+
+  generateBtn.disabled = true; // belt-and-suspenders against double-submit;
+  // showState("progress") below already hides the whole upload view (button
+  // included), but this holds even if that transition is ever changed later.
 
   showState("progress");
   startProgressMessages();
@@ -211,6 +174,7 @@ form.addEventListener("submit", async (e) => {
   const formData = new FormData();
   formData.append("file", selectedFile);
   formData.append("style_notes", stylePromptInput.value.trim());
+  formData.append("city", city);
 
   let projectId;
   try {
@@ -226,131 +190,155 @@ form.addEventListener("submit", async (e) => {
 });
 
 /* ---------- Progress engine ---------- */
-/* Drives the main status, rotating subtitle, progress bar, and checklist off a single
-   real-time clock (progressStartTime) mapped onto the STAGES timeline above, rather
-   than independent timers - this is what keeps all four pieces moving in sync and
-   avoids drift between them. The bar fill is time-based and linear against the ~60s
-   target (not randomized), per the requirement that it track real elapsed time rather
-   than an arbitrary animation; PROGRESS_BAR_CAP still guards against generation
-   running long. If the backend finishes before the reference timeline catches up,
-   fastForwardToCompletion() visibly steps through the remaining stages instead of
-   snapping straight to the end. */
+/* Drives the stage stepper, main status, sub-label, progress bar, and concept
+   preview cards off real data returned by every poll of GET /api/projects/{id}
+   (see app/main.py's get_project - per-tier image URLs, materials_status, and
+   room_description are all already present there, even while status=running).
+   The bar advances in 4 discrete jumps (25/50/75/100%) as each stage completes,
+   not continuously - 100% is reserved for the real "done" response. */
 
-function renderChecklistShell() {
-  progressChecklistEl.innerHTML = CHECKLIST_ITEMS.map(
-    (label, i) => `
-      <li class="checklist-item" data-index="${i}">
-        <span class="check-icon"></span>
-        <span class="check-label">${label}</span>
+function renderStageStepper() {
+  progressStepperEl.innerHTML = STAGES.map(
+    (stage) => `
+      <li class="stage-item">
+        <span class="stage-icon"></span>
+        <span class="stage-label">${stage.label.replace("…", "")}</span>
       </li>
     `
   ).join("");
 }
 
-function setChecklistState(doneCount, activeIndex) {
-  const items = progressChecklistEl.querySelectorAll(".checklist-item");
-  items.forEach((el, i) => {
-    el.classList.toggle("is-done", i < doneCount);
-    el.classList.toggle("is-active", i === activeIndex && i >= doneCount);
+function setStepperState(activeIndex, allDone) {
+  progressStepperEl.querySelectorAll(".stage-item").forEach((el, i) => {
+    el.classList.toggle("is-done", allDone || i < activeIndex);
+    el.classList.toggle("is-active", !allDone && i === activeIndex);
   });
 }
 
-function markChecklistComplete() {
-  progressChecklistEl.querySelectorAll(".checklist-item").forEach((el) => {
-    el.classList.remove("is-active");
-    el.classList.add("is-done");
-  });
+function renderConceptPreviewShell() {
+  conceptPreviewsEl.innerHTML = CONCEPT_PREVIEW_TIERS.map(
+    (tier) => `
+      <div class="concept-card" data-tier="${tier.key}">
+        <div class="concept-skeleton"></div>
+        <img class="concept-img" alt="${tier.label} concept" />
+        <p class="concept-label">${tier.label}</p>
+      </div>
+    `
+  ).join("");
 }
 
-function scheduleSubtitleRotation(subtitles) {
-  clearTimeout(subtitleTimer);
-  currentSubtitleIndex = 0;
-  progressSubtitleEl.textContent = subtitles[0];
+function revealConceptTier(tierKey, url) {
+  if (revealedConceptTiers.has(tierKey)) return;
+  revealedConceptTiers.add(tierKey);
 
-  const advance = () => {
-    subtitleTimer = setTimeout(() => {
-      currentSubtitleIndex = (currentSubtitleIndex + 1) % subtitles.length;
-      progressSubtitleEl.classList.add("is-changing");
-      setTimeout(() => {
-        progressSubtitleEl.textContent = subtitles[currentSubtitleIndex];
-        progressSubtitleEl.classList.remove("is-changing");
-        advance();
-      }, 180);
-    }, 2200);
-  };
-  advance();
+  const card = conceptPreviewsEl.querySelector(`.concept-card[data-tier="${tierKey}"]`);
+  if (!card) return;
+  card.querySelector(".concept-img").src = url;
+  card.classList.add("is-resolved");
 }
 
-function applyStage(index) {
-  if (index === currentStageIndex) return;
-  currentStageIndex = index;
-  const stage = STAGES[index];
-
+function setStageLabel(index) {
   progressMessageEl.classList.add("is-changing");
   setTimeout(() => {
-    progressMessageEl.textContent = stage.status;
+    progressMessageEl.textContent = STAGES[index].label;
     progressMessageEl.classList.remove("is-changing");
   }, 220);
-
-  setChecklistState(stage.checklistDone, stage.activeIndex ?? -1);
-  scheduleSubtitleRotation(stage.subtitles);
 }
 
-function stageIndexForElapsedSeconds(elapsedSeconds) {
-  let index = 0;
-  for (let i = 0; i < STAGES.length; i++) {
-    if (elapsedSeconds >= STAGES[i].start) index = i;
+function updateSubLabel(text) {
+  progressSubtitleEl.classList.add("is-changing");
+  setTimeout(() => {
+    progressSubtitleEl.textContent = text;
+    progressSubtitleEl.classList.remove("is-changing");
+  }, 180);
+
+  // Reset the stall-reassurance clock on every real update - it only fires
+  // when NOTHING has happened (no stage advance, no concept reveal, no
+  // materials settling) for STALL_REASSURANCE_MS.
+  clearTimeout(stallTimer);
+  stallTimer = setTimeout(() => updateSubLabel("Still working — almost there…"), STALL_REASSURANCE_MS);
+}
+
+/* Derives which of the 4 stages we're in from REAL data already present on
+   every poll response (app/main.py's get_project) - not a timer. Each tier's
+   image key is committed to the DB (and so returned here) the moment that
+   tier finishes generating, well before the overall project is "done". */
+function deriveStageIndex(data) {
+  const tierUrls = CONCEPT_PREVIEW_TIERS.map((t) => data.images && data.images[t.key]);
+  const allImagesDone = tierUrls.every(Boolean);
+  const anyImageDone = tierUrls.some(Boolean);
+  const materialsSettled = data.materials_status === "done" || data.materials_status === "skipped";
+
+  if (data.status === "done") return STAGES.length - 1;
+  if (allImagesDone && materialsSettled) return 3; // Finalizing
+  if (allImagesDone) return 2; // Preparing your cost estimates
+  if (anyImageDone || data.room_description) return 1; // Generating concepts
+  return 0; // Analyzing your room
+}
+
+function applyPollUpdate(data) {
+  for (const tier of CONCEPT_PREVIEW_TIERS) {
+    const url = data.images && data.images[tier.key];
+    if (url && !revealedConceptTiers.has(tier.key)) {
+      revealConceptTier(tier.key, url);
+      updateSubLabel(`${tier.label} concept ready`);
+    }
   }
-  return index;
-}
 
-function tickProgress() {
-  const elapsedMs = Date.now() - progressStartTime;
-  applyStage(stageIndexForElapsedSeconds(elapsedMs / 1000));
+  if (data.materials_status === "running") {
+    materialsWereRunning = true;
+  } else if (materialsWereRunning && data.materials_status === "done") {
+    materialsWereRunning = false;
+    updateSubLabel("Cost estimates ready");
+  }
 
-  const pct = Math.min((elapsedMs / TOTAL_DURATION_MS) * 100, PROGRESS_BAR_CAP);
-  progressBarFill.style.width = `${pct}%`;
-
-  progressRafId = requestAnimationFrame(tickProgress);
+  const derived = deriveStageIndex(data);
+  if (derived > currentStageIndex) {
+    currentStageIndex = derived;
+    setStageLabel(Math.min(currentStageIndex, STAGES.length - 1));
+    setStepperState(currentStageIndex, false);
+    progressBarFill.style.width = `${currentStageIndex * 25}%`;
+  }
 }
 
 function startProgressMessages() {
-  renderChecklistShell();
-  currentStageIndex = -1;
+  renderStageStepper();
+  renderConceptPreviewShell();
+  revealedConceptTiers = new Set();
+  materialsWereRunning = false;
+  currentStageIndex = 0;
+
   progressBarFill.style.width = "0%";
-  progressStartTime = Date.now();
-  tickProgress();
+  setStepperState(0, false);
+  progressMessageEl.textContent = STAGES[0].label;
+  progressSubtitleEl.textContent = "";
+
+  clearTimeout(stallTimer);
+  stallTimer = setTimeout(() => updateSubLabel("Still working — almost there…"), STALL_REASSURANCE_MS);
 }
 
 function stopProgressMessages() {
-  cancelAnimationFrame(progressRafId);
-  progressRafId = null;
-  clearTimeout(subtitleTimer);
-  subtitleTimer = null;
+  clearTimeout(stallTimer);
+  stallTimer = null;
   progressMessageEl.classList.remove("is-changing");
   progressSubtitleEl.classList.remove("is-changing");
 }
 
-/* If the backend reports "done" before the reference timeline reaches the final
-   stage, step through the remaining stages quickly (rather than teleporting the
-   checklist/status straight to the end) so the completion still reads as real
-   progress, per "intelligently advance... without making the UI appear fake". */
-function fastForwardToCompletion(onDone) {
-  cancelAnimationFrame(progressRafId);
-  progressRafId = null;
-
-  function step() {
-    const nextIndex = currentStageIndex + 1;
-    if (nextIndex >= STAGES.length) {
-      onDone();
-      return;
-    }
-    applyStage(nextIndex);
-    const pct = Math.min((STAGES[nextIndex].start / 60) * 100 + 3, PROGRESS_BAR_CAP);
-    progressBarFill.style.width = `${pct}%`;
-    setTimeout(step, 280);
+/* Snaps everything to "done" using the final response's real data - guarantees
+   every concept card resolves and every stage shows complete even if the
+   backend finished faster than the last poll caught up on some sub-detail. */
+function finishProgress(data, onDone) {
+  for (const tier of CONCEPT_PREVIEW_TIERS) {
+    const url = data.images && data.images[tier.key];
+    if (url) revealConceptTier(tier.key, url);
   }
-  step();
+  setStepperState(STAGES.length, true);
+  progressBarFill.style.width = "100%";
+  stopProgressMessages();
+
+  // Brief pause so the bar's jump to 100% and the final checkmarks are
+  // actually visible before the progress card gets hidden in favor of results.
+  setTimeout(onDone, 350);
 }
 
 async function pollProject(projectId) {
@@ -368,25 +356,13 @@ async function pollProject(projectId) {
     return;
   }
 
-  if (data.status === "done") {
-    const finish = () => {
-      markChecklistComplete();
-      progressBarFill.style.width = "100%";
-      stopProgressMessages();
-      // Brief pause so the bar's jump to 100% and the final checkmark are
-      // actually visible before the progress card gets hidden in favor of
-      // the results view.
-      setTimeout(() => {
-        renderResults(data);
-        showState("results");
-      }, 350);
-    };
+  applyPollUpdate(data);
 
-    if (currentStageIndex < STAGES.length - 1) {
-      fastForwardToCompletion(finish);
-    } else {
-      finish();
-    }
+  if (data.status === "done") {
+    finishProgress(data, () => {
+      renderResults(data);
+      showState("results");
+    });
     return;
   }
 
@@ -395,6 +371,82 @@ async function pollProject(projectId) {
 
 /* ---------- Results ---------- */
 
+function escapeHtml(value) {
+  const div = document.createElement("div");
+  div.textContent = value == null ? "" : String(value);
+  return div.innerHTML;
+}
+
+/* Materials/pricing UI, one per tier card (not shown for "original" - see
+   renderResults). Built from data.materials[tierKey] + data.materials_status.
+   By the time results render, run_pipeline() has already joined the materials
+   futures (see app/pipeline/generate.py), so "running" is only a defensive
+   state here, not the normal path - materials should already be settled
+   (done, or a never-empty fallback) whenever status is "done". Shown as a
+   popup modal (openMaterialsModal below) rather than an in-card dropdown -
+   the card itself is too narrow for an item/price/source table without text
+   wrapping awkwardly or getting visually clipped. */
+function renderMaterialsSection(tierKey, data) {
+  if (data.materials_status === "skipped") {
+    return '<p class="materials-note">Add a location on the upload step to see local material pricing.</p>';
+  }
+
+  if (data.materials_status === "running") {
+    return '<p class="materials-note materials-note-loading"><span class="materials-spinner"></span>Fetching local prices…</p>';
+  }
+
+  const tierMaterials = data.materials && data.materials[tierKey];
+  if (!tierMaterials || !Array.isArray(tierMaterials.items) || tierMaterials.items.length === 0) {
+    return '<p class="materials-note">Material pricing isn\'t available for this image right now.</p>';
+  }
+
+  return '<button type="button" class="materials-open-btn">View materials &amp; cost</button>';
+}
+
+function buildMaterialsModalBodyHTML(tierMaterials) {
+  const rows = tierMaterials.items
+    .map(
+      (item) => `
+        <tr>
+          <td>
+            <p class="material-name">${escapeHtml(item.name)}</p>
+            <p class="material-spec">${escapeHtml(item.spec)}</p>
+          </td>
+          <td class="material-price">
+            ${escapeHtml(item.price)}
+            ${item.is_estimate ? '<span class="estimate-badge">Estimate</span>' : ""}
+          </td>
+          <td class="material-source">
+            ${
+              item.source_url
+                ? `<a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.source_url)}</a>`
+                : "—"
+            }
+          </td>
+        </tr>
+      `
+    )
+    .join("");
+
+  return `
+    <table class="materials-table">
+      <thead><tr><th>Item</th><th>Price</th><th>Source</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="materials-total">Rough total: <strong>${escapeHtml(tierMaterials.total)}</strong></p>
+  `;
+}
+
+function openMaterialsModal(tierLabel, tierMaterials) {
+  materialsModalTitle.textContent = `${tierLabel} — Materials & Cost`;
+  materialsModalBody.innerHTML = buildMaterialsModalBodyHTML(tierMaterials);
+  materialsModalOverlay.hidden = false;
+}
+
+function closeMaterialsModal() {
+  materialsModalOverlay.hidden = true;
+}
+
 function renderResults(data) {
   roomDescriptionEl.textContent = data.room_description ? `"${data.room_description}"` : "";
   resultsGrid.innerHTML = "";
@@ -402,6 +454,8 @@ function renderResults(data) {
   for (const tier of TIERS) {
     const url = data.images[tier.key];
     if (!url) continue;
+
+    const isOriginal = tier.key === "original";
 
     const card = document.createElement("div");
     card.className = "result-card";
@@ -416,9 +470,21 @@ function renderResults(data) {
         <p class="tier-name">${tier.label}</p>
         <p class="tier-desc">${tier.desc}</p>
       </div>
+      ${isOriginal ? "" : renderMaterialsSection(tier.key, data)}
     `;
     card.addEventListener("click", () => openLightbox(url, tier.label));
     card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
+
+    const materialsEl = card.querySelector(".materials-open-btn, .materials-note");
+    if (materialsEl) {
+      materialsEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (materialsEl.classList.contains("materials-open-btn")) {
+          openMaterialsModal(tier.label, data.materials[tier.key]);
+        }
+      });
+    }
+
     resultsGrid.appendChild(card);
   }
 }
@@ -434,8 +500,16 @@ lightboxClose.addEventListener("click", () => (lightbox.hidden = true));
 lightbox.addEventListener("click", (e) => {
   if (e.target === lightbox) lightbox.hidden = true;
 });
+
+materialsModalClose.addEventListener("click", closeMaterialsModal);
+materialsModalOverlay.addEventListener("click", (e) => {
+  if (e.target === materialsModalOverlay) closeMaterialsModal();
+});
+
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") lightbox.hidden = true;
+  if (e.key !== "Escape") return;
+  lightbox.hidden = true;
+  closeMaterialsModal();
 });
 
 /* ---------- Error / retry ---------- */

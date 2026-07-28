@@ -1,14 +1,66 @@
 import json
 import logging
+import urllib.parse
 from io import BytesIO
 
 from google import genai
 from PIL import Image
 
 from app.config import settings
+from app.providers import serpapi
 from app.providers.base import Provider
 
 logger = logging.getLogger(__name__)
+
+# MATERIALS PRICING DESIGN (real, live-tested reason this isn't Gemini's own
+# Google Search grounding tool): grounding hit a 429 RESOURCE_EXHAUSTED wall on
+# every Gemini key/project tested here, including brand-new ones with the
+# documented free monthly allowance untouched. Google's own AI developer forum
+# has multiple current reports of billing NOT fixing this (a platform-side bug,
+# not user error). Instead: real SerpApi Google searches (app/providers/
+# serpapi.py) supply real snippets/links, which a PLAIN (non-grounded, free)
+# Gemini call then synthesizes into structured pricing.
+#
+# PER-ITEM search, not one combined search per tier (real, live-observed
+# reason): an earlier version fired ONE combined query per tier (e.g. "price of
+# grey ceramic tile, cream paint, cool lighting in Karachi"). A single query
+# only ever returns real matches for whichever term Google treats as the
+# primary e-commerce category - almost always flooring/tile - so 6+ of a
+# tier's other items (ceiling treatment, feature wall, decor...) got zero real
+# search coverage no matter how the prompt was worded, and came back as pure
+# LLM guesses. Fix: each tier's items are now a FIXED, deterministic list (see
+# _tier_line_items) with ONE DEDICATED search per item - a real, individually-
+# targeted attempt at a source for every single item, not just the one term
+# that happens to rank well. Cost: 6 searches/tier * 3 tiers = 18/generation,
+# ~13-14 generations/month on SerpApi's 250/month free tier (down from ~83) -
+# an explicit, accepted tradeoff (the user chose real-per-item coverage over
+# more generations/month after seeing most items come back as guesses).
+MATERIALS_PROMPT_TEMPLATE = (
+    "You are pricing renovation materials for a {tier_label} interior-renovation concept, "
+    "for a buyer located in {city}.\n\n"
+    "Price EXACTLY these items - do not add, skip, merge, or rename any of them:\n\n"
+    "{items_block}\n\n"
+    "A real web search was run SEPARATELY for each item above, specifically for that item - "
+    "its own results are shown right below its name. For each item: if ITS OWN results mention "
+    "a price, use that real price, set is_estimate to false, and set source_url to the EXACT "
+    "link of the result it came from - copy it character-for-character, NEVER invent, guess, or "
+    "modify a URL, and NEVER use a link that was shown under a DIFFERENT item. If that item's "
+    "own results don't mention a usable price, give your own best rough local estimate, set "
+    "is_estimate to true, and set source_url to null - do not omit the item and do not leave its "
+    "price blank either way.\n\n"
+    "IMPORTANT - currency: always express every price (and the total) in the LOCAL currency "
+    "actually used in {city} (e.g. PKR for Pakistan, INR for India, USD for the United States) - "
+    "never a different country's currency, even if a source result quotes one. If a real "
+    "source's price is in a different currency, convert it to {city}'s local currency using your "
+    "best knowledge of exchange rates and state the converted amount - this does NOT make it an "
+    "estimate (is_estimate still reflects whether a real reference price was found, not whether a "
+    "currency conversion was applied). Also compute a rough total across all items as a plain "
+    "string, in that same local currency.\n\n"
+    'Respond with ONLY raw JSON, no markdown fences, in this exact shape: '
+    '{{"items": [{{"name": "...", "spec": "...", "price": "...", "currency": "...", '
+    '"source_url": "https://... or null", "is_estimate": false}}], '
+    '"total": "...", "currency": "..."}}'
+)
 
 TIER_NOTES_PROMPT = (
     "You are analyzing a room photo for a 3-tier renovation visualization tool. The "
@@ -30,12 +82,24 @@ TIER_NOTES_PROMPT = (
 class GeminiProvider(Provider):
     def __init__(self) -> None:
         self._client: genai.Client | None = None
+        # Separate cache for non-default keys (materials/pricing concurrency - see
+        # generate_materials) so each of the up-to-3 configured Gemini keys gets
+        # its own genai.Client, letting concurrent per-tier calls actually land on
+        # distinct rate-limit quotas instead of all funneling through self.client.
+        self._clients_by_key: dict[str, genai.Client] = {}
 
     @property
     def client(self) -> genai.Client:
         if self._client is None:
             self._client = genai.Client(api_key=settings.gemini_api_key)
         return self._client
+
+    def _client_for_key(self, api_key: str | None) -> genai.Client:
+        if not api_key or api_key == settings.gemini_api_key:
+            return self.client
+        if api_key not in self._clients_by_key:
+            self._clients_by_key[api_key] = genai.Client(api_key=api_key)
+        return self._clients_by_key[api_key]
 
     def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
         # tier is unused here - Gemini's instruction-based editing has no
@@ -79,11 +143,111 @@ class GeminiProvider(Provider):
         )
         return parse_tier_notes(response.text or "")
 
+    def generate_materials(
+        self,
+        tier: str,
+        tier_spec: dict[str, str],
+        room_description: str | None,
+        city: str,
+        api_key: str | None = None,
+    ) -> dict:
+        line_items = _tier_line_items(tier_spec)
 
-def parse_tier_notes(raw_text: str) -> dict[str, str]:
-    """Parse the tier-notes JSON response, tolerating markdown code fences that
-    models sometimes add even when told not to. Returns {} on any parse failure -
-    callers must treat tier notes as best-effort, same as describe_room.
+        # One dedicated SerpApi search per item (not one combined search) - see
+        # the module docstring for why. A failed individual search isn't fatal -
+        # that one item just can't be marked is_estimate=false, the rest of the
+        # tier is unaffected.
+        item_results: dict[str, list[dict]] = {}
+        for name, spec in line_items:
+            try:
+                item_results[name] = serpapi.search(f"price of {spec} in {city}", location=city)
+            except Exception:
+                logger.exception("materials search failed for item %s, tier %s in %s", name, tier, city)
+                item_results[name] = []
+
+        prompt = MATERIALS_PROMPT_TEMPLATE.format(
+            tier_label=tier_spec.get("label", tier),
+            city=city,
+            items_block=_format_line_items_with_results(line_items, item_results),
+        )
+
+        try:
+            client = self._client_for_key(api_key)
+            response = client.models.generate_content(model=settings.gemini_text_model, contents=[prompt])
+            parsed = parse_materials(response.text or "")
+            if parsed is not None:
+                all_real_results = [r for results in item_results.values() for r in results]
+                return _sanitize_source_urls(parsed, all_real_results)
+        except Exception:
+            logger.exception("generate_materials failed for tier %s in %s", tier, city)
+
+        return fallback_materials(tier_spec, city)
+
+
+def _tier_line_items(tier_spec: dict[str, str]) -> list[tuple[str, str]]:
+    """The fixed, deterministic item list every tier prices - one dedicated
+    search per item is what makes "a real source attempt for every item"
+    achievable at all; letting the model freely itemize 5-9 items of its own
+    choosing (the earlier design) meant most items got no dedicated search
+    coverage. Shared by generate_materials() and fallback_materials() so both
+    price the exact same items. Skips fields with no content for this tier
+    (e.g. economical's blank feature_wall).
+    """
+    fields = [
+        ("Flooring", tier_spec.get("flooring", "")),
+        ("Paint / wall finish", tier_spec.get("paint", "")),
+        ("Lighting", tier_spec.get("lighting_temp", "")),
+        ("Ceiling treatment", tier_spec.get("ceiling", "")),
+        ("Feature wall", tier_spec.get("feature_wall", "")),
+        ("Decor", tier_spec.get("decor", "")),
+    ]
+    return [(name, spec) for name, spec in fields if spec]
+
+
+def _format_line_items_with_results(line_items: list[tuple[str, str]], item_results: dict[str, list[dict]]) -> str:
+    blocks = []
+    for name, spec in line_items:
+        results_text = _format_search_results(item_results.get(name, []))
+        blocks.append(f"ITEM: {name} ({spec})\nSearch results for this item:\n{results_text}")
+    return "\n\n".join(blocks)
+
+
+def _format_search_results(results: list[dict]) -> str:
+    if not results:
+        return "(no search results available for this item)"
+    return "\n".join(
+        f"{i}. Title: {r['title']}\n   Snippet: {r['snippet']}\n   Link: {r['link']}"
+        for i, r in enumerate(results, start=1)
+    )
+
+
+def _sanitize_source_urls(materials: dict, real_results: list[dict]) -> dict:
+    """Defense in depth on top of the prompt's "never invent/reuse a URL"
+    instruction - prompt-following isn't 100% reliable, so strip any
+    source_url the model returned that isn't a link we actually got from ANY
+    of the real per-item searches. Downgrades that item to is_estimate=True
+    instead of leaving a possibly-hallucinated link, same "never show
+    something unverified as real" principle as everywhere else here.
+
+    Checked against the union of all items' real links (not strictly the
+    matching item's own links) - a stricter per-item check would also need to
+    match the model's returned item `name` back to the exact fixed label we
+    gave it, and a minor rename ("Flooring" -> "Flooring Material") would then
+    incorrectly strip an otherwise-real link. Cross-item link reuse is a much
+    smaller, lower-stakes mistake (still a real, resolving URL) than that
+    false-negative failure mode.
+    """
+    real_links = {r["link"] for r in real_results}
+    for item in materials["items"]:
+        if item["source_url"] and item["source_url"] not in real_links:
+            item["source_url"] = None
+            item["is_estimate"] = True
+    return materials
+
+
+def _strip_json_fences(raw_text: str) -> str:
+    """Models sometimes wrap JSON in markdown code fences even when told not to -
+    strip them so json.loads() gets raw JSON either way.
     """
     text = raw_text.strip()
     if text.startswith("```"):
@@ -91,9 +255,15 @@ def parse_tier_notes(raw_text: str) -> dict[str, str]:
         if text.lower().startswith("json"):
             text = text[4:]
         text = text.strip()
+    return text
 
+
+def parse_tier_notes(raw_text: str) -> dict[str, str]:
+    """Parse the tier-notes JSON response. Returns {} on any parse failure -
+    callers must treat tier notes as best-effort, same as describe_room.
+    """
     try:
-        data = json.loads(text)
+        data = json.loads(_strip_json_fences(raw_text))
     except (json.JSONDecodeError, ValueError):
         logger.warning("could not parse tier notes JSON: %r", raw_text[:200])
         return {}
@@ -101,3 +271,69 @@ def parse_tier_notes(raw_text: str) -> dict[str, str]:
     if not isinstance(data, dict):
         return {}
     return {k: v for k, v in data.items() if k in ("economical", "mid", "premium") and isinstance(v, str)}
+
+
+def parse_materials(raw_text: str) -> dict | None:
+    """Parse the materials/pricing JSON response. Returns None (not {}) on
+    failure - the caller (generate_materials) uses that as the signal to fall
+    back to fallback_materials() instead, since a never-empty result is
+    required here, unlike tier_notes/describe_room's "degrade to {}"."""
+    try:
+        data = json.loads(_strip_json_fences(raw_text))
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("could not parse materials JSON: %r", raw_text[:200])
+        return None
+
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return None
+
+    items = []
+    for raw_item in data["items"]:
+        if not isinstance(raw_item, dict) or not raw_item.get("name"):
+            continue
+        price = raw_item.get("price")
+        is_estimate = bool(raw_item.get("is_estimate", False))
+        if not price:
+            # Defensive fill - never leave a price blank even if this one item's
+            # price came back missing despite the prompt's instruction not to.
+            price = "Estimate unavailable"
+            is_estimate = True
+        items.append(
+            {
+                "name": str(raw_item["name"]),
+                "spec": str(raw_item.get("spec", "")),
+                "price": str(price),
+                "currency": str(raw_item.get("currency", "")),
+                "source_url": raw_item.get("source_url") or None,
+                "is_estimate": is_estimate,
+            }
+        )
+
+    if not items:
+        return None
+
+    total = data.get("total") or "See itemized estimates above"
+    return {"items": items, "total": str(total), "currency": str(data.get("currency", ""))}
+
+
+def fallback_materials(tier_spec: dict[str, str], city: str) -> dict:
+    """Never-empty materials fallback for when the Gemini call itself fails
+    entirely (network/auth/quota/timeout - a harder failure than "couldn't
+    find a price for one item", which generate_materials's prompt already
+    handles by asking Gemini for a labeled estimate). Synthesizes the same
+    fixed item list as generate_materials (_tier_line_items), each flagged as
+    an estimate with a search-URL that's guaranteed to resolve (unlike a
+    guessed product link), so the UI never renders a blank price or a dead link.
+    """
+    items = [
+        {
+            "name": name,
+            "spec": spec,
+            "price": "Estimate unavailable",
+            "currency": "",
+            "source_url": f"https://www.google.com/search?q={urllib.parse.quote(f'{name} {spec} price {city}')}",
+            "is_estimate": True,
+        }
+        for name, spec in _tier_line_items(tier_spec)
+    ]
+    return {"items": items, "total": "Not available - see search links above", "currency": ""}

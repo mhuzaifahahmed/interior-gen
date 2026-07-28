@@ -13,3 +13,5 @@ class ProjectStatusResponse(BaseModel):
     error: Optional[str] = None
     room_description: Optional[str] = None
     images: dict[str, Optional[str]]
+    materials: Optional[dict] = None
+    materials_status: str = "idle"

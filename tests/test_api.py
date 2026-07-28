@@ -10,6 +10,7 @@ from app.main import app
 class FakeProvider:
     def __init__(self):
         self.image_prompts = []
+        self.materials_calls = []
 
     def describe_room(self, image_bytes: bytes) -> str:
         return "A small rectangular room with one window."
@@ -22,6 +23,15 @@ class FakeProvider:
         buf = io.BytesIO()
         Image.new("RGB", (4, 4), color=(200, 200, 200)).save(buf, format="PNG")
         return buf.getvalue()
+
+    def generate_materials(self, tier, tier_spec, room_description, city, api_key=None):
+        self.materials_calls.append((tier, city))
+        return {
+            "items": [{"name": "Flooring", "spec": "", "price": "$100", "currency": "USD",
+                       "source_url": None, "is_estimate": True}],
+            "total": "$100",
+            "currency": "USD",
+        }
 
 
 class FakeStorage:
@@ -77,6 +87,10 @@ def test_full_upload_and_poll_flow(monkeypatch):
         for tier in ("economical", "mid", "premium"):
             assert "local.output/" in body["images"][tier]
 
+        # No city was submitted - images-only path, no materials/pricing calls.
+        assert body["materials_status"] == "skipped"
+        assert body["materials"] is None
+
 
 def test_style_notes_reach_the_generated_prompts(monkeypatch):
     provider = FakeProvider()
@@ -97,6 +111,30 @@ def test_style_notes_reach_the_generated_prompts(monkeypatch):
     assert len(provider.image_prompts) == 3
     for prompt in provider.image_prompts:
         assert "modern, blue accents" in prompt
+
+
+def test_city_triggers_materials_for_every_tier(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post("/api/projects", files=files, data={"city": "Karachi"})
+        assert create_res.status_code == 200
+        project_id = create_res.json()["project_id"]
+
+        status_res = client.get(f"/api/projects/{project_id}")
+        body = status_res.json()
+        assert body["status"] == "done"
+        assert body["materials_status"] == "done"
+        assert set(body["materials"].keys()) == {"economical", "mid", "premium"}
+        for tier_materials in body["materials"].values():
+            assert tier_materials["items"][0]["name"] == "Flooring"
+
+    called_tiers = {tier for tier, _ in provider.materials_calls}
+    assert called_tiers == {"economical", "mid", "premium"}
+    assert all(city == "Karachi" for _, city in provider.materials_calls)
 
 
 def test_rejects_unsupported_file_type():

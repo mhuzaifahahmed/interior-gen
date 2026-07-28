@@ -1,17 +1,29 @@
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlmodel import Session
 
+from app.config import settings
 from app.db import engine
 from app.models import Project
 from app.pipeline.prompts import PROMPT_VERSION, TIER_SPECS, build_prompt
 from app.providers.base import Provider
+from app.providers.gemini import fallback_materials
 from app.storage.base import Storage
 
 logger = logging.getLogger(__name__)
 
 TIERS = ("economical", "mid", "premium")
+
+# Generous timeout for a single tier's materials lookup. Bumped from 45s after
+# generate_materials() moved to 6 sequential per-item SerpApi searches plus 1
+# Gemini synthesis call (was 1 search + 1 call) - real per-tier latency is
+# higher now. generate_materials() already catches its own exceptions
+# internally and returns a never-empty fallback on failure - this timeout only
+# guards against a hung network call that never raises, so it should rarely
+# if ever fire in practice.
+MATERIALS_TIMEOUT_SECONDS = 75
 
 
 def run_pipeline(
@@ -19,6 +31,7 @@ def run_pipeline(
     provider: Provider,
     storage: Storage,
     user_style_notes: str | None = None,
+    city: str | None = None,
 ) -> None:
     """Runs the full 3-tier generation for a project. Intended to run as a
     background task; opens its own DB session since the request-scoped one
@@ -27,6 +40,17 @@ def run_pipeline(
     user_style_notes is the optional free-text style prompt the user typed in
     (static/index.html's style-prompt input) - passed through to every tier's
     build_prompt() call, see prompts.py for exactly how it's incorporated.
+
+    city is optional (empty/None means the user chose images-only - see
+    static/app.js's empty-city confirm dialog). When present, a materials/pricing
+    lookup for all 3 tiers is launched via a ThreadPoolExecutor at the start of
+    this function and joined after the image loop - NOT via a second
+    BackgroundTasks call, because Starlette runs BackgroundTasks sequentially,
+    which would make materials run strictly after images instead of overlapping
+    them. Each tier's lookup uses its own DEDICATED key from
+    settings.gemini_materials_api_keys (a fixed tier->key mapping, not shared
+    with gemini_api_key/the text calls) so all 3 run on separate rate-limit
+    quotas with zero contention.
     """
     with Session(engine) as session:
         project = session.get(Project, project_id)
@@ -35,6 +59,7 @@ def run_pipeline(
             return
 
         project.status = "running"
+        project.city = city
         session.add(project)
         session.commit()
 
@@ -57,12 +82,54 @@ def run_pipeline(
                 logger.exception("generate_tier_notes failed for project %s; continuing without it", project_id)
                 tier_notes = {}
 
+            executor = None
+            materials_futures = None
+            if city:
+                project.materials_status = "running"
+                session.add(project)
+                session.commit()
+
+                materials_keys = settings.gemini_materials_api_keys
+                executor = ThreadPoolExecutor(max_workers=3)
+                materials_futures = {
+                    tier: executor.submit(
+                        provider.generate_materials,
+                        tier,
+                        TIER_SPECS[tier],
+                        room_description,
+                        city,
+                        materials_keys[tier],
+                    )
+                    for tier in TIERS
+                }
+            else:
+                project.materials_status = "skipped"
+                session.add(project)
+                session.commit()
+
             for tier in TIERS:
                 prompt = build_prompt(tier, room_description, tier_notes.get(tier), user_style_notes)
                 image_bytes = provider.generate_image(original_bytes, prompt, tier=tier)
                 key = f"local.output/{project_id}/{tier}.png"
                 storage.put(key, image_bytes, content_type="image/png")
                 setattr(project, f"{tier}_key", key)
+                session.add(project)
+                session.commit()
+
+            if materials_futures is not None:
+                materials: dict[str, dict] = {}
+                for tier, future in materials_futures.items():
+                    try:
+                        materials[tier] = future.result(timeout=MATERIALS_TIMEOUT_SECONDS)
+                    except Exception:
+                        logger.exception(
+                            "materials lookup timed out/failed for tier %s, project %s", tier, project_id
+                        )
+                        materials[tier] = fallback_materials(TIER_SPECS[tier], city)
+                executor.shutdown(wait=False)
+
+                project.materials_json = json.dumps(materials)
+                project.materials_status = "done"
                 session.add(project)
                 session.commit()
 

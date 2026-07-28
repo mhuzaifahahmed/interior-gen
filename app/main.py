@@ -1,3 +1,4 @@
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -58,11 +59,15 @@ def privacy():
     return FileResponse("static/privacy.html")
 
 
+CITY_MAX_CHARS = 80
+
+
 @app.post("/api/projects", response_model=ProjectCreateResponse)
 async def create_project(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     style_notes: str = Form(""),
+    city: str = Form(""),
     session: Session = Depends(get_session),
 ):
     if file.content_type not in ALLOWED_CONTENT_TYPES:
@@ -75,6 +80,9 @@ async def create_project(
     # Defensive re-truncation (also enforced in build_prompt()) - the frontend's
     # <input maxlength> is trivially bypassable by anyone calling the API directly.
     style_notes = style_notes.strip()[:USER_NOTES_MAX_CHARS] or None
+    # Empty city is a valid, deliberate choice (images-only path, confirmed via a
+    # dialog on the frontend) - not an error, just no materials/pricing lookup.
+    city = city.strip()[:CITY_MAX_CHARS] or None
 
     storage = get_storage()
     provider = get_provider()
@@ -90,7 +98,7 @@ async def create_project(
     session.add(project)
     session.commit()
 
-    background_tasks.add_task(run_pipeline, project.id, provider, storage, style_notes)
+    background_tasks.add_task(run_pipeline, project.id, provider, storage, style_notes, city)
 
     return ProjectCreateResponse(project_id=project.id)
 
@@ -109,10 +117,14 @@ def get_project(project_id: str, session: Session = Depends(get_session)):
         key = getattr(project, f"{tier}_key")
         images[tier] = storage.url(key) if key else None
 
+    materials = json.loads(project.materials_json) if project.materials_json else None
+
     return ProjectStatusResponse(
         project_id=project.id,
         status=project.status,
         error=project.error,
         room_description=project.room_description,
         images=images,
+        materials=materials,
+        materials_status=project.materials_status,
     )

@@ -4,9 +4,46 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # Reserved for text/description calls only (describe_room, generate_tier_notes,
+    # and the dormant Gemini image-gen path) - NOT used for materials/pricing, which
+    # has its own dedicated keys below. Keeping these separate means the room-
+    # description call (which runs on every project, city or not) never competes
+    # for quota with the materials feature.
     gemini_api_key: str = ""
     gemini_image_model: str = "gemini-2.5-flash-image"
-    gemini_text_model: str = "gemini-2.5-flash"
+    # gemini-2.5-flash returns a 404 ("no longer available to new users") on
+    # accounts created after Google restricted it - a real, live-tested failure,
+    # not theoretical. gemini-3.5-flash confirmed working via a real API call on
+    # this project's accounts; gemini-flash-latest also works if that's preferred.
+    gemini_text_model: str = "gemini-3.5-flash"
+
+    # Materials/pricing feature: one DEDICATED Gemini key per tier (not shared with
+    # gemini_api_key above), so each tier's grounded search runs on its own
+    # rate-limit quota with zero contention between tiers or with the text calls.
+    # Degrades gracefully per-tier - a tier with no dedicated key falls back to
+    # gemini_api_key (see gemini_materials_api_keys property below).
+    gemini_materials_api_key_economical: str = ""
+    gemini_materials_api_key_mid: str = ""
+    gemini_materials_api_key_premium: str = ""
+
+    @property
+    def gemini_materials_api_keys(self) -> dict[str, str]:
+        return {
+            "economical": self.gemini_materials_api_key_economical or self.gemini_api_key,
+            "mid": self.gemini_materials_api_key_mid or self.gemini_api_key,
+            "premium": self.gemini_materials_api_key_premium or self.gemini_api_key,
+        }
+
+    # SerpApi (https://serpapi.com) - real Google search results for materials
+    # pricing, used in place of Gemini's own Google Search grounding tool. Real,
+    # live-tested reason: grounding hits a 429 RESOURCE_EXHAUSTED wall on every
+    # Gemini key/project tried here (even brand-new ones), and Google's own
+    # developer forum has multiple reports of billing NOT fixing this (a platform
+    # bug, not user error) - see app/providers/gemini.py's generate_materials()
+    # module docstring. One shared key is enough (unlike the Gemini materials
+    # keys above) - SerpApi's rate limit isn't per-tier, there's no reason to
+    # split it three ways. Free plan: 250 searches/month, no card required.
+    serpapi_api_key: str = ""
 
     # Image generation: OpenAI's official Images API (app/providers/openai.py) -
     # the sole image backend. Google discontinued free-tier Gemini image generation
