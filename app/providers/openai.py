@@ -35,13 +35,21 @@ from app.config import settings
 IMAGES_EDITS_URL = "https://api.openai.com/v1/images/edits"
 
 # Tiers that must stay tightly anchored to the input photo, so they're worth the
-# input_fidelity="high" cost jump above (real observed failure: premium's vivid
-# luxury vocabulary - marble, brass, "designer ceiling" - pulled gpt-image-1
-# toward a hallucinated generic luxury room, wrong column layout, narrower space
-# - at the default "low" fidelity, even with prompts.py's structural-lock text
-# present). Deliberately per-tier, not global, so the extra cost is spent only
-# where the drift was actually observed.
-HIGH_FIDELITY_TIERS = {"premium"}
+# input_fidelity="high" cost jump above. Real observed failures, not theory:
+# premium's vivid luxury vocabulary (marble, brass, "designer ceiling") pulled
+# gpt-image-1 toward a hallucinated generic luxury room (wrong column layout,
+# narrower space) at "low" fidelity, even with prompts.py's structural-lock
+# text present. Mid was added after the SAME failure shape - camera angle/room
+# geometry drifting - persisted even after mid already had both prompt-level
+# protections (PRESERVE_STRUCTURE's explicit "do not change the camera angle
+# or perspective" line, plus mid's own structure_reminder restated after its
+# material instructions, added for an earlier depth-flattening issue). Since
+# the text-level fix was already in place and drift continued, this confirms
+# it's a fidelity/anchoring-strength issue, not a prompt-wording gap - the same
+# conclusion premium's fix was based on. Deliberately per-tier, not global, so
+# the extra cost is spent only where drift was actually observed - economical
+# has shown no such drift and stays on the cheap default.
+HIGH_FIDELITY_TIERS = {"premium", "mid"}
 
 
 class OpenAIImageProvider:
@@ -52,7 +60,20 @@ class OpenAIImageProvider:
 
     def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
         input_fidelity = "high" if tier in HIGH_FIDELITY_TIERS else settings.openai_image_input_fidelity
+        return self._edit_image(image_bytes, prompt, input_fidelity)
 
+    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
+        # Shares the exact request shape with generate_image() via _edit_image -
+        # kept as its own public method (not just calling generate_image
+        # directly) so the "Build a House" feature's parameters never get
+        # tangled with room-redesign's tier/fidelity semantics. Uses its own
+        # dedicated openai_house_input_fidelity setting (not
+        # openai_image_input_fidelity, which the Economical tier also reads)
+        # so raising this feature's fidelity doesn't silently raise
+        # Economical's cost/fidelity too.
+        return self._edit_image(image_bytes, prompt, settings.openai_house_input_fidelity)
+
+    def _edit_image(self, image_bytes: bytes, prompt: str, input_fidelity: str) -> bytes:
         response = httpx.post(
             IMAGES_EDITS_URL,
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},

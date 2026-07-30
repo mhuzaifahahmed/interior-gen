@@ -146,6 +146,46 @@ class GeminiProvider(Provider):
         )
         return (response.text or "").strip()
 
+    def analyze_plot(self, image_bytes: bytes, dimensions: dict) -> str | None:
+        try:
+            image = Image.open(BytesIO(image_bytes))
+            dims_text = _format_dimensions(dimensions)
+            prompt = (
+                "You are analyzing a photo of a building plot/piece of land for an architectural "
+                f"concept tool. The plot's stated dimensions are: {dims_text}. In 2-3 short "
+                "sentences, describe: the plot's apparent orientation (e.g. which side faces a "
+                "road/street, if visible), its approximate boundary shape (regular rectangle vs "
+                "irregular), and any notable features visible in the photo (slope, existing "
+                "structures, trees, adjacent buildings). Be concise and factual - do not invent "
+                "details you cannot actually see in the photo."
+            )
+            response = self.client.models.generate_content(
+                model=settings.gemini_text_model,
+                contents=[prompt, image],
+            )
+            return (response.text or "").strip() or None
+        except Exception:
+            logger.exception("analyze_plot failed; continuing without it")
+            return None
+
+    def generate_floor_plan(
+        self, plot_description: str | None, dimensions: dict, prompt: str
+    ) -> bytes | None:
+        # Gemini has no floor-plan-specific capability - this is the honest
+        # "not available from this provider" case the best-effort contract
+        # allows for (see Provider.generate_floor_plan's docstring). The real
+        # floor-plan vendor slot is app/providers/idealhouse.py, composed in by
+        # HybridProvider - not this class.
+        return None
+
+    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
+        # Reuses Gemini's own (dormant in the composition root, but real and
+        # working) instruction-based image editing - same call shape as
+        # generate_image() above, just under the house feature's own method
+        # name so its parameters never get tangled with room-redesign's tier
+        # semantics.
+        return self.generate_image(image_bytes, prompt)
+
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         image = Image.open(BytesIO(image_bytes))
         response = self.client.models.generate_content(
@@ -216,6 +256,15 @@ def _generate_content_with_retry(client: genai.Client, model: str, contents: lis
             if attempt < MATERIALS_GEMINI_MAX_ATTEMPTS:
                 time.sleep(MATERIALS_GEMINI_RETRY_DELAY_SECONDS)
     raise last_exc
+
+
+def _format_dimensions(dimensions: dict) -> str:
+    length = dimensions.get("length")
+    width = dimensions.get("width")
+    unit = dimensions.get("unit", "")
+    if length and width:
+        return f"{length} x {width} {unit}".strip()
+    return "not specified"
 
 
 def _tier_line_items(tier_spec: dict[str, str]) -> list[tuple[str, str]]:

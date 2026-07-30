@@ -64,3 +64,40 @@ class Provider(ABC):
         ignore it.
         """
         ...
+
+    # ---- "Build a House" feature (app/pipeline/generate_house.py) ----
+
+    @abstractmethod
+    def analyze_plot(self, image_bytes: bytes, dimensions: dict) -> str | None:
+        """Analyze a plot/land photo + its stated dimensions and return a short
+        description of orientation, boundary shape, and notable features.
+        Best-effort, same contract as describe_room - degrade to None on any
+        failure, never raise into the caller.
+        """
+        ...
+
+    @abstractmethod
+    def generate_floor_plan(
+        self, plot_description: str | None, dimensions: dict, prompt: str
+    ) -> bytes | None:
+        """Generate a 2D floor plan (PNG bytes) respecting `dimensions` and
+        `prompt` as closely as the underlying vendor allows. Best-effort: return
+        None if no floor-plan vendor is configured/available, or if generation
+        fails - the pipeline must treat "no floor plan" as an expected, non-fatal
+        state (see app/providers/idealhouse.py), not a crash. Unlike
+        generate_materials, there is deliberately NO never-empty fallback here -
+        a fabricated floor-plan image would be actively misleading in a way a
+        labeled price estimate isn't.
+        """
+        ...
+
+    @abstractmethod
+    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
+        """Edit/render an exterior or interior concept visualization from a plot
+        photo (or floor plan, once a vendor is wired in) per the prompt. Returns
+        PNG bytes. NOT best-effort - mirrors generate_image()'s treatment in the
+        room-redesign pipeline: this is the core paid deliverable of the house
+        feature, so a failure here should fail the whole house-project rather
+        than degrade silently.
+        """
+        ...

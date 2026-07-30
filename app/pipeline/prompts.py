@@ -153,7 +153,7 @@ def build_prompt(
       4. Tier renovation instructions, derived from TIER_SPECS in the same
          impact-per-dollar order the methodology itself uses (paint -> flooring ->
          lighting -> ceiling -> feature wall -> materials/palette -> density -> decor).
-      4b. structure_reminder, if the tier has one (currently premium only) - restated
+      4b. structure_reminder, if the tier has one (currently premium and mid) - restated
          AFTER the material/lighting instructions rather than only up in step 2,
          specifically to counteract vivid tier vocabulary (marble/brass/etc.) that's
          strong enough to pull the model toward a hallucinated generic room.

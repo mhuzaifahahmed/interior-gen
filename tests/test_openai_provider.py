@@ -72,11 +72,14 @@ def test_generate_image_always_sends_input_fidelity_explicitly(monkeypatch):
     assert captured["input_fidelity"] == "low"
 
 
-def test_generate_image_uses_high_fidelity_for_premium_tier(monkeypatch):
+def test_generate_image_uses_high_fidelity_for_premium_and_mid_tiers(monkeypatch):
     # Regression guard: premium's vivid luxury vocabulary was observed pulling
     # gpt-image-1 toward a hallucinated generic room at the default "low"
-    # fidelity, even with the structural-lock text present in the prompt. Premium
-    # must get "high" fidelity regardless of the configured default.
+    # fidelity, even with the structural-lock text present in the prompt. Mid
+    # showed the same failure shape (camera angle/geometry drift) even after
+    # already having its own prompt-level structure_reminder fix - confirming
+    # it needed the fidelity escalation too, not more prompt tuning. Both must
+    # get "high" fidelity regardless of the configured default.
     captured = {}
 
     def fake_post(url, headers=None, data=None, files=None, timeout=None):
@@ -86,13 +89,13 @@ def test_generate_image_uses_high_fidelity_for_premium_tier(monkeypatch):
     monkeypatch.setattr(openai_module.httpx, "post", fake_post)
     monkeypatch.setattr(openai_module.settings, "openai_image_input_fidelity", "low")
 
-    OpenAIImageProvider().generate_image(b"input-bytes", "prompt", tier="premium")
-
-    assert captured["input_fidelity"] == "high"
+    for tier in ("premium", "mid"):
+        OpenAIImageProvider().generate_image(b"input-bytes", "prompt", tier=tier)
+        assert captured["input_fidelity"] == "high"
 
 
 def test_generate_image_uses_configured_fidelity_for_other_tiers(monkeypatch):
-    # Economical/mid should NOT pay the high-fidelity cost - only the tier that
+    # Economical should NOT pay the high-fidelity cost - only tiers that
     # actually showed the drift should.
     captured = {}
 
@@ -103,7 +106,7 @@ def test_generate_image_uses_configured_fidelity_for_other_tiers(monkeypatch):
     monkeypatch.setattr(openai_module.httpx, "post", fake_post)
     monkeypatch.setattr(openai_module.settings, "openai_image_input_fidelity", "low")
 
-    for tier in ("economical", "mid", None):
+    for tier in ("economical", None):
         OpenAIImageProvider().generate_image(b"input-bytes", "prompt", tier=tier)
         assert captured["input_fidelity"] == "low"
 
@@ -123,6 +126,30 @@ def test_generate_image_sends_prompt_unmodified(monkeypatch):
     OpenAIImageProvider().generate_image(b"input-bytes", "budget renovation. Do not include: chandelier.")
 
     assert captured["prompt"] == "budget renovation. Do not include: chandelier."
+
+
+def test_generate_house_render_shares_the_edit_call_shape(monkeypatch):
+    # generate_house_render is its own public method (not a reuse of
+    # generate_image directly) so the house feature's params never get
+    # tangled with room-redesign's tier semantics, but shares the same
+    # underlying request shape via the private _edit_image helper.
+    captured = {}
+
+    def fake_post(url, headers=None, data=None, files=None, timeout=None):
+        captured["prompt"] = data["prompt"]
+        captured["input_fidelity"] = data["input_fidelity"]
+        assert "image" in files
+        return FakeResponse(json_data={"data": [{"b64_json": base64.b64encode(b"render-bytes").decode()}]})
+
+    monkeypatch.setattr(openai_module.httpx, "post", fake_post)
+    monkeypatch.setattr(openai_module.settings, "openai_house_input_fidelity", "high")
+
+    result = OpenAIImageProvider().generate_house_render(b"plot-bytes", "a modern house concept render")
+
+    assert result == b"render-bytes"
+    assert captured["prompt"] == "a modern house concept render"
+    # Uses its own dedicated setting, not the room-redesign one.
+    assert captured["input_fidelity"] == "high"
 
 
 def test_generate_image_unexpected_response_shape_raises(monkeypatch):

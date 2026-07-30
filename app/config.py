@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     openai_image_quality: str = "low"
     openai_image_input_fidelity: str = "low"
 
+    # "Build a House" render fidelity - kept separate from
+    # openai_image_input_fidelity above (which the room-redesign Economical
+    # tier also reads) so raising the house render's fidelity doesn't silently
+    # raise Economical's cost/fidelity too.
+    openai_house_input_fidelity: str = "high"
+
     storage_backend: str = "local"
     local_storage_dir: str = "data/storage"
 

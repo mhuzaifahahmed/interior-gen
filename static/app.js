@@ -37,6 +37,71 @@ const materialsModalTitle = document.getElementById("materials-modal-title");
 const materialsModalBody = document.getElementById("materials-modal-body");
 const materialsModalClose = document.getElementById("materials-modal-close");
 
+/* ---------- "Build a House" tab DOM refs ---------- */
+
+const tabBtnHome = document.getElementById("tab-btn-home");
+const tabBtnRoom = document.getElementById("tab-btn-room");
+const tabBtnHouse = document.getElementById("tab-btn-house");
+const homeTabPanel = document.getElementById("home-tab-panel");
+const roomTabPanel = document.getElementById("room-tab-panel");
+const houseTabPanel = document.getElementById("house-tab-panel");
+const homeCtaBtn = document.getElementById("home-cta-btn");
+
+const houseUploadView = document.getElementById("house-upload-view");
+const houseForm = document.getElementById("house-upload-form");
+const houseFileInput = document.getElementById("house-file-input");
+const houseDropzone = document.getElementById("house-dropzone");
+const houseDropzoneEmpty = document.getElementById("house-dropzone-empty");
+const houseDropzonePreview = document.getElementById("house-dropzone-preview");
+const housePreviewImg = document.getElementById("house-preview-img");
+const housePreviewFilename = document.getElementById("house-preview-filename");
+const houseGenerateBtn = document.getElementById("house-generate-btn");
+const houseRemovePhotoBtn = document.getElementById("house-remove-photo-btn");
+const houseLengthInput = document.getElementById("house-length");
+const houseWidthInput = document.getElementById("house-width");
+const houseUnitInput = document.getElementById("house-unit");
+const housePromptInput = document.getElementById("house-prompt");
+
+const houseProgressCard = document.getElementById("house-progress-card");
+const houseProgressMessageEl = document.getElementById("house-progress-message");
+const houseProgressSubtitleEl = document.getElementById("house-progress-subtitle");
+const houseProgressBarFill = document.getElementById("house-progress-bar-fill");
+const houseProgressStepperEl = document.getElementById("house-stage-stepper");
+
+const houseErrorCard = document.getElementById("house-error-card");
+const houseErrorDetail = document.getElementById("house-error-detail");
+const houseRetryBtn = document.getElementById("house-retry-btn");
+
+const houseResultsSection = document.getElementById("house-results");
+const plotDescriptionEl = document.getElementById("plot-description");
+const houseResultsGrid = document.getElementById("house-results-grid");
+const houseStartOverBtn = document.getElementById("house-start-over-btn");
+
+/* ---------- Tab switching ---------- */
+/* Three panels sharing one page (Home / Room Redesign / Build a House) -
+   switching tabs only toggles which top-level panel is visible, it doesn't
+   touch either flow's own internal state machine (showState()/showHouseState()
+   below), so leaving mid-progress on one tab and coming back to it later
+   still shows the right thing. */
+
+function switchTab(tab) {
+  const isHome = tab === "home";
+  const isHouse = tab === "house";
+  const isRoom = !isHome && !isHouse;
+  homeTabPanel.hidden = !isHome;
+  roomTabPanel.hidden = !isRoom;
+  houseTabPanel.hidden = !isHouse;
+  tabBtnHome.classList.toggle("is-active", isHome);
+  tabBtnRoom.classList.toggle("is-active", isRoom);
+  tabBtnHouse.classList.toggle("is-active", isHouse);
+}
+
+tabBtnHome.addEventListener("click", () => switchTab("home"));
+tabBtnRoom.addEventListener("click", () => switchTab("room"));
+tabBtnHouse.addEventListener("click", () => switchTab("house"));
+
+homeCtaBtn.addEventListener("click", () => switchTab("room"));
+
 const TIERS = [
   { key: "original", label: "Original", desc: "Your uploaded room." },
   { key: "economical", label: "Economical", desc: "Fresh paint and clean practical finishes." },
@@ -537,6 +602,312 @@ function showState(state) {
   progressCard.hidden = state !== "progress";
   errorCard.hidden = state !== "error";
   resultsSection.hidden = state !== "results";
+}
+
+/* ================================================================
+   "Build a House" tab - a second, independent flow alongside the
+   room-redesign one above. Mirrors its patterns (file selection,
+   real-signal-driven progress stepper, poll loop, results-grid with
+   download buttons) at a smaller scale (3 stages, one deliverable
+   image, no materials panel) rather than inventing a new architecture.
+   ================================================================ */
+
+/* ---------- File selection ---------- */
+
+let houseSelectedFile = null;
+
+// Generate Concept must stay disabled until a plot photo AND both dimensions
+// are present - a photo alone isn't enough for the render prompt to carry
+// real length/width context.
+function updateHouseGenerateBtnState() {
+  houseGenerateBtn.disabled = !(
+    houseSelectedFile &&
+    houseLengthInput.value.trim() &&
+    houseWidthInput.value.trim()
+  );
+}
+
+function setHouseSelectedFile(file) {
+  if (!file) return;
+  houseSelectedFile = file;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    housePreviewImg.src = reader.result;
+    housePreviewFilename.textContent = file.name;
+    houseDropzoneEmpty.hidden = true;
+    houseDropzonePreview.hidden = false;
+    updateHouseGenerateBtnState();
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearHouseSelectedFile() {
+  houseSelectedFile = null;
+  houseFileInput.value = "";
+  updateHouseGenerateBtnState();
+  houseDropzoneEmpty.hidden = false;
+  houseDropzonePreview.hidden = true;
+}
+
+houseFileInput.addEventListener("change", () => setHouseSelectedFile(houseFileInput.files[0]));
+houseLengthInput.addEventListener("input", updateHouseGenerateBtnState);
+houseWidthInput.addEventListener("input", updateHouseGenerateBtnState);
+
+houseRemovePhotoBtn.addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  clearHouseSelectedFile();
+});
+
+["dragenter", "dragover"].forEach((evt) =>
+  houseDropzone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    houseDropzone.classList.add("is-dragover");
+  })
+);
+
+["dragleave", "drop"].forEach((evt) =>
+  houseDropzone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    houseDropzone.classList.remove("is-dragover");
+  })
+);
+
+houseDropzone.addEventListener("drop", (e) => {
+  const file = e.dataTransfer.files[0];
+  if (file) setHouseSelectedFile(file);
+});
+
+/* ---------- Submit ---------- */
+
+houseForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!houseSelectedFile) return;
+
+  houseGenerateBtn.disabled = true; // belt-and-suspenders against double-submit
+
+  showHouseState("progress");
+  startHouseProgress();
+
+  const formData = new FormData();
+  formData.append("file", houseSelectedFile);
+  if (houseLengthInput.value) formData.append("length", houseLengthInput.value);
+  if (houseWidthInput.value) formData.append("width", houseWidthInput.value);
+  formData.append("unit", houseUnitInput.value);
+  formData.append("prompt", housePromptInput.value.trim());
+
+  let houseProjectId;
+  try {
+    const res = await fetch("/api/house-projects", { method: "POST", body: formData });
+    if (!res.ok) throw new Error(await res.text());
+    ({ house_project_id: houseProjectId } = await res.json());
+  } catch (err) {
+    showHouseError(err.message);
+    return;
+  }
+
+  pollHouseProject(houseProjectId);
+});
+
+/* ---------- Progress engine ---------- */
+/* Same real-signal-driven philosophy as the room flow's stepper (see above),
+   scaled down to this feature's actual shape: 3 stages, no per-item reveals,
+   since there's exactly one deliverable render (no 3-tier concept previews)
+   and floor-plan generation is currently a stub (see app/providers/
+   idealhouse.py) so there's nothing to preview mid-flight there either. */
+
+const HOUSE_STAGES = [
+  { label: "Analyzing your plot…" },
+  { label: "Generating your concept render…" },
+  { label: "Finalizing…" },
+];
+
+let houseCurrentStageIndex = -1;
+
+function renderHouseStageStepper() {
+  houseProgressStepperEl.innerHTML = HOUSE_STAGES.map(
+    (stage) => `
+      <li class="stage-item">
+        <span class="stage-icon"></span>
+        <span class="stage-label">${stage.label.replace("…", "")}</span>
+      </li>
+    `
+  ).join("");
+}
+
+function setHouseStepperState(activeIndex, allDone) {
+  houseProgressStepperEl.querySelectorAll(".stage-item").forEach((el, i) => {
+    el.classList.toggle("is-done", allDone || i < activeIndex);
+    el.classList.toggle("is-active", !allDone && i === activeIndex);
+  });
+}
+
+function setHouseStageLabel(index) {
+  houseProgressMessageEl.classList.add("is-changing");
+  setTimeout(() => {
+    houseProgressMessageEl.textContent = HOUSE_STAGES[index].label;
+    houseProgressMessageEl.classList.remove("is-changing");
+  }, 220);
+}
+
+/* Derives which of the 3 stages we're in from REAL data on every poll
+   response (app/main.py's get_house_project), not a timer - plot_description
+   and images.render are both committed to the DB (and so returned here) as
+   soon as each step actually finishes, well before the overall project is
+   "done". */
+function deriveHouseStageIndex(data) {
+  if (data.status === "done" || (data.images && data.images.render)) return HOUSE_STAGES.length - 1;
+  if (data.plot_description || data.floor_plan_status !== "idle") return 1;
+  return 0;
+}
+
+function applyHousePollUpdate(data) {
+  const derived = deriveHouseStageIndex(data);
+  if (derived > houseCurrentStageIndex) {
+    houseCurrentStageIndex = derived;
+    setHouseStageLabel(Math.min(houseCurrentStageIndex, HOUSE_STAGES.length - 1));
+    setHouseStepperState(houseCurrentStageIndex, false);
+    houseProgressBarFill.style.width = `${(houseCurrentStageIndex / HOUSE_STAGES.length) * 100}%`;
+  }
+}
+
+function startHouseProgress() {
+  renderHouseStageStepper();
+  houseCurrentStageIndex = 0;
+
+  houseProgressBarFill.style.width = "0%";
+  setHouseStepperState(0, false);
+  houseProgressMessageEl.textContent = HOUSE_STAGES[0].label;
+  houseProgressSubtitleEl.textContent = "";
+}
+
+function stopHouseProgress() {
+  houseProgressMessageEl.classList.remove("is-changing");
+}
+
+function finishHouseProgress(onDone) {
+  setHouseStepperState(HOUSE_STAGES.length, true);
+  houseProgressBarFill.style.width = "100%";
+  stopHouseProgress();
+  setTimeout(onDone, 350);
+}
+
+async function pollHouseProject(houseProjectId) {
+  let data;
+  try {
+    const res = await fetch(`/api/house-projects/${houseProjectId}`);
+    data = await res.json();
+  } catch (err) {
+    showHouseError("Lost connection while checking progress. " + err.message);
+    return;
+  }
+
+  if (data.status === "failed") {
+    showHouseError(data.error || "Unknown error during generation.");
+    return;
+  }
+
+  applyHousePollUpdate(data);
+
+  if (data.status === "done") {
+    finishHouseProgress(() => {
+      renderHouseResults(data);
+      showHouseState("results");
+    });
+    return;
+  }
+
+  setTimeout(() => pollHouseProject(houseProjectId), 3000);
+}
+
+/* ---------- Results ---------- */
+
+const HOUSE_RESULT_TIERS = [
+  { key: "plot", label: "Original Plot", desc: "Your uploaded plot photo." },
+  { key: "render", label: "Concept Render", desc: "AI-generated exterior/interior concept." },
+];
+
+function renderHouseResults(data) {
+  plotDescriptionEl.textContent = data.plot_description ? `"${data.plot_description}"` : "";
+  houseResultsGrid.innerHTML = "";
+
+  for (const tier of HOUSE_RESULT_TIERS) {
+    const url = data.images[tier.key];
+    if (!url) continue;
+
+    const card = document.createElement("div");
+    card.className = "result-card";
+    card.innerHTML = `
+      <div class="img-wrap">
+        <img src="${url}" alt="${tier.label}" loading="lazy" />
+        <a class="download-btn" href="${url}" download="${tier.key}.png" aria-label="Download ${tier.label}" title="Download image">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
+      <div class="caption">
+        <p class="tier-name">${tier.label}</p>
+        <p class="tier-desc">${tier.desc}</p>
+      </div>
+    `;
+    card.addEventListener("click", () => openLightbox(url, tier.label));
+    card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
+    houseResultsGrid.appendChild(card);
+  }
+
+  // Floor-plan generation is deferred (no vendor wired in yet - see
+  // app/providers/idealhouse.py) - deliberately show NO floor-plan card at all
+  // rather than a broken/empty placeholder. Once a vendor is wired in, this is
+  // where a floor-plan card should be added, labeled "Concept Layout - not a
+  // precise blueprint" (no image-gen API guarantees dimensional accuracy).
+  if (data.floor_plan_status === "done" && data.images.floor_plan) {
+    const card = document.createElement("div");
+    card.className = "result-card";
+    card.innerHTML = `
+      <div class="img-wrap">
+        <img src="${data.images.floor_plan}" alt="Concept Layout" loading="lazy" />
+        <a class="download-btn" href="${data.images.floor_plan}" download="floor_plan.png" aria-label="Download floor plan" title="Download image">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
+      <div class="caption">
+        <p class="tier-name">Concept Layout</p>
+        <p class="tier-desc">Not a precise blueprint - no image-gen API guarantees dimensional accuracy.</p>
+      </div>
+    `;
+    card.addEventListener("click", () => openLightbox(data.images.floor_plan, "Concept Layout"));
+    card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
+    houseResultsGrid.appendChild(card);
+  }
+}
+
+/* ---------- Error / retry ---------- */
+
+function showHouseError(message) {
+  stopHouseProgress();
+  houseErrorDetail.textContent = message;
+  showHouseState("error");
+}
+
+function resetToHouseUpload() {
+  stopHouseProgress();
+  clearHouseSelectedFile();
+  houseLengthInput.value = "";
+  houseWidthInput.value = "";
+  housePromptInput.value = "";
+  showHouseState("upload");
+}
+
+houseRetryBtn.addEventListener("click", resetToHouseUpload);
+houseStartOverBtn.addEventListener("click", resetToHouseUpload);
+
+/* ---------- State machine (which section is visible, within this tab) ---------- */
+
+function showHouseState(state) {
+  houseUploadView.hidden = state !== "upload";
+  houseProgressCard.hidden = state !== "progress";
+  houseErrorCard.hidden = state !== "error";
+  houseResultsSection.hidden = state !== "results";
 }
 
 /* ---------- Scroll reveal ---------- */

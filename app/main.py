@@ -9,11 +9,18 @@ from sqlmodel import Session
 
 from app.config import settings
 from app.db import get_session, init_db
-from app.models import Project
+from app.models import HouseProject, Project
 from app.pipeline.generate import TIERS, run_pipeline
+from app.pipeline.generate_house import run_house_pipeline
+from app.pipeline.house_prompts import USER_PROMPT_MAX_CHARS
 from app.pipeline.prompts import USER_NOTES_MAX_CHARS
 from app.providers import get_provider
-from app.schemas import ProjectCreateResponse, ProjectStatusResponse
+from app.schemas import (
+    HouseProjectCreateResponse,
+    HouseProjectStatusResponse,
+    ProjectCreateResponse,
+    ProjectStatusResponse,
+)
 from app.storage import get_storage
 
 logging.basicConfig(level=logging.INFO)
@@ -127,4 +134,77 @@ def get_project(project_id: str, session: Session = Depends(get_session)):
         images=images,
         materials=materials,
         materials_status=project.materials_status,
+    )
+
+
+@app.post("/api/house-projects", response_model=HouseProjectCreateResponse)
+async def create_house_project(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    length: float | None = Form(None),
+    width: float | None = Form(None),
+    unit: str = Form("m"),
+    prompt: str = Form(""),
+    session: Session = Depends(get_session),
+):
+    """Mirrors create_project()'s validate -> create-row -> commit ->
+    upload-original -> commit -> background_tasks.add_task shape. length/width
+    are optional (a plot photo alone is still a valid, if less useful,
+    submission) - dimensions.json degrades to an empty dict rather than
+    rejecting the request.
+    """
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(400, f"unsupported file type: {file.content_type}")
+
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "file too large (max 15MB)")
+
+    # Defensive re-truncation, same reasoning as style_notes/city above - the
+    # frontend's <input maxlength> is trivially bypassable by a direct API call.
+    prompt = prompt.strip()[:USER_PROMPT_MAX_CHARS] or None
+
+    dimensions: dict = {}
+    if length and width:
+        dimensions = {"length": length, "width": width, "unit": unit.strip()[:10]}
+
+    storage = get_storage()
+    provider = get_provider()
+
+    house_project = HouseProject(status="queued", dimensions_json=json.dumps(dimensions), prompt=prompt)
+    session.add(house_project)
+    session.commit()
+    session.refresh(house_project)
+
+    plot_image_key = f"local.input/{house_project.id}/plot.png"
+    storage.put(plot_image_key, data, content_type=file.content_type)
+    house_project.plot_image_key = plot_image_key
+    session.add(house_project)
+    session.commit()
+
+    background_tasks.add_task(run_house_pipeline, house_project.id, provider, storage, dimensions, prompt)
+
+    return HouseProjectCreateResponse(house_project_id=house_project.id)
+
+
+@app.get("/api/house-projects/{house_project_id}", response_model=HouseProjectStatusResponse)
+def get_house_project(house_project_id: str, session: Session = Depends(get_session)):
+    house_project = session.get(HouseProject, house_project_id)
+    if house_project is None:
+        raise HTTPException(404, "house project not found")
+
+    storage = get_storage()
+    images: dict[str, str | None] = {
+        "plot": storage.url(house_project.plot_image_key) if house_project.plot_image_key else None,
+        "render": storage.url(house_project.render_key) if house_project.render_key else None,
+        "floor_plan": storage.url(house_project.floor_plan_key) if house_project.floor_plan_key else None,
+    }
+
+    return HouseProjectStatusResponse(
+        house_project_id=house_project.id,
+        status=house_project.status,
+        error=house_project.error,
+        plot_description=house_project.plot_description,
+        images=images,
+        floor_plan_status=house_project.floor_plan_status,
     )

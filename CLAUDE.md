@@ -8,7 +8,9 @@ B2B AI interior-design tool. A user uploads a room photo; the backend returns **
 redesigns** — **Economical / Mid / Premium** — that preserve the real room structure (walls, windows,
 doors, layout, camera angle). Phase 1 (current) is the backend pipeline + a bare-bones localhost frontend
 that reliably produces and saves those 3 tiers. Materials-list + city-pricing (originally deferred, spec
-preserved in the plan §9) is now **built** — see "Materials & pricing feature" below.
+preserved in the plan §9) is now **built** — see "Materials & pricing feature" below. A second, independent
+**"Build a House" tab** (plot photo + dimensions → concept render) also now exists — see "Build a House
+feature" below.
 
 Full plan: `C:\Users\User\.claude\plans\act-as-senior-technical-purrfect-globe.md`.
 
@@ -178,13 +180,89 @@ screen** (not after — see below).
   `create_all()` for exactly this reason - `create_all()` only creates missing *tables*, never adds
   columns to an existing one, so an existing dev DB from before this feature would 500 with "no such
   column" without it.
-- **Frontend rendering** (`static/app.js`'s `renderMaterialsSection()`): each tier card gets a native
-  `<details>/<summary>` "View materials & cost" panel (zero extra JS for the expand/collapse) with an
-  itemized table (name/spec, price + an "Estimate" badge when `is_estimate`, a source link or `—`) and a
-  total. By the time results render, `run_pipeline()` has already joined the materials futures, so
-  `materials_status` should already be settled (`done` or `skipped`) - the `running` UI state exists
-  defensively but isn't the normal path. Clicks inside the panel `stopPropagation()` so they don't also
-  trigger the card's click-to-open-lightbox handler.
+- **Frontend rendering** (`static/app.js`'s `renderMaterialsSection()`): each tier card gets a
+  "View materials & cost" button that opens a shared popup modal (`#materials-modal-overlay`, styled like
+  the image lightbox) with an itemized table (name/spec, price + an "Estimate" badge when `is_estimate`, a
+  source link or `—`) and a total - not an in-card `<details>` dropdown (an earlier design), which clipped/
+  wrapped text awkwardly in the narrow card layout. By the time results render, `run_pipeline()` has
+  already joined the materials futures, so `materials_status` should already be settled (`done` or
+  `skipped`) - the `running` UI state exists defensively but isn't the normal path. Clicks on the button
+  `stopPropagation()` so they don't also trigger the card's click-to-open-lightbox handler.
+
+## Build a House feature
+
+A second, independent tab (`static/index.html`'s tab bar) alongside room-redesign: upload a plot/land
+photo + length×width dimensions + a free-text prompt (e.g. "2 floors, 3 bedrooms, modern style") → get
+back a plot analysis and an AI-generated exterior/interior concept render. It has its own data model, own
+pipeline module, and its own endpoints — deliberately not folded into the room-redesign `Project`/
+`run_pipeline`/`/api/projects` path, since the fields and stages genuinely differ.
+
+- **Data model**: `HouseProject` (`app/models.py`) — its own table, not a reuse of `Project`. Fields:
+  `plot_image_key`, `dimensions_json` (`{"length", "width", "unit"}` as JSON-as-text, same convention as
+  `materials_json`), `prompt`, `plot_description`, `floor_plan_key`/`floor_plan_status`, `render_key`,
+  `meta_json`. New table → needed no entry in `db.py`'s `_migrate_missing_columns()` (that only covers
+  adding columns to an *existing* table; `create_all()` creates new tables on its own).
+- **Endpoints** (`app/main.py`): `POST /api/house-projects` (multipart plot photo + `length`/`width`/
+  `unit`/`prompt` form fields) and `GET /api/house-projects/{id}`, mirroring `create_project`/`get_project`'s
+  exact validate → store → background-task → poll shape.
+- **Pipeline** (`app/pipeline/generate_house.py`'s `run_house_pipeline`, mirrors `run_pipeline`): (1)
+  best-effort `analyze_plot()` (Gemini vision, same call shape as `describe_room`) → `plot_description`;
+  (2) best-effort `generate_floor_plan()` — see "Floor-plan vendor" below, currently always a no-op; (3)
+  **non-best-effort** `generate_house_render()` (OpenAI `gpt-image-1` edit call) → `render_key` - a
+  failure here fails the whole house project, same treatment `generate_image` gets in the room pipeline,
+  since it's this feature's core paid deliverable. Prompts composed by `app/pipeline/house_prompts.py`'s
+  `build_house_prompt()` (dimensions + optional plot_description + optional truncated user prompt, capped
+  at `USER_PROMPT_MAX_CHARS`), following the same "natural-language edit paragraph, not keyword soup"
+  lesson learned for room-redesign prompts.
+- **Provider seam extension** (`app/providers/base.py`): 3 new abstract methods — `analyze_plot()` and
+  `generate_floor_plan()` are best-effort (degrade to `None`, same contract as `describe_room`);
+  `generate_house_render()` is not (mirrors `generate_image`). `GeminiProvider` implements `analyze_plot`
+  for real and `generate_house_render` by delegating to its existing `generate_image`; `generate_floor_plan`
+  always returns `None` (Gemini has no floor-plan capability - that vendor slot is
+  `app/providers/idealhouse.py`, composed in by `HybridProvider`, not this class).
+  `OpenAIImageProvider.generate_house_render()` shares its HTTP call shape with `generate_image()` via a
+  private `_edit_image()` helper, but stays its own public method so this feature's params never tangle
+  with room-redesign's tier/fidelity semantics.
+- **Floor-plan vendor: deliberately deferred, not forgotten.** The original spec called for a real 2D
+  floor-plan generation step (dimensions/prompt → floor plan image) before the render step, since general
+  image models don't reliably respect exact measurements. Two vendors were researched (docs read live, not
+  assumed) and both were rejected for v1:
+  - **ModelsLab's Floor Planning API** (`docs.modelslab.com/interior-api/floor-planning`) is the wrong tool
+    entirely - it's SD1.5-style img2img (`strength`/`guidance_scale` params) that takes an *existing
+    interior room photo* as input. No dimension parameters, no plot/land photo support at all.
+  - **ideal.house's Floor Plan API** (`ideal.house/api/docs/floor-plan-api`) is real and works
+    (`POST /api/v1/floorPlan/generate` → async poll `GET /api/v1/floorPlan/result?taskId=...`), but (a)
+    **no free tier** - $39 minimum for 1,000 credits, ~$0.39-0.78/generation, and (b) **cannot honor exact
+    dimensions or plot geometry** - it only accepts `bedrooms`/`bathrooms`/a coarse `grossArea` *range*
+    string (e.g. "100-120m²")/`extras`/a text `prompt`, plus an optional *floor-plan* reference image (not
+    a land photo). There's no way to feed in an exact length×width as a real geometric constraint.
+  - User decision: ship plot analysis + render only for v1; hold off on any floor-plan vendor until
+    evaluated directly. `app/providers/idealhouse.py` exists as the wired-but-inert vendor slot - its
+    `generate_floor_plan()` just logs "not configured" and returns `None`, and the pipeline treats that as
+    an expected, non-fatal state (`floor_plan_status="not_configured"`), not a failure.
+  - **To wire in a real vendor later**: implement the actual `httpx` create+poll calls inside
+    `app/providers/idealhouse.py` only (the docstring there records the exact request/response shapes
+    above) - no changes needed to `base.py`, `hybrid.py`, the pipeline, or the API layer, since the
+    interface and the "best-effort, None means unavailable" contract are already in place.
+  - **Also deferred, and dropped from scope**: corner-point/irregular-plot input. Neither vendor can use
+    plot geometry at all, so v1 only collects length×width - building corner-point UI now would be
+    misleading. Revisit only if a future vendor can actually consume geometry.
+- **"Concept Layout" labeling requirement**: whenever a real floor-plan vendor is wired in,
+  `renderHouseResults()` (`static/app.js`) must label that card **"Concept Layout — not a precise
+  blueprint"**, never anything implying dimensional accuracy - no current image-gen floor-plan API
+  guarantees exact measurements. The frontend already contains this exact label, gated on
+  `floor_plan_status === "done"`, so it's ready the moment a vendor makes that state reachable; if
+  `floor_plan_status` is anything else, no floor-plan card renders at all (not a broken placeholder).
+- **Frontend**: `static/index.html`'s tab bar (`#tab-bar`, `switchTab()` in `app.js`) toggles between the
+  room-redesign panel and the house panel independently - each keeps its own upload/progress/error/results
+  state machine (`showState()` for rooms, `showHouseState()` for the house tab), so switching tabs mid-flow
+  doesn't disturb the other tab's in-progress work. House progress uses the same stage-stepper CSS as
+  room-redesign but with only 3 stages (Analyzing plot / Generating render / Finalizing) and no
+  concept-preview cards, since there's one deliverable image this pass, not 3 tiers.
+- **Tests**: `tests/test_idealhouse.py`, `tests/test_house_prompts.py`, `tests/test_house_pipeline.py`,
+  `tests/test_house_api.py` (mirrors `test_api.py`'s pattern of mocking both `get_provider` and
+  `get_storage`), `tests/test_gemini_house.py`, plus a `generate_house_render` case added to
+  `tests/test_openai_provider.py`.
 
 ## Architecture (big picture)
 
@@ -286,9 +364,16 @@ Three deliberate seams keep the free/solo build swappable — respect them when 
    field is explicitly `"no false ceiling"` - it never touches that surface, which is why it's the one tier
    that correctly needs no reminder. Fix: gave Mid the same generic reminder text Premium already uses (not
    reworded for any specific room type - the trigger is "this tier reworks the ceiling," which threatens
-   depth in any room, not just hallways). Did **not** raise Mid to `input_fidelity="high"` - the free
-   prompt-level fix should be tried first, per the same reasoning as the cost trap above. `PROMPT_VERSION`
-   bumped to `v9`.
+   depth in any room, not just hallways). `PROMPT_VERSION` bumped to `v9`.
+
+   **Mid escalated to `input_fidelity="high"` too** (`HIGH_FIDELITY_TIERS` in `openai.py`, now
+   `{"premium", "mid"}`). The `v9` prompt-only fix above was tried first per the cost-trap reasoning - but
+   a later real generation showed the same failure shape recurring (camera angle/room geometry drifting)
+   even with both prompt-level protections already in place (`PRESERVE_STRUCTURE`'s explicit "do not
+   change the camera angle or perspective" line, plus Mid's own `structure_reminder`). Since the
+   text-level fix was already present and drift continued, that confirms a fidelity/anchoring-strength
+   issue rather than a prompt-wording gap - the same conclusion Premium's original fix was based on.
+   Economical has shown no such drift and stays on the cheap configured default.
 
 Async: FastAPI `BackgroundTasks` + client polling (no real queue yet — hardening-phase item). Each
 Project's `meta_json` carries `PROMPT_VERSION` so outputs are reproducible/defensible.
