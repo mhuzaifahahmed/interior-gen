@@ -3,7 +3,7 @@ import io
 from PIL import Image
 
 import app.providers.gemini as gemini_module
-from app.providers.gemini import GeminiProvider
+from app.providers.gemini import GeminiProvider, fallback_room_layout, parse_room_layout
 
 
 def _sample_image_bytes() -> bytes:
@@ -101,3 +101,86 @@ def test_generate_house_render_delegates_to_generate_image(monkeypatch):
 
     result = GeminiProvider().generate_house_render(_sample_image_bytes(), "a modern house render")
     assert result == b"gemini-render-bytes"
+
+
+def test_generate_room_layout_returns_parsed_json(monkeypatch):
+    class FakeResponse:
+        text = (
+            '{"floors": [{"floor_number": 1, "rooms": '
+            '[{"name": "Living Room", "area": 2}, {"name": "Kitchen", "area": 1}]}]}'
+        )
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    result = GeminiProvider().generate_room_layout({"length": 40, "width": 60, "unit": "ft"}, "modern style")
+    assert result == {
+        "floors": [
+            {
+                "floor_number": 1,
+                "rooms": [{"name": "Living Room", "area": 2.0}, {"name": "Kitchen", "area": 1.0}],
+            }
+        ]
+    }
+
+
+def test_generate_room_layout_falls_back_on_unparseable_response(monkeypatch):
+    class FakeResponse:
+        text = "not json at all"
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    result = GeminiProvider().generate_room_layout({"length": 40, "width": 60, "unit": "ft"}, "2 floors")
+    assert len(result["floors"]) == 2
+    assert all(floor["rooms"] for floor in result["floors"])
+
+
+def test_generate_room_layout_falls_back_on_exception(monkeypatch):
+    class FakeModels:
+        def generate_content(self, model, contents):
+            raise RuntimeError("network error")
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    result = GeminiProvider().generate_room_layout({"length": 40, "width": 60, "unit": "ft"}, "")
+    assert len(result["floors"]) == 1
+    assert result["floors"][0]["rooms"]
+
+
+def test_parse_room_layout_rejects_floor_with_no_rooms():
+    assert parse_room_layout('{"floors": [{"floor_number": 1, "rooms": []}]}') is None
+
+
+def test_parse_room_layout_rejects_malformed_json():
+    assert parse_room_layout("not json") is None
+
+
+def test_fallback_room_layout_defaults_to_one_floor():
+    result = fallback_room_layout({"length": 40, "width": 60, "unit": "ft"}, "modern style")
+    assert len(result["floors"]) == 1
+    assert result["floors"][0]["rooms"]
+
+
+def test_fallback_room_layout_parses_floor_count_from_prompt():
+    result = fallback_room_layout({"length": 40, "width": 60, "unit": "ft"}, "3 floors, luxury style")
+    assert len(result["floors"]) == 3
+    assert [f["floor_number"] for f in result["floors"]] == [1, 2, 3]

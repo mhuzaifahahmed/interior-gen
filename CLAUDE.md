@@ -200,29 +200,78 @@ pipeline module, and its own endpoints — deliberately not folded into the room
 - **Data model**: `HouseProject` (`app/models.py`) — its own table, not a reuse of `Project`. Fields:
   `plot_image_key`, `dimensions_json` (`{"length", "width", "unit"}` as JSON-as-text, same convention as
   `materials_json`), `prompt`, `plot_description`, `floor_plan_key`/`floor_plan_status`, `render_key`,
-  `meta_json`. New table → needed no entry in `db.py`'s `_migrate_missing_columns()` (that only covers
-  adding columns to an *existing* table; `create_all()` creates new tables on its own).
+  `room_layout_json`/`blueprint_keys_json`/`blueprint_status` (see "Free algorithmic blueprint step" below
+  - a separate thing from `floor_plan_key`/`floor_plan_status`, don't conflate them), `meta_json`. New table
+  → needed no entry in `db.py`'s `_migrate_missing_columns()` at first (that only covers adding columns to
+  an *existing* table; `create_all()` creates new tables on its own) - but the blueprint fields, added
+  later, DID need one, since by then `houseproject` was an existing table on dev machines. This surfaced a
+  real gap: `_migrate_missing_columns()` had been hardcoded to `PRAGMA table_info(project)` only, so it
+  silently never would have migrated `houseproject`. Fixed by generalizing it to `_NEW_COLUMNS_BY_TABLE`
+  (a `{table_name: [(column, ddl), ...]}` dict) instead of a single flat list - keep using this form for any
+  future new column on either table.
 - **Endpoints** (`app/main.py`): `POST /api/house-projects` (multipart plot photo + `length`/`width`/
   `unit`/`prompt` form fields) and `GET /api/house-projects/{id}`, mirroring `create_project`/`get_project`'s
   exact validate → store → background-task → poll shape.
 - **Pipeline** (`app/pipeline/generate_house.py`'s `run_house_pipeline`, mirrors `run_pipeline`): (1)
   best-effort `analyze_plot()` (Gemini vision, same call shape as `describe_room`) → `plot_description`;
   (2) best-effort `generate_floor_plan()` — see "Floor-plan vendor" below, currently always a no-op; (3)
+  best-effort **free algorithmic blueprint step** — see below, a separate stage from (2); (4)
   **non-best-effort** `generate_house_render()` (OpenAI `gpt-image-1` edit call) → `render_key` - a
   failure here fails the whole house project, same treatment `generate_image` gets in the room pipeline,
-  since it's this feature's core paid deliverable. Prompts composed by `app/pipeline/house_prompts.py`'s
-  `build_house_prompt()` (dimensions + optional plot_description + optional truncated user prompt, capped
-  at `USER_PROMPT_MAX_CHARS`), following the same "natural-language edit paragraph, not keyword soup"
-  lesson learned for room-redesign prompts.
-- **Provider seam extension** (`app/providers/base.py`): 3 new abstract methods — `analyze_plot()` and
+  since it's this feature's core paid deliverable. Its image input is the ground floor's drawn blueprint
+  when the blueprint step succeeded, falling back to the raw plot photo otherwise - see below. Prompts
+  composed by `app/pipeline/house_prompts.py`'s `build_house_prompt()` (dimensions + optional
+  plot_description + optional room_layout summary + optional truncated user prompt, capped at
+  `USER_PROMPT_MAX_CHARS`), following the same "natural-language edit paragraph, not keyword soup" lesson
+  learned for room-redesign prompts. `HOUSE_PROMPT_VERSION` is `v2` (bumped for this stage's addition).
+- **Provider seam extension** (`app/providers/base.py`): 4 new abstract methods — `analyze_plot()` and
   `generate_floor_plan()` are best-effort (degrade to `None`, same contract as `describe_room`);
-  `generate_house_render()` is not (mirrors `generate_image`). `GeminiProvider` implements `analyze_plot`
-  for real and `generate_house_render` by delegating to its existing `generate_image`; `generate_floor_plan`
-  always returns `None` (Gemini has no floor-plan capability - that vendor slot is
-  `app/providers/idealhouse.py`, composed in by `HybridProvider`, not this class).
-  `OpenAIImageProvider.generate_house_render()` shares its HTTP call shape with `generate_image()` via a
-  private `_edit_image()` helper, but stays its own public method so this feature's params never tangle
-  with room-redesign's tier/fidelity semantics.
+  `generate_house_render()` is not (mirrors `generate_image`); `generate_room_layout()` is never-empty/
+  never-raising (same contract category as `generate_materials`, not `analyze_plot`). `GeminiProvider`
+  implements `analyze_plot` and `generate_room_layout` for real, and `generate_house_render` by delegating
+  to its existing `generate_image`; `generate_floor_plan` always returns `None` (Gemini has no floor-plan
+  capability - that vendor slot is `app/providers/idealhouse.py`, composed in by `HybridProvider`, not this
+  class). `OpenAIImageProvider.generate_house_render()` shares its HTTP call shape with `generate_image()`
+  via a private `_edit_image()` helper, but stays its own public method so this feature's params never
+  tangle with room-redesign's tier/fidelity semantics - it uses its own dedicated
+  `OPENAI_HOUSE_INPUT_FIDELITY` setting (default `high`), deliberately separate from
+  `OPENAI_IMAGE_INPUT_FIDELITY` (which the room-redesign Economical tier also reads), so raising the house
+  render's fidelity never silently raises Economical's cost too.
+- **Free algorithmic blueprint step** (`app/pipeline/floor_layout.py` + `app/pipeline/blueprint_svg.py`,
+  wired into `run_house_pipeline` as its own stage): NOT the same thing as the `floor_plan_key`/
+  `floor_plan_status`/`generate_floor_plan()`/`idealhouse.py` slot above, which stays reserved for a future
+  *real, paid* floor-plan vendor and is untouched by this feature. This is a free, in-house alternative that
+  solves the same underlying problem (image models can't honor exact dimensions) a different way: instead
+  of asking an image model to draw a floor plan, `GeminiProvider.generate_room_layout()` (free text call,
+  same quota as `analyze_plot`) returns a structured room list per floor - room names + a relative *area
+  weight* per room, not literal square footage - and floor count guessed from the user's free-text prompt
+  (default 1 floor). `app/pipeline/floor_layout.py`'s `layout_floor()` is a **pure, deterministic** function
+  (no I/O, nothing to mock in tests) that slices the plot into non-overlapping room rectangles via simple
+  recursive "slice and dice" (cutting the box along its longer side, at whichever split keeps the two
+  resulting room groups' weights closest to balanced) - it always rescales to exactly fill the plot's real
+  length × width, so it doesn't matter whether Gemini's area numbers are realistic, only their relative
+  proportions. `app/pipeline/blueprint_svg.py`'s `render_floor_blueprint()` draws each floor's rectangles to
+  a labeled PNG via **Pillow** (`PIL.ImageDraw`) - despite the module's name (kept for the concept it
+  represents), it deliberately does NOT use real SVG/`cairosvg`: Pillow is already a dependency, draws
+  straight to PNG (what both the frontend `<img>` and the `gpt-image-1` edit call need), and this avoids a
+  new native-library dependency with a real install-risk on Windows, for a browser-crispness benefit not
+  needed since there's no client-side interactivity in this version. Same reasoning ruled out Konva.js/
+  Fabric.js/HTML Canvas entirely - those are client-side interactive JS libraries, no fit for a Python
+  backend producing a static file. Both `generate_room_layout()` (via `fallback_room_layout()`, floor count
+  guessed from a "N floor(s)" regex on the prompt, generic room list per floor) and `parse_room_layout()`
+  (never `{}`, returns `None` on any structural problem to trigger that fallback) follow the exact
+  never-empty/parse-then-fallback shape already established by `generate_materials`/`parse_materials`/
+  `fallback_materials` - reuse that shape for any future structured-JSON Gemini call. The whole blueprint
+  stage is wrapped in a local `try/except` in `run_house_pipeline` (best-effort, like `analyze_plot`/
+  `generate_floor_plan`) - a bug in this newer code must not take down the render step; on failure,
+  `blueprint_status="failed"` and the render step transparently falls back to the raw plot photo, with
+  `build_house_prompt()`'s `using_blueprint_image` flag keeping the prompt's opening sentence accurate
+  either way. Only the **ground floor's** (index 0) blueprint image is sent to `gpt-image-1` as the visual
+  reference (confirmed design decision - it drives exterior massing most directly); upper floors are
+  described in the text prompt only via `build_house_prompt()`'s `room_layout` argument, not shown as an
+  image. Adjacency between rooms (e.g. "bathroom near bedroom") is deliberately out of scope for v1 - only
+  area-based slicing - to ship the simpler algorithm first; a future upgrade could have Gemini also return
+  adjacency hints for `layout_floor()` to try to honor.
 - **Floor-plan vendor: deliberately deferred, not forgotten.** The original spec called for a real 2D
   floor-plan generation step (dimensions/prompt → floor plan image) before the render step, since general
   image models don't reliably respect exact measurements. Two vendors were researched (docs read live, not
@@ -247,22 +296,28 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   - **Also deferred, and dropped from scope**: corner-point/irregular-plot input. Neither vendor can use
     plot geometry at all, so v1 only collects length×width - building corner-point UI now would be
     misleading. Revisit only if a future vendor can actually consume geometry.
-- **"Concept Layout" labeling requirement**: whenever a real floor-plan vendor is wired in,
-  `renderHouseResults()` (`static/app.js`) must label that card **"Concept Layout — not a precise
-  blueprint"**, never anything implying dimensional accuracy - no current image-gen floor-plan API
-  guarantees exact measurements. The frontend already contains this exact label, gated on
-  `floor_plan_status === "done"`, so it's ready the moment a vendor makes that state reachable; if
-  `floor_plan_status` is anything else, no floor-plan card renders at all (not a broken placeholder).
+- **"Concept Layout" labeling requirement**: whenever a real floor-plan vendor is wired in (the
+  `floor_plan_key`/`floor_plan_status`/`idealhouse.py` slot, still inert), `renderHouseResults()`
+  (`static/app.js`) must label that card **"Concept Layout — not a precise blueprint"**, never anything
+  implying dimensional accuracy - no current image-gen floor-plan API guarantees exact measurements. The
+  frontend already contains this exact label, gated on `floor_plan_status === "done"`, so it's ready the
+  moment a vendor makes that state reachable; if `floor_plan_status` is anything else, no floor-plan card
+  renders at all (not a broken placeholder). This is deliberately DIFFERENT from the free algorithmic
+  blueprint cards (gated on `blueprint_status === "done"` and `blueprint_urls`), labeled "Floor N Layout"
+  with a non-disclaiming description - those genuinely are dimensionally accurate (computed directly from
+  the stated plot dimensions, not guessed by an image model), so they earn a different label. Don't merge
+  these two labeling paths even though they look superficially similar.
 - **Frontend**: `static/index.html`'s tab bar (`#tab-bar`, `switchTab()` in `app.js`) toggles between the
   room-redesign panel and the house panel independently - each keeps its own upload/progress/error/results
   state machine (`showState()` for rooms, `showHouseState()` for the house tab), so switching tabs mid-flow
   doesn't disturb the other tab's in-progress work. House progress uses the same stage-stepper CSS as
-  room-redesign but with only 3 stages (Analyzing plot / Generating render / Finalizing) and no
-  concept-preview cards, since there's one deliverable image this pass, not 3 tiers.
+  room-redesign but with 4 stages (Analyzing plot / Drawing floor plan / Generating render / Finalizing) and
+  no concept-preview cards, since there's one deliverable render this pass, not 3 tiers.
 - **Tests**: `tests/test_idealhouse.py`, `tests/test_house_prompts.py`, `tests/test_house_pipeline.py`,
   `tests/test_house_api.py` (mirrors `test_api.py`'s pattern of mocking both `get_provider` and
-  `get_storage`), `tests/test_gemini_house.py`, plus a `generate_house_render` case added to
-  `tests/test_openai_provider.py`.
+  `get_storage`), `tests/test_gemini_house.py`, `tests/test_floor_layout.py` (pure unit tests, no mocks),
+  `tests/test_blueprint_svg.py` (asserts real decodable PNG output), plus a `generate_house_render` case
+  added to `tests/test_openai_provider.py`.
 
 ## Architecture (big picture)
 
@@ -384,41 +439,166 @@ Layout: `app/{main,config,db,models,schemas}.py`, `app/pipeline/` (prompts + orc
 
 ### Frontend (`static/`)
 
-Single-screen, clarity-first flow: upload → progress → results (or error), one state visible at a
-time via `showState()` in `app.js` (the whole upload screen — hero + upload card + tier-explainer band
-— is one `#upload-view` container toggled together) — never more than one primary action on screen.
-Wired directly to the real backend: `POST /api/projects` (upload) then polls `GET /api/projects/{id}`
-every 3s until `status: "done"`, rendering `images.{original,economical,mid,premium}` and
-`room_description` from the response — no separate/mocked frontend data path. Deliberately restrained
-by design decision (not an oversight): all four result cards are visually uniform (image + text label +
-one-line descriptor, no per-tier color coding) so the *generated images* carry the tier differences,
-not the UI chrome. **The progress screen is real-signal-driven, not a fixed timer or scripted checklist**
-(this replaced two earlier designs - a `PROGRESS_MESSAGES` rotation, then a 9-item growing checklist -
-both noted here only so this doc's history doesn't read as contradictory). Current design: a compact,
-always-visible 4-stage stepper (`STAGES` in `app.js` - Analyzing/Generating/Estimating/Finalizing, each
-with a pending/active-spinner/done icon, never a growing list) plus live concept preview cards
-(`CONCEPT_PREVIEW_TIERS`) that resolve from a shimmering skeleton to the real thumbnail. Both are driven
-by REAL data already present on every poll of `GET /api/projects/{id}` - per-tier image keys,
-`materials_status`, `room_description` - not a script or a countdown; `deriveStageIndex()` computes the
-current stage from that real data each poll, and the progress bar jumps in 4 discrete 25% increments as
-stages complete (100% reserved for the real `done` response) rather than animating on a clock. Only the
-very first stage has no finer-grained real signal to key off (describe_room/tier_notes run before the
-image loop) - it shows immediately at submit and yields the moment anything real appears. A 15s
-stall-reassurance timer fades in "Still working — almost there…" if nothing real has happened recently,
-rather than leaving a bare spinner with no text. The standalone rotating `.spinner` that used to sit above
-the main status text was removed as redundant once the stepper had its own active-stage spinner icon.
-The landing screen carries a nav bar
-(`Overview`/`Examples` anchors + a CTA scrolling to
-`#upload-card`), a real **example showcase** (`static/examples/*.jpg` - actual pipeline output, not
-mockups, picked for good structure preservation) at `#examples`, a three-card **tier explainer band**
-(Economical/Mid/Premium finish descriptions), and per-result descriptors - copy for the explainer band
-and descriptors is sourced from the real `prompts.py` tier methodology (paint→wood/mouldings→marble+brass,
-cool→warm→luxury lighting), so keep them in sync if the tier specs change. `static/terms.html` and
-`static/privacy.html` (served via `GET /terms` and `GET /privacy` in `main.py`) are simple, honestly-worded
-placeholder pages appropriate for the prototype stage - not real legal review, flag to the user before
-treating them as sufficient for an actual launch. Stays vanilla HTML/CSS/JS, no build step.
-`tests/test_api.py`'s `test_full_upload_and_poll_flow` exercises the exact contract this frontend
-depends on; `test_terms_page_serves`/`test_privacy_page_serves` cover the new routes.
+**Full Tailwind rebuild, "Aurelian Monolith" visual system** (dark "Midnight and Metal" — deep charcoal
+`#131313` base, champagne-gold `#e9c176` accent, Playfair Display headings + IBM Plex Sans body/
+technical text, sharp 0px corners on cards/buttons/inputs, 1px low-opacity gold hairline borders).
+Originally ported as vanilla-CSS tokens, then **superseded** by a full rebuild in **Tailwind CDN**
+(inline `tailwind.config` script per page, same config repeated in `index.html`/`login.html`/
+`signup.html`) at the user's explicit request to adopt Stitch's actual markup/framework, not just its
+color values — the no-build-step doctrine still holds (CDN script, no bundler), it's just Tailwind
+utilities instead of hand-written semantic CSS for static layout. See "Stitch reconciliation" below for
+which mockup screens were used as a base and what was stripped.
+
+`static/style.css` still exists **unchanged**, used only by `static/terms.html`/`privacy.html` (out of
+scope for the rebuild — still on the old light vanilla theme, a known inconsistency, flag to the user
+before treating those pages as done). `static/components.css` is the **real** stylesheet `index.html`
+loads alongside Tailwind — it holds only the styles for HTML fragments `app.js` injects via
+`.innerHTML` template strings (`result-card`/`img-wrap`/`caption`/`tier-name`/`tier-desc`/
+`download-btn`, `stage-item`/`stage-icon`/`stage-label` + `@keyframes spin`, `concept-card`/
+`concept-skeleton`/`concept-img`/`concept-label` + `@keyframes shimmer`, the materials table/note/
+open-button classes) plus a few JS-toggled state classes (`dropzone.is-dragover`, `.is-changing` on the
+progress message/subtitle, `.tab-btn.is-active`, `[data-reveal].is-revealed`) — these can't be Tailwind
+utility classes because `app.js` builds them as plain semantic strings, independent of any CSS
+framework. Everything else in the three HTML pages is plain Tailwind utilities in the markup.
+
+**A real, easy-to-reintroduce bug, found and fixed during the rebuild**: Tailwind utility classes are
+*author-origin* CSS, so a class like `.flex{display:flex}` beats the browser's *user-agent-origin*
+`[hidden]{display:none}` rule at equal specificity (origin wins ties, not just specificity) — so any
+element combining the native `hidden` **attribute** (which `app.js` toggles via `el.hidden = true/false`
+on `#lightbox` and `#materials-modal-overlay`) with a Tailwind `flex`/`grid`/`block` class for its shown
+state would render **visible even while "hidden"**. Fixed with one global rule in `components.css`:
+`[hidden] { display: none !important; }`. Don't remove it, and don't reintroduce the bug by adding a
+`hidden` Tailwind *class* (as opposed to the attribute) to an element `app.js` also toggles via
+`.hidden = ` — pick one mechanism per element, never both (see `nav-auth-guest`/`nav-auth-user` for the
+classList-only pattern used for elements *not* driven by the native attribute).
+
+Structure preserved from the original vanilla build: single-screen, clarity-first flow per tab (upload
+→ progress → results/error, one state visible at a time via `showState()`/`showHouseState()` in
+`app.js`), a **real-signal-driven progress stepper** (4 stages per tab, keyed off real poll-response
+data, not a timer — see `deriveStageIndex()`/`deriveHouseStageIndex()`), live concept-preview cards for
+the room tab, and a lightbox + materials modal. None of that logic changed in the rebuild — only the
+markup/CSS around it did. `static/terms.html`/`privacy.html` (served via `GET /terms`/`/privacy`) remain
+simple, honestly-worded placeholders, unchanged and unstyled to match the new theme (see above).
+`tests/test_api.py`'s `test_full_upload_and_poll_flow` and `tests/test_auth.py` exercise the contracts
+this frontend depends on; `test_terms_page_serves`/`test_privacy_page_serves` cover those two routes.
+
+#### Stitch reconciliation (what was kept vs. discarded from the mockups)
+
+Google Stitch produced 8 mockup screens + `aurelian_monolith/DESIGN.md` (all under
+`stitch_archivision_ai_studio/`, kept in the repo as a design reference, not shipped code — 6 in the
+original delivery, 2 more — login/signup — added later via
+`stitch_archivision_ai_studio_login_and_signup.zip`, also kept). The mockups' visual system was
+genuinely good and was fully adopted (see above), but every screen also invented a large amount of
+functionality with **no backend support** — none of the fabricated parts were ported, and they must not
+creep back in later. Recorded here so the reasoning doesn't have to be re-derived:
+
+- **Base screens actually used** (user's explicit picks after reviewing screenshots): home page =
+  `archai_home_luxury_edition`; room-redesign upload = `archai_luxury_room_redesign` (the "Room Redesign
+  Studio" cinematic-hero version, not `room_redesign_upload_luxury`); login =
+  `archai_login_luxury_edition`; signup = `archai_sign_up_luxury_edition`. House upload, both progress
+  screens, and the room-results grid were never designed by Stitch at all — built fresh in the same
+  visual language. House results loosely adapts `build_a_house_results_luxury`'s "Computed Floor
+  Layouts" grid idea (mapped onto the real `blueprint_urls` cards, not that mockup's fabricated stats).
+  `archai_luxury_home` and `room_redesign_upload_luxury` (the other home/room variants) and
+  `archai_luxury_concept_results` (a fully fictional single-mansion "Build a House" results mockup) were
+  not used as a base for anything.
+- **Real backend contract (the only source of truth for what the UI may claim to do)**:
+  `POST /api/projects` takes exactly `file`, `style_notes` (free text, ≤150 chars), `city` (≤80 chars,
+  empty allowed); returns original + Economical/Mid/Premium images, `room_description`, per-tier
+  materials (name/spec/price/currency/source_url/is_estimate + total), `materials_status`.
+  `POST /api/house-projects` takes exactly `file`, `length`, `width`, `unit`, `prompt` (≤200 chars);
+  returns `plot_description`, per-floor blueprint images (`blueprint_urls`), one render, an inert
+  `floor_plan` slot. `POST /api/auth/{signup,login}` take exactly the fields in `SignupRequest`/
+  `LoginRequest` (`app/schemas.py`). There are exactly **two generator tools** (Room Redesign, Build a
+  House), a landing tab, and now login/signup — no third tool, no other pages.
+- **Stripped — invented inputs with no backend field** (room-redesign upload mockups): a "Design
+  Intensity" selector, "Elements to Preserve" checkboxes, a "Material Luxury" slider, an "Architectural
+  Vibe" enum dropdown, style-preset chips wired to nothing, a fake system log/console, fake
+  resolution-detection metadata, a "SCANNING_PROTOCOL_V4.2" label. Kept only the two real inputs
+  (free-text style notes, city) inside the restyled "Style Parameters" card.
+  - **How to keep them out (code-level)**: the real `<form id="upload-form">` in `index.html` posts
+    exactly `style_notes` and `city` as form fields (see `app.js`'s submit handler and
+    `main.py::create_project`'s `Form(...)` params) — any new input added to this form needs a
+    matching `Form(...)` param added to `create_project` AND threaded through
+    `run_pipeline(...)`/`build_prompt(...)` before it does anything; a purely decorative input (no
+    matching backend param) is the exact mistake being guarded against here.
+- **Stripped — invented outputs with no backend field** (home pages, house-results mockup): a third
+  tool/tab ("Material Analysis"/"Structural Builds"), fake global-office listings, a fake project
+  portfolio, precision metrics (±2mm spatial mapping, structural efficiency %, "STRUCTURAL INTEGRITY:
+  99.8%", global building-code compliance, real-time BIM export), a "CAD-Ready" export claim,
+  whitepaper/consultation CTAs, "Output Tiers" framed as CAD/DWG/DXF drafts + ISO-compliant BOM specs,
+  per-floor bed/bath counts, build-cost estimates, solar %, structural load, carbon rating, lat/long
+  site coordinates, Export-CAD/Share-Proposal/VR-Walkthrough/Reserve-Build-Slot buttons. The home
+  hero's "01/02/03" stat row and floating image card were rewritten to state only true things (structure
+  preservation, generation speed, real material pricing; "Real Output — actual pipeline result, not a
+  mockup" over a genuine `static/examples/premium.jpg` image instead of a stock render).
+  - **How to keep them out (code-level)**: `renderHouseResults()`/`renderResults()` in `app.js` only
+    ever render fields that are actually present in the `GET /api/*-projects/{id}` JSON response
+    (`ProjectStatusResponse`/`HouseProjectStatusResponse` in `app/schemas.py`) — a card or stat block
+    with no corresponding schema field is fabricated UI by definition. Before adding any new
+    result-card content, check whether the field exists in the schema first; if it doesn't, either add
+    it for real on the backend or don't render it.
+- **Login/signup — stripped**: the fake "Authentication sequence initialized"/setTimeout-then-`alert()`
+  success simulation and the color-swap "Access Granted" fake success state (both replaced with a real
+  `fetch()` to `/api/auth/login`/`signup` and a real redirect or inline error); the dead Google/Apple
+  social-login buttons (no OAuth backend exists); the "Encrypted with AES-256" badge (a false technical
+  claim — passwords are bcrypt-hashed at rest, the badge implied a specific transport-layer guarantee
+  that was never actually implemented or verified). **Added** a real `username` field (not present in
+  the original mockup) since accounts need one for login and it also names the user's S3 storage prefix
+  (see "Authentication & per-user storage" below) — charset-restricted and explained inline.
+- **Kept / reused**: the Aurelian Monolith token system (see above, now as Tailwind config + the
+  `components.css` fragment styles); the lightbox pattern; the tab-switcher structure; the dropzone
+  corner-accent framing and "Initialize Canvas"-style camera icon; the real example showcase (mapped
+  onto `static/examples/*.jpg`); the login/signup visual layout (card + decorative blueprint-grid
+  background / split hero panel), restyled to 0px-radius/gold-hairline consistency with the rest of the
+  site and re-wired to real endpoints.
+- **Standing rule**: no UI element (card, stat, button, badge) may imply data or a capability the
+  backend doesn't actually produce. If a future design pass (Stitch or otherwise) suggests something
+  new, check `app/schemas.py`'s response models first — if the field isn't there, it doesn't get
+  rendered until it is.
+
+## Authentication & per-user storage
+
+Real accounts, not a placeholder — added because the generators are gated behind login (user's explicit
+choice: easier to keep each user's own inputs/prompts/outputs organized in S3 under their own username,
+rather than the earlier flat `local.input|output/{project_id}/...` layout with no owner at all).
+
+- **`User`** (`app/models.py`): `id`, `username` (unique, charset-validated `[a-z0-9_]{3,32}` by
+  `app.auth.validate_username` — deliberately strict because it's also used verbatim as an S3 key path
+  segment, so this charset can never produce a path-traversal or otherwise unsafe key), `email`
+  (unique), `full_name`, `role`, `password_hash`. `Project`/`HouseProject` each gained a nullable
+  `user_id` FK (nullable only so any pre-auth dev-DB rows still load — not backfilled, this is a dev
+  prototype; every *new* row always gets a real owner).
+- **`app/auth.py`**: password hashing uses the **`bcrypt`** library **directly** (`hashpw`/`checkpw`),
+  deliberately **not `passlib`** — a real, live-hit compatibility break: `passlib` 1.7.4 (its last
+  release, unmaintained) hard-fails against modern `bcrypt` (5.x removed the internal
+  `__about__.__version__` attribute passlib's backend-detection probes for), confirmed by an actual
+  `ValueError`/`AttributeError` when tested, not a theoretical concern. `get_current_user()`/
+  `require_user()` read `request.session["user_id"]` (Starlette `SessionMiddleware`, signed cookie via
+  `settings.session_secret_key` / `SESSION_SECRET_KEY` in `.env` — falls back to an insecure dev-only
+  default if unset, fine for local dev, **not** for any real deployment).
+- **Endpoints** (`app/main.py`): `POST /api/auth/signup` (username/email uniqueness + charset/length
+  validation, hashes password, sets session), `POST /api/auth/login` (accepts username **or** email as
+  `identifier`), `POST /api/auth/logout`, `GET /api/auth/me`. `GET /login`/`GET /signup` serve the
+  static pages (same `FileResponse` pattern as `/terms`/`/privacy`).
+- **Generator gating**: `create_project`/`create_house_project` require `Depends(require_user)` and set
+  `project.user_id = user.id`. `get_project`/`get_house_project` return **404 (not 403)** for both
+  "doesn't exist" and "exists but isn't yours" — deliberately indistinguishable so project ids aren't
+  enumerable across accounts (a 403 would confirm the id is real).
+- **Per-user S3 namespacing**: storage keys changed from `local.input|output/{project_id}/...` to
+  **`users/{username}/input/{project_id}/...`** and **`users/{username}/output/{project_id}/...`** —
+  `create_project`/`create_house_project` build the input key with the logged-in user's username, and
+  pass `username` through to `run_pipeline(...)`/`run_house_pipeline(...)` (`app/pipeline/generate.py`,
+  `generate_house.py`), which use it to build every output key. Both pipeline functions treat `username`
+  as **optional** (falls back to the old flat `local.output/...` prefix when omitted) purely so direct
+  unit tests (`test_pipeline.py`, `test_house_pipeline.py`) that call them without going through the API
+  don't need updating — the real endpoints always pass it.
+- **Tests**: `tests/test_auth.py` (signup/login/logout/me, duplicate username/email rejection, bad
+  password, username-charset rejection, owner-only 404s). `tests/test_api.py`/`test_house_api.py` gained
+  a `_signup_and_login()` helper (every generator test now signs up a fresh random-suffixed user first)
+  and their storage-key assertions were updated to the `users/{username}/...` shape; also added
+  `test_create_project_requires_login` / `test_cannot_view_another_users_project` (and house
+  equivalents).
 
 ## Testing convention
 

@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 import urllib.parse
 from io import BytesIO
@@ -71,6 +72,25 @@ MATERIALS_PROMPT_TEMPLATE = (
     '{{"items": [{{"name": "...", "spec": "...", "price": "...", "currency": "...", '
     '"source_url": "https://... or null", "is_estimate": false}}], '
     '"total": "...", "currency": "..."}}'
+)
+
+# Room-list prompt for the "Build a House" free algorithmic blueprint step
+# (see CLAUDE.md's "Build a House feature" section). Deliberately asks for
+# AREA AS A RELATIVE WEIGHT, not literal square footage - the downstream
+# layout algorithm (app/pipeline/floor_layout.py) always rescales these to
+# exactly fill the plot's real dimensions, so it doesn't matter whether the
+# model's absolute numbers are realistic, only their proportions to each other.
+ROOM_LAYOUT_PROMPT_TEMPLATE = (
+    "You are planning a room layout for a building on a plot with dimensions "
+    "{dims_text}.\n\n"
+    "{context_block}"
+    "The user's requirements: {prompt_text}\n\n"
+    "Determine how many floors this building should have (default to 1 floor if the "
+    "requirements don't specify a number), and for each floor list the rooms it should "
+    "contain with a relative area weight per room (bigger rooms get bigger numbers - the "
+    "exact scale doesn't matter, only the proportions between rooms on the same floor).\n\n"
+    'Respond with ONLY raw JSON, no markdown fences, in this exact shape: '
+    '{{"floors": [{{"floor_number": 1, "rooms": [{{"name": "...", "area": 1}}]}}]}}'
 )
 
 TIER_NOTES_PROMPT = (
@@ -233,6 +253,26 @@ class GeminiProvider(Provider):
             logger.exception("generate_materials failed for tier %s in %s", tier, city)
 
         return fallback_materials(tier_spec, city)
+
+    def generate_room_layout(
+        self, dimensions: dict, prompt: str, plot_description: str | None = None
+    ) -> dict:
+        context_block = f"Context about the actual plot: {plot_description}\n\n" if plot_description else ""
+        formatted_prompt = ROOM_LAYOUT_PROMPT_TEMPLATE.format(
+            dims_text=_format_dimensions(dimensions),
+            context_block=context_block,
+            prompt_text=prompt.strip() if prompt else "no specific requirements given",
+        )
+
+        try:
+            response = _generate_content_with_retry(self.client, settings.gemini_text_model, [formatted_prompt])
+            parsed = parse_room_layout(response.text or "")
+            if parsed is not None:
+                return parsed
+        except Exception:
+            logger.exception("generate_room_layout failed for dimensions %s", dimensions)
+
+        return fallback_room_layout(dimensions, prompt)
 
 
 def _generate_content_with_retry(client: genai.Client, model: str, contents: list) -> object:
@@ -397,6 +437,73 @@ def parse_materials(raw_text: str) -> dict | None:
 
     total = data.get("total") or "See itemized estimates above"
     return {"items": items, "total": str(total), "currency": str(data.get("currency", ""))}
+
+
+def parse_room_layout(raw_text: str) -> dict | None:
+    """Parse the room-layout JSON response. Returns None (not {}) on failure -
+    generate_room_layout's caller uses that as the signal to fall back to
+    fallback_room_layout() instead, since a never-empty result is required
+    here (the blueprint-drawing step needs at least one room per floor to
+    draw anything), same category as parse_materials, not tier_notes/
+    describe_room's "degrade to {}"."""
+    try:
+        data = json.loads(_strip_json_fences(raw_text))
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("could not parse room layout JSON: %r", raw_text[:200])
+        return None
+
+    if not isinstance(data, dict) or not isinstance(data.get("floors"), list) or not data["floors"]:
+        return None
+
+    floors = []
+    for raw_floor in data["floors"]:
+        if not isinstance(raw_floor, dict) or not isinstance(raw_floor.get("rooms"), list):
+            continue
+        rooms = [
+            {"name": str(raw_room["name"]), "area": float(raw_room.get("area") or 1)}
+            for raw_room in raw_floor["rooms"]
+            if isinstance(raw_room, dict) and raw_room.get("name")
+        ]
+        if not rooms:
+            continue
+        try:
+            floor_number = int(raw_floor.get("floor_number") or len(floors) + 1)
+        except (TypeError, ValueError):
+            floor_number = len(floors) + 1
+        floors.append({"floor_number": floor_number, "rooms": rooms})
+
+    if not floors:
+        return None
+
+    return {"floors": floors}
+
+
+def fallback_room_layout(dimensions: dict, prompt: str) -> dict:
+    """Never-empty room-layout fallback for when the Gemini call itself fails
+    entirely (network/auth/quota/timeout) or returns unparseable JSON. Guesses
+    the floor count from a plain 'N floor(s)' pattern in the user's free-text
+    prompt (defaulting to 1), and synthesizes the same fixed generic room list
+    per floor with equal area weights - always produces something the
+    blueprint step can draw, same never-empty guarantee as fallback_materials.
+    """
+    floor_count = _guess_floor_count(prompt)
+    generic_rooms = [
+        {"name": "Living Room", "area": 2},
+        {"name": "Kitchen", "area": 1},
+        {"name": "Bedroom 1", "area": 1.5},
+        {"name": "Bedroom 2", "area": 1.5},
+        {"name": "Bathroom", "area": 1},
+    ]
+    return {
+        "floors": [{"floor_number": n, "rooms": generic_rooms} for n in range(1, floor_count + 1)]
+    }
+
+
+def _guess_floor_count(prompt: str) -> int:
+    match = re.search(r"(\d+)\s*(?:floor|floors|storey|storeys|story|stories)", prompt or "", re.IGNORECASE)
+    if match:
+        return max(1, min(int(match.group(1)), 10))
+    return 1
 
 
 def fallback_materials(tier_spec: dict[str, str], city: str) -> dict:

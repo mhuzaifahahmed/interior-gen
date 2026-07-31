@@ -1,10 +1,29 @@
 import io
+import uuid
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
 import app.main as main_module
 from app.main import app
+
+
+def _signup_and_login(client: TestClient) -> str:
+    """Generators are gated behind login now - every test hitting them needs
+    a logged-in session first. Returns the created username (random per call
+    so repeated runs against the real dev DB - see CLAUDE.md's testing
+    convention - never collide on a previously-used username)."""
+    username = f"apitest_{uuid.uuid4().hex[:10]}"
+    res = client.post(
+        "/api/auth/signup",
+        json={
+            "username": username,
+            "email": f"{username}@example.com",
+            "password": "correct-horse-battery-staple",
+        },
+    )
+    assert res.status_code == 200, res.text
+    return username
 
 
 class FakeProvider:
@@ -67,6 +86,7 @@ def test_full_upload_and_poll_flow(monkeypatch):
     monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
 
     with TestClient(app) as client:
+        username = _signup_and_login(client)
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
         create_res = client.post("/api/projects", files=files)
         assert create_res.status_code == 200
@@ -80,12 +100,14 @@ def test_full_upload_and_poll_flow(monkeypatch):
         for key in ("original", "economical", "mid", "premium"):
             assert body["images"][key] is not None
 
-        # Storage layout: uploads live under local.input/, generated tiers under
-        # local.output/ - keeps the bucket organized and separates "things the user
-        # gave us" from "things we generated", instead of one flat pile of UUID folders.
-        assert "local.input/" in body["images"]["original"]
+        # Storage layout: uploads live under users/{username}/input/, generated
+        # tiers under users/{username}/output/ - namespaces every user's files
+        # under their own prefix (see CLAUDE.md's "Authentication & per-user
+        # storage" section) while still separating "things the user gave us"
+        # from "things we generated".
+        assert f"users/{username}/input/" in body["images"]["original"]
         for tier in ("economical", "mid", "premium"):
-            assert "local.output/" in body["images"][tier]
+            assert f"users/{username}/output/" in body["images"][tier]
 
         # No city was submitted - images-only path, no materials/pricing calls.
         assert body["materials_status"] == "skipped"
@@ -98,6 +120,7 @@ def test_style_notes_reach_the_generated_prompts(monkeypatch):
     monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
 
     with TestClient(app) as client:
+        _signup_and_login(client)
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
         create_res = client.post(
             "/api/projects", files=files, data={"style_notes": "modern, blue accents"}
@@ -119,6 +142,7 @@ def test_city_triggers_materials_for_every_tier(monkeypatch):
     monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
 
     with TestClient(app) as client:
+        _signup_and_login(client)
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
         create_res = client.post("/api/projects", files=files, data={"city": "Karachi"})
         assert create_res.status_code == 200
@@ -139,14 +163,39 @@ def test_city_triggers_materials_for_every_tier(monkeypatch):
 
 def test_rejects_unsupported_file_type():
     with TestClient(app) as client:
+        _signup_and_login(client)
         files = {"file": ("doc.pdf", b"not-an-image", "application/pdf")}
         res = client.post("/api/projects", files=files)
         assert res.status_code == 400
 
 
+def test_create_project_requires_login():
+    with TestClient(app) as client:
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        res = client.post("/api/projects", files=files)
+        assert res.status_code == 401
+
+
 def test_unknown_project_returns_404():
     with TestClient(app) as client:
+        _signup_and_login(client)
         res = client.get("/api/projects/does-not-exist")
+        assert res.status_code == 404
+
+
+def test_cannot_view_another_users_project(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client_a:
+        _signup_and_login(client_a)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        create_res = client_a.post("/api/projects", files=files)
+        project_id = create_res.json()["project_id"]
+
+    with TestClient(app) as client_b:
+        _signup_and_login(client_b)
+        res = client_b.get(f"/api/projects/{project_id}")
         assert res.status_code == 404
 
 

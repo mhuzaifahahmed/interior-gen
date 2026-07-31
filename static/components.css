@@ -1,0 +1,525 @@
+/* Styles for the HTML fragments app.js injects via .innerHTML template
+   strings (renderResults/renderHouseResults, renderMaterialsSection,
+   buildMaterialsModalBodyHTML, renderStageStepper/renderHouseStageStepper,
+   renderConceptPreviewShell) plus a couple of state classes app.js toggles
+   via classList (is-dragover, is-changing, is-revealed). These can't be
+   Tailwind utility classes because app.js builds them as plain semantic
+   class-name strings, independent of any CSS framework - see CLAUDE.md's
+   "Frontend" section for the full reasoning. Everything else in index.html/
+   login.html/signup.html is plain Tailwind CDN utilities, not this file.
+
+   Colors below are the literal Aurelian Monolith hex values (see
+   stitch_archivision_ai_studio/aurelian_monolith/DESIGN.md) - hardcoded
+   because this plain CSS file has no access to the Tailwind config object
+   defined inline in each HTML page. */
+
+/* Tailwind utility classes (e.g. "flex") are author-origin CSS, so they beat
+   the browser UA stylesheet's [hidden]{display:none} rule at equal
+   specificity (author > user-agent, tie-break doesn't apply across origins).
+   Without this, any element that combines the native hidden ATTRIBUTE
+   (toggled by app.js via el.hidden = true/false - e.g. #lightbox,
+   #materials-modal-overlay) with a Tailwind "flex"/"grid"/"block" class for
+   its shown state would render visible even while hidden. This one rule
+   makes [hidden] always win, everywhere, without touching app.js or markup. */
+[hidden] {
+  display: none !important;
+}
+
+:root {
+  --ink: #e5e2e1;
+  --ink-soft: #d1c5b4;
+  --paper: #1c1b1b;
+  --paper-raised: #201f1f;
+  --paper-high: #2a2a2a;
+  --line: rgba(233, 193, 118, 0.16);
+  --accent: #e9c176;
+  --accent-bg: rgba(233, 193, 118, 0.1);
+  --accent-dark: #c5a059;
+  --on-accent: #2b2013;
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(233, 193, 118, 0.05);
+  --shadow-lift: 0 24px 56px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(233, 193, 118, 0.08);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---- Tab bar active state ---- */
+/* switchTab() (app.js) only toggles the plain "is-active" class - the visual
+   active/inactive look lives here, not as static Tailwind utilities in the
+   markup, so switching tabs actually changes which button looks active. */
+
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tab-btn:hover {
+  color: var(--accent);
+}
+
+.tab-btn.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ---- Scroll reveal ---- */
+
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(22px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+[data-reveal].is-revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* ---- Dropzone drag state ---- */
+
+.dropzone.is-dragover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+/* ---- Progress message/subtitle fade ---- */
+
+.progress-message,
+.progress-subtitle {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.progress-message.is-changing {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.progress-subtitle.is-changing {
+  opacity: 0;
+}
+
+/* ---- Stage stepper ---- */
+
+.stage-item {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  text-align: center;
+}
+
+.stage-icon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+
+.stage-icon::after {
+  content: "";
+  position: absolute;
+  top: 48%;
+  left: 50%;
+  width: 8px;
+  height: 5px;
+  border-left: 2px solid var(--on-accent);
+  border-bottom: 2px solid var(--on-accent);
+  transform: translate(-50%, -60%) rotate(-45deg) scale(0);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.stage-item.is-done .stage-icon {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.stage-item.is-done .stage-icon::after {
+  transform: translate(-50%, -60%) rotate(-45deg) scale(1);
+}
+
+.stage-item.is-active .stage-icon {
+  border-color: var(--accent);
+}
+
+.stage-item.is-active .stage-icon::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-bg);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+.stage-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+  line-height: 1.3;
+  transition: color 0.25s ease;
+}
+
+.stage-item.is-done .stage-label,
+.stage-item.is-active .stage-label {
+  color: var(--ink);
+}
+
+/* ---- Concept previews ---- */
+
+.concept-card {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.concept-skeleton {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, var(--paper) 30%, var(--paper-high) 50%, var(--paper) 70%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+  transition: opacity 0.4s ease;
+}
+
+.concept-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  filter: blur(10px);
+  transform: scale(1.04);
+  transition: opacity 0.6s ease, filter 0.6s ease, transform 0.6s ease;
+}
+
+.concept-card.is-resolved .concept-skeleton {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.concept-card.is-resolved .concept-img {
+  opacity: 1;
+  filter: blur(0);
+  transform: scale(1);
+}
+
+.concept-label {
+  position: absolute;
+  bottom: 0.4rem;
+  left: 0.4rem;
+  margin: 0;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--on-accent);
+  background: var(--accent);
+  padding: 0.15rem 0.4rem;
+}
+
+/* ---- Result cards (room + house results grids) ---- */
+
+.results {
+  animation: fade-up 0.5s ease both;
+}
+
+.result-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.result-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lift);
+  border-color: var(--accent);
+}
+
+.result-card .img-wrap {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: var(--paper-raised);
+}
+
+.result-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.35s ease;
+}
+
+.result-card:hover img {
+  transform: scale(1.04);
+}
+
+.download-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(14, 14, 14, 0.7);
+  backdrop-filter: blur(4px);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.download-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.download-btn:hover,
+.download-btn:focus-visible {
+  background: var(--accent);
+  color: var(--on-accent);
+  transform: scale(1.08);
+}
+
+.result-card .caption {
+  padding: 0.9rem 1rem 1.1rem;
+  text-align: center;
+}
+
+.result-card .tier-name {
+  margin: 0;
+  font-family: "Playfair Display", serif;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.result-card .tier-desc {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
+/* ---- Materials note / open button (inside result-card) ---- */
+
+.materials-note {
+  margin: 0.7rem 1rem 1.1rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  text-align: center;
+  cursor: default;
+}
+
+.materials-note-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.materials-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+.materials-open-btn {
+  display: block;
+  width: calc(100% - 2rem);
+  margin: 0.7rem 1rem 1.1rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--line);
+  background: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-family: "IBM Plex Sans", sans-serif;
+  color: var(--accent);
+  text-align: center;
+  transition: color 0.15s ease;
+}
+
+.materials-open-btn:hover {
+  color: var(--accent-dark);
+}
+
+/* ---- Materials table (inside the materials modal body) ---- */
+
+.materials-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  table-layout: fixed;
+}
+
+.materials-table th {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.64rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  opacity: 0.85;
+  border-bottom: 1px solid var(--line);
+}
+
+.materials-table td {
+  padding: 0.7rem 0.5rem;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.materials-table tr:last-child td {
+  border-bottom: none;
+}
+
+.material-name {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.material-spec {
+  margin: 0.2rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.material-price {
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+.material-source a {
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-word;
+}
+
+.material-source a:hover {
+  text-decoration: underline;
+}
+
+.estimate-badge {
+  display: inline-block;
+  margin-top: 0.3rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.materials-total {
+  margin: 1rem 0 0;
+  text-align: right;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+@media (max-width: 480px) {
+  .materials-table,
+  .materials-table thead,
+  .materials-table tbody,
+  .materials-table tr {
+    display: block;
+    width: 100%;
+  }
+
+  .materials-table thead {
+    display: none;
+  }
+
+  .materials-table tr {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .materials-table tr:last-child {
+    border-bottom: none;
+  }
+
+  .materials-table td {
+    display: block;
+    padding: 0.2rem 0;
+    border-bottom: none;
+  }
+
+  .material-price::before {
+    content: "Price: ";
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+  }
+
+  .material-source::before {
+    content: "Source: ";
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+  }
+}

@@ -1,315 +1,380 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Interior-Gen — AI Renovation Visualizer</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css" />
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Interior-Gen — AI Room Redesign &amp; House Concepts</title>
+<style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}}::-webkit-scrollbar{display:none;}</style>
+<script src="https://cdn.tailwindcss.com"></script>
+<script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"inverse-surface":"#e5e2e1","surface-container-high":"#2a2a2a","on-secondary-container":"#b6b5b1","on-secondary":"#30312e","primary-fixed-dim":"#e9c176","surface-container":"#201f1f","tertiary-fixed":"#e5e2e1","inverse-primary":"#775a19","background":"#131313","surface-container-highest":"#353534","primary-container":"#c5a059","surface-variant":"#353534","surface":"#131313","secondary-fixed-dim":"#c8c6c3","on-primary-fixed":"#261900","tertiary-container":"#a7a5a5","on-tertiary-container":"#3b3b3b","primary":"#e9c176","on-background":"#e5e2e1","outline":"#9a8f80","on-primary-fixed-variant":"#5d4201","on-error-container":"#ffdad6","on-primary":"#412d00","surface-tint":"#e9c176","on-primary-container":"#4e3700","error":"#ffb4ab","surface-container-low":"#1c1b1b","secondary-fixed":"#e4e2de","on-secondary-fixed-variant":"#474744","on-tertiary-fixed":"#1c1b1b","surface-container-lowest":"#0e0e0e","on-surface":"#e5e2e1","primary-fixed":"#ffdea5","error-container":"#93000a","secondary":"#c8c6c3","on-tertiary":"#313030","outline-variant":"#4e4639","on-surface-variant":"#d1c5b4","tertiary":"#c8c6c5","surface-bright":"#3a3939","surface-dim":"#131313","inverse-on-surface":"#313030","on-error":"#690005","secondary-container":"#474744","on-tertiary-fixed-variant":"#474746","tertiary-fixed-dim":"#c8c6c5","on-secondary-fixed":"#1b1c1a"},"borderRadius":{"DEFAULT":"0px","lg":"0px","xl":"0px","full":"9999px"},"spacing":{"section-gap":"128px","unit":"8px","margin-desktop":"64px","gutter":"32px","container-max":"1440px","margin-mobile":"24px"},"fontFamily":{"headline-md":["Playfair Display"],"body-md":["IBM Plex Sans"],"label-caps":["IBM Plex Sans"],"body-lg":["IBM Plex Sans"],"headline-sm":["Playfair Display"],"technical-data":["IBM Plex Sans"],"display-lg":["Playfair Display"],"display-lg-mobile":["Playfair Display"]},"fontSize":{"headline-md":["32px",{"lineHeight":"1.3","fontWeight":"600"}],"body-md":["16px",{"lineHeight":"1.6","fontWeight":"400"}],"label-caps":["12px",{"lineHeight":"1.2","letterSpacing":"0.15em","fontWeight":"600"}],"body-lg":["18px",{"lineHeight":"1.6","fontWeight":"400"}],"headline-sm":["24px",{"lineHeight":"1.4","fontWeight":"500"}],"technical-data":["14px",{"lineHeight":"1.4","fontWeight":"500"}],"display-lg":["64px",{"lineHeight":"1.1","letterSpacing":"-0.02em","fontWeight":"700"}],"display-lg-mobile":["40px",{"lineHeight":"1.2","letterSpacing":"-0.01em","fontWeight":"700"}]}}}}</script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="/static/components.css"/>
 </head>
-<body>
-  <header class="topbar">
-    <div class="topbar-inner">
-      <div class="brand">
-        <span class="brand-mark">◆</span>
-        <span class="brand-name">Interior&#8209;Gen</span>
-      </div>
-      <nav class="nav-links">
-        <button type="button" class="nav-link-btn" id="nav-login-btn">Log in</button>
-        <button type="button" class="nav-signup-btn" id="nav-signup-btn">Sign up</button>
-      </nav>
-    </div>
-  </header>
+<body class="bg-background font-body-md text-on-background">
 
-  <nav class="tab-bar" id="tab-bar">
-    <button type="button" class="tab-btn is-active" id="tab-btn-home" data-tab="home">Home</button>
-    <button type="button" class="tab-btn" id="tab-btn-room" data-tab="room">Room Redesign</button>
-    <button type="button" class="tab-btn" id="tab-btn-house" data-tab="house">Build a House</button>
-  </nav>
+<header class="fixed top-0 w-full z-50 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/10">
+<div class="h-20 max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="w-8 h-8 flex items-center justify-center border border-primary text-primary rotate-45"><span class="material-symbols-outlined -rotate-45 text-[18px]">architecture</span></span>
+<span class="font-headline-sm text-headline-sm tracking-tight text-on-surface">Interior&#8209;Gen</span>
+</div>
+<nav class="hidden md:flex items-center gap-margin-mobile" id="tab-bar">
+<button type="button" class="tab-btn font-label-caps text-label-caps pb-1 is-active" id="tab-btn-home" data-tab="home">HOME</button>
+<button type="button" class="tab-btn font-label-caps text-label-caps pb-1" id="tab-btn-room" data-tab="room">ROOM REDESIGN</button>
+<button type="button" class="tab-btn font-label-caps text-label-caps pb-1" id="tab-btn-house" data-tab="house">BUILD A HOUSE</button>
+</nav>
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-4" id="nav-auth-guest">
+<button type="button" class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-colors" id="nav-login-btn">LOG IN</button>
+<button type="button" class="font-label-caps text-label-caps border border-primary text-primary px-4 py-2 hover:bg-primary hover:text-on-primary transition-colors" id="nav-signup-btn">SIGN UP</button>
+</div>
+<div class="hidden items-center gap-3" id="nav-auth-user">
+<span class="font-label-caps text-label-caps text-on-surface-variant" id="nav-username"></span>
+<button type="button" class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-colors" id="nav-logout-btn">LOG OUT</button>
+</div>
+</div>
+</div>
+</header>
 
-  <div class="page">
-    <main>
-      <div class="tab-panel" id="home-tab-panel">
-        <section class="hero home-hero" data-reveal>
-          <p class="eyebrow">AI&#8209;Powered Space Visualization</p>
-          <h1>Picture it before you build it.</h1>
-          <p class="hero-sub">
-            Upload a tired room or a bare plot of land, and watch it become three real redesigns or a
-            full concept build — in minutes, not months.
-          </p>
-        </section>
+<main class="pt-20">
 
-        <section class="overview" id="home-cta-section" data-reveal>
-          <button type="button" class="overview-cta" id="home-cta-btn">Start Redesigning &rarr;</button>
-        </section>
+<!-- ================= HOME ================= -->
+<div id="home-tab-panel">
 
-        <section class="examples" id="examples" data-reveal>
-          <p class="eyebrow">A real example</p>
-          <div class="examples-grid">
-            <figure class="example-figure" data-reveal data-reveal-delay="0">
-              <img src="/static/examples/original.jpg" alt="Original uploaded room" loading="lazy" />
-              <figcaption>Original</figcaption>
-            </figure>
-            <figure class="example-figure" data-reveal data-reveal-delay="90">
-              <img src="/static/examples/economical.jpg" alt="Economical redesign" loading="lazy" />
-              <figcaption>Economical</figcaption>
-            </figure>
-            <figure class="example-figure" data-reveal data-reveal-delay="180">
-              <img src="/static/examples/mid.jpg" alt="Mid-Range redesign" loading="lazy" />
-              <figcaption>Mid&#8209;Range</figcaption>
-            </figure>
-            <figure class="example-figure" data-reveal data-reveal-delay="270">
-              <img src="/static/examples/premium.jpg" alt="Premium redesign" loading="lazy" />
-              <figcaption>Premium</figcaption>
-            </figure>
-          </div>
-          <p class="examples-note">One real upload, unedited — the same walls, windows, and layout carried through all three tiers.</p>
-        </section>
+<section class="relative w-full min-h-[86vh] flex items-center overflow-hidden bg-surface">
+<div class="absolute inset-0 z-0">
+<div class="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_20%_30%,rgba(233,193,118,0.12)_0%,transparent_50%)]"></div>
+<div class="absolute bottom-0 right-0 w-full h-full bg-[radial-gradient(circle_at_80%_70%,rgba(197,160,89,0.08)_0%,transparent_50%)]"></div>
+<div class="absolute inset-0 opacity-[0.05]" style="background-image: linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px); background-size: 60px 60px;"></div>
+</div>
+<div class="relative z-10 max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop w-full grid grid-cols-1 lg:grid-cols-12 gap-gutter items-center py-section-gap" data-reveal>
+<div class="lg:col-span-7 flex flex-col gap-margin-mobile">
+<div class="flex items-center gap-3">
+<span class="w-12 h-[1px] bg-primary"></span>
+<span class="font-label-caps text-label-caps text-primary uppercase tracking-[0.2em]">AI-Powered Space Visualization</span>
+</div>
+<h1 class="font-display-lg text-display-lg-mobile lg:text-display-lg text-on-surface max-w-2xl leading-[1.08]">
+Picture it <br/><span class="text-primary italic">before you build it.</span>
+</h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-xl">
+Upload a tired room or a bare plot of land, and watch it become three real redesigns or a full concept build — in minutes, not months.
+</p>
+<div class="flex flex-wrap gap-margin-mobile pt-2">
+<button type="button" class="px-margin-desktop py-4 bg-primary text-on-primary font-label-caps text-label-caps hover:brightness-110 transition-all shadow-[0_4px_20px_rgba(233,193,118,0.25)] active:scale-95" id="home-cta-btn">START ROOM REDESIGN</button>
+<button type="button" class="px-margin-desktop py-4 border border-outline text-on-surface font-label-caps text-label-caps hover:bg-white/5 transition-all active:scale-95" id="home-hero-house-btn">BUILD A NEW HOUSE</button>
+</div>
+<div class="flex flex-wrap gap-margin-desktop mt-4 pt-8 border-t border-white/10">
+<div class="flex flex-col">
+<span class="font-technical-data text-technical-data text-primary">01. STRUCTURE</span>
+<span class="font-body-md text-on-surface-variant">Walls, windows, and layout preserved</span>
+</div>
+<div class="flex flex-col">
+<span class="font-technical-data text-technical-data text-primary">02. SPEED</span>
+<span class="font-body-md text-on-surface-variant">Three tiers generated together</span>
+</div>
+<div class="flex flex-col">
+<span class="font-technical-data text-technical-data text-primary">03. PRICING</span>
+<span class="font-body-md text-on-surface-variant">Real local material costs</span>
+</div>
+</div>
+</div>
+<div class="hidden lg:flex lg:col-span-5 relative h-full">
+<div class="relative w-full aspect-[4/5] bg-surface-container-low overflow-hidden shadow-2xl border border-white/5 transform lg:translate-x-6">
+<img class="w-full h-full object-cover" src="/static/examples/premium.jpg" alt="A real premium-tier redesign generated by Interior-Gen"/>
+<div class="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent opacity-60"></div>
+<div class="absolute bottom-margin-mobile left-margin-mobile p-6 bg-surface/80 backdrop-blur-md border border-white/10 shadow-lg max-w-[240px]">
+<span class="font-technical-data text-[10px] text-primary block mb-1 uppercase tracking-widest">Real Output</span>
+<p class="font-label-caps text-[10px] text-on-surface-variant">Actual pipeline result — not a mockup.</p>
+</div>
+</div>
+</div>
+</div>
+</section>
 
-        <section class="tiers-intro" data-reveal>
-          <p class="eyebrow">Three tiers, one photo</p>
-          <div class="tiers-grid">
-            <article class="tier-explainer" data-reveal data-reveal-delay="0">
-              <span class="tier-number">01</span>
-              <h3>Economical</h3>
-              <p>Fresh paint, plain tile floors, and clean practical lighting.</p>
-            </article>
-            <article class="tier-explainer" data-reveal data-reveal-delay="120">
-              <span class="tier-number">02</span>
-              <h3>Mid&#8209;Range</h3>
-              <p>Warm wood-look floors, wainscoting, and cozy layered lighting.</p>
-            </article>
-            <article class="tier-explainer" data-reveal data-reveal-delay="240">
-              <span class="tier-number">03</span>
-              <h3>Premium</h3>
-              <p>Marble, brass accents, and warm designer lighting.</p>
-            </article>
-          </div>
-        </section>
-      </div>
+<section class="py-section-gap bg-surface-container-lowest" id="examples" data-reveal>
+<div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop">
+<p class="font-label-caps text-label-caps text-primary text-center tracking-[0.2em] mb-margin-mobile">A REAL EXAMPLE</p>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-gutter">
+<figure class="m-0 border border-outline-variant/20 overflow-hidden bg-surface-container-low">
+<img class="w-full aspect-square object-cover" src="/static/examples/original.jpg" alt="Original uploaded room" loading="lazy"/>
+<figcaption class="py-3 text-center font-label-caps text-[11px] tracking-widest text-on-surface-variant uppercase">Original</figcaption>
+</figure>
+<figure class="m-0 border border-outline-variant/20 overflow-hidden bg-surface-container-low">
+<img class="w-full aspect-square object-cover" src="/static/examples/economical.jpg" alt="Economical redesign" loading="lazy"/>
+<figcaption class="py-3 text-center font-label-caps text-[11px] tracking-widest text-on-surface-variant uppercase">Economical</figcaption>
+</figure>
+<figure class="m-0 border border-outline-variant/20 overflow-hidden bg-surface-container-low">
+<img class="w-full aspect-square object-cover" src="/static/examples/mid.jpg" alt="Mid-Range redesign" loading="lazy"/>
+<figcaption class="py-3 text-center font-label-caps text-[11px] tracking-widest text-on-surface-variant uppercase">Mid&#8209;Range</figcaption>
+</figure>
+<figure class="m-0 border border-outline-variant/20 overflow-hidden bg-surface-container-low">
+<img class="w-full aspect-square object-cover" src="/static/examples/premium.jpg" alt="Premium redesign" loading="lazy"/>
+<figcaption class="py-3 text-center font-label-caps text-[11px] tracking-widest text-on-surface-variant uppercase">Premium</figcaption>
+</figure>
+</div>
+<p class="text-center font-body-md text-on-surface-variant italic text-sm mt-margin-mobile max-w-2xl mx-auto">One real upload, unedited — the same walls, windows, and layout carried through all three tiers.</p>
+</div>
+</section>
 
-      <div class="tab-panel" id="room-tab-panel" hidden>
-      <div class="upload-view" id="upload-view">
-        <section class="hero">
-          <h1>See your room, three ways.</h1>
-          <p class="hero-sub">
-            Upload a photo to get three redesigns — Economical, Mid&#8209;Range, and Premium.
-          </p>
-        </section>
+<section class="py-section-gap bg-background" data-reveal>
+<div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop">
+<p class="font-label-caps text-label-caps text-primary text-center tracking-[0.2em] mb-margin-mobile">THREE TIERS, ONE PHOTO</p>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<article class="bg-surface-container-low border border-outline-variant/20 p-margin-mobile hover:border-primary/50 transition-colors">
+<span class="font-technical-data text-technical-data text-primary">01/</span>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mt-2 mb-2">Economical</h3>
+<p class="font-body-md text-on-surface-variant text-sm">Fresh paint, plain tile floors, and clean practical lighting.</p>
+</article>
+<article class="bg-surface-container-low border border-outline-variant/20 p-margin-mobile hover:border-primary/50 transition-colors">
+<span class="font-technical-data text-technical-data text-primary">02/</span>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mt-2 mb-2">Mid&#8209;Range</h3>
+<p class="font-body-md text-on-surface-variant text-sm">Warm wood-look floors, wainscoting, and cozy layered lighting.</p>
+</article>
+<article class="bg-surface-container-low border border-outline-variant/20 p-margin-mobile hover:border-primary/50 transition-colors">
+<span class="font-technical-data text-technical-data text-primary">03/</span>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mt-2 mb-2">Premium</h3>
+<p class="font-body-md text-on-surface-variant text-sm">Marble, brass accents, and warm designer lighting.</p>
+</article>
+</div>
+</div>
+</section>
 
-        <section class="overview" id="overview" data-reveal>
-          <ul class="overview-list">
-            <li data-reveal data-reveal-delay="0">
-              <span class="overview-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4m0 0L7 9m5-5l5 5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-              <span><strong>Upload one photo</strong> — no measurements, no waiting on a designer's calendar.</span>
-            </li>
-            <li data-reveal data-reveal-delay="120">
-              <span class="overview-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-              <span><strong>Structure preserved</strong> — the same walls, windows, and layout carry through every tier; only the finishes change.</span>
-            </li>
-            <li data-reveal data-reveal-delay="240">
-              <span class="overview-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l8 4-8 4-8-4 8-4z" stroke-linejoin="round"/><path d="M4 11l8 4 8-4M4 15l8 4 8-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-              <span><strong>Three tiers, one click</strong> — Economical, Mid&#8209;Range, and Premium, generated together so you can compare.</span>
-            </li>
-          </ul>
-        </section>
+</div>
 
-        <section class="upload-card" id="upload-card">
-          <form id="upload-form">
-            <label id="dropzone" for="file-input" class="dropzone">
-              <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" hidden />
-              <div class="dropzone-content" id="dropzone-empty">
-                <div class="dropzone-icon">⤒</div>
-                <p class="dropzone-title">Drop a room photo here</p>
-                <p class="dropzone-hint">or click to browse &middot; JPG, PNG, WEBP</p>
-              </div>
-              <div class="dropzone-preview" id="dropzone-preview" hidden>
-                <button type="button" class="remove-photo-btn" id="remove-photo-btn" aria-label="Remove photo">&times;</button>
-                <img id="preview-img" alt="Selected room photo" />
-                <p class="dropzone-filename" id="preview-filename"></p>
-                <p class="dropzone-hint">Click anywhere to choose a different photo</p>
-              </div>
-            </label>
+<!-- ================= ROOM REDESIGN ================= -->
+<div id="room-tab-panel" hidden>
 
-            <div class="style-prompt-wrap">
-              <label for="style-prompt" class="style-prompt-label">Style notes (optional)</label>
-              <input
-                type="text"
-                id="style-prompt"
-                name="style_notes"
-                maxlength="150"
-                placeholder="Give us a color, a style — modern, cozy, bold, minimalist…"
-              />
-            </div>
+<div id="upload-view">
+<section class="relative w-full overflow-hidden">
+<div class="absolute inset-0 z-0">
+<div class="w-full h-[420px] bg-cover bg-center brightness-50" style="background-image: url('/static/examples/premium.jpg')"></div>
+<div class="absolute inset-0 bg-gradient-to-b from-background/70 via-background/85 to-background"></div>
+</div>
+<div class="relative z-10 max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop pt-20 pb-16">
+<span class="font-label-caps text-label-caps text-primary mb-3 block tracking-[0.3em]">REIMAGINE YOUR SPACE</span>
+<h1 class="font-display-lg text-display-lg-mobile text-on-surface mb-4">Room Redesign <span class="italic font-light">Studio</span></h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-xl">Upload your current environment and let our AI generate three distinct redesigns, structure preserved.</p>
+</div>
+</section>
 
-            <div class="style-prompt-wrap">
-              <label for="city-input" class="style-prompt-label">Your city (for local material prices)</label>
-              <input
-                type="text"
-                id="city-input"
-                name="city"
-                maxlength="80"
-                placeholder="e.g. Karachi"
-              />
-            </div>
+<section class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop mt-8 relative z-20 w-full mb-section-gap">
+<form id="upload-form" class="grid grid-cols-1 lg:grid-cols-12 gap-gutter items-start">
 
-            <button type="submit" id="generate-btn" disabled>
-              <span class="btn-label">Generate 3 Tiers</span>
-            </button>
-          </form>
-        </section>
-      </div>
+<div class="lg:col-span-7 flex flex-col gap-unit">
+<label id="dropzone" for="file-input" class="group relative aspect-[4/3] bg-surface-container-low border border-outline-variant/20 flex flex-col items-center justify-center cursor-pointer transition-all hover:border-primary/50 overflow-hidden block">
+<div class="absolute inset-0 opacity-10 pointer-events-none" style="background-image: radial-gradient(circle, #c5a059 1px, transparent 1px); background-size: 40px 40px;"></div>
+<input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" hidden/>
+<div class="relative z-10 flex flex-col items-center text-center p-12 transition-transform group-hover:scale-105" id="dropzone-empty">
+<div class="w-20 h-20 mb-6 flex items-center justify-center border border-primary/30 rounded-full">
+<span class="material-symbols-outlined text-primary text-4xl">add_a_photo</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-2">Drop a room photo here</h3>
+<p class="font-body-md text-on-surface-variant max-w-xs">or click to browse · JPG, PNG, WEBP</p>
+</div>
+<div class="absolute inset-0 bg-surface" id="dropzone-preview" hidden>
+<img class="w-full h-full object-cover" id="preview-img" alt="Selected room photo"/>
+<p class="absolute bottom-3 left-0 right-0 text-center font-label-caps text-[11px] text-on-surface-variant" id="preview-filename"></p>
+<button type="button" class="absolute top-4 right-4 bg-surface/80 backdrop-blur-md p-2 rounded-full text-on-surface hover:text-primary transition-colors" id="remove-photo-btn" aria-label="Remove photo">
+<span class="material-symbols-outlined">close</span>
+</button>
+</div>
+</label>
+<div class="flex justify-between items-center px-4 py-3 bg-surface-container-lowest border border-outline-variant/10">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+<span class="font-technical-data text-technical-data text-on-surface/60">READY TO ANALYZE</span>
+</div>
+</div>
+</div>
 
-      <section class="progress-card" id="progress-card" hidden>
-        <p class="progress-message" id="progress-message">Analyzing your room&hellip;</p>
-        <p class="progress-subtitle" id="progress-subtitle"></p>
-        <div class="progress-bar" id="progress-bar">
-          <div class="progress-bar-fill" id="progress-bar-fill"></div>
-        </div>
-        <ol class="stage-stepper" id="stage-stepper"></ol>
-        <div class="concept-previews" id="concept-previews"></div>
-      </section>
+<div class="lg:col-span-5">
+<div class="bg-surface-container border border-outline-variant/10 p-8 lg:p-10 h-full relative overflow-hidden">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-primary"></div>
+<header class="mb-8">
+<span class="font-label-caps text-label-caps text-primary mb-2 block">STEP 01</span>
+<h2 class="font-headline-md text-headline-md text-on-surface">Style Parameters</h2>
+<div class="w-12 h-1 bg-primary mt-4"></div>
+</header>
+<div class="flex flex-col gap-8">
+<div>
+<label for="style-prompt" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Style notes (optional)</label>
+<input type="text" id="style-prompt" name="style_notes" maxlength="150" placeholder="e.g. modern, cozy, bold, minimalist…" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all"/>
+</div>
+<div>
+<label for="city-input" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Your city (for local material pricing)</label>
+<input type="text" id="city-input" name="city" maxlength="80" placeholder="e.g. Karachi" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all"/>
+</div>
+<div class="pt-2">
+<button type="submit" id="generate-btn" disabled class="w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 hover:brightness-110 disabled:opacity-35 disabled:cursor-not-allowed transition-all">
+<span class="font-label-caps text-label-caps font-bold uppercase btn-label">Generate 3 Tiers</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</form>
+</section>
+</div>
 
-      <section class="error-card" id="error-card" hidden>
-        <p class="error-title">Something went wrong</p>
-        <p class="error-detail" id="error-detail"></p>
-        <button type="button" id="retry-btn">Try another photo</button>
-      </section>
+<section class="progress-card max-w-lg mx-auto text-center px-6 py-16" id="progress-card" hidden>
+<p class="font-headline-sm text-headline-sm text-on-surface progress-message" id="progress-message">Analyzing your room&hellip;</p>
+<p class="font-body-md text-on-surface-variant text-sm mt-2 progress-subtitle" id="progress-subtitle"></p>
+<div class="w-full h-[2px] bg-outline-variant/20 mt-8 overflow-hidden" id="progress-bar">
+<div class="h-full bg-primary transition-[width] duration-500" id="progress-bar-fill" style="width:0%"></div>
+</div>
+<ol class="stage-stepper flex justify-between gap-2 mt-6 list-none p-0 m-0" id="stage-stepper"></ol>
+<div class="grid grid-cols-3 gap-2 mt-8" id="concept-previews"></div>
+</section>
 
-      <section class="results" id="results" hidden>
-        <p class="room-description" id="room-description"></p>
-        <div class="results-grid" id="results-grid"></div>
-        <div class="results-footer">
-          <button type="button" id="start-over-btn">Upload another photo</button>
-        </div>
-      </section>
-      </div>
+<section class="error-card max-w-xl mx-auto mt-8 px-8 py-6 text-center bg-error-container/10 border border-error/30" id="error-card" hidden>
+<p class="font-headline-sm text-error font-semibold mb-1">Something went wrong</p>
+<p class="font-body-md text-on-surface-variant text-sm mb-4" id="error-detail"></p>
+<button type="button" id="retry-btn" class="border border-error/50 text-error px-6 py-2 font-label-caps text-label-caps hover:bg-error/10 transition-colors">Try another photo</button>
+</section>
 
-      <div class="tab-panel" id="house-tab-panel" hidden>
-        <div class="house-upload-view" id="house-upload-view">
-          <section class="hero">
-            <h1>See your plot, built.</h1>
-            <p class="hero-sub">
-              Upload a photo of your plot with its dimensions to get an AI-generated concept render.
-            </p>
-          </section>
+<section class="results max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop mt-14 mb-section-gap" id="results" hidden>
+<p class="room-description text-center font-body-md text-on-surface-variant italic max-w-2xl mx-auto mb-10" id="room-description"></p>
+<div class="results-grid grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-gutter" id="results-grid"></div>
+<div class="text-center mt-10">
+<button type="button" id="start-over-btn" class="border border-outline-variant text-on-surface px-6 py-3 font-label-caps text-label-caps hover:border-primary hover:text-primary transition-colors">Upload another photo</button>
+</div>
+</section>
 
-          <section class="upload-card" id="house-upload-card">
-            <form id="house-upload-form">
-              <label id="house-dropzone" for="house-file-input" class="dropzone">
-                <input type="file" id="house-file-input" accept="image/png,image/jpeg,image/webp" hidden />
-                <div class="dropzone-content" id="house-dropzone-empty">
-                  <div class="dropzone-icon">⤒</div>
-                  <p class="dropzone-title">Drop a plot photo here</p>
-                  <p class="dropzone-hint">or click to browse &middot; JPG, PNG, WEBP</p>
-                </div>
-                <div class="dropzone-preview" id="house-dropzone-preview" hidden>
-                  <button type="button" class="remove-photo-btn" id="house-remove-photo-btn" aria-label="Remove photo">&times;</button>
-                  <img id="house-preview-img" alt="Selected plot photo" />
-                  <p class="dropzone-filename" id="house-preview-filename"></p>
-                  <p class="dropzone-hint">Click anywhere to choose a different photo</p>
-                </div>
-              </label>
+</div>
 
-              <div class="house-dimensions-wrap">
-                <div class="style-prompt-wrap">
-                  <label for="house-length" class="style-prompt-label">Length</label>
-                  <input type="number" id="house-length" name="length" min="0" step="0.1" placeholder="e.g. 40" />
-                </div>
-                <div class="style-prompt-wrap">
-                  <label for="house-width" class="style-prompt-label">Width</label>
-                  <input type="number" id="house-width" name="width" min="0" step="0.1" placeholder="e.g. 60" />
-                </div>
-                <div class="style-prompt-wrap house-unit-wrap">
-                  <label for="house-unit" class="style-prompt-label">Unit</label>
-                  <select id="house-unit" name="unit">
-                    <option value="ft">ft</option>
-                    <option value="m">m</option>
-                  </select>
-                </div>
-              </div>
+<!-- ================= BUILD A HOUSE ================= -->
+<div id="house-tab-panel" hidden>
 
-              <div class="style-prompt-wrap">
-                <label for="house-prompt" class="style-prompt-label">Requirements (optional)</label>
-                <input
-                  type="text"
-                  id="house-prompt"
-                  name="prompt"
-                  maxlength="200"
-                  placeholder="e.g. 2 floors, 3 bedrooms, modern style"
-                />
-              </div>
+<div id="house-upload-view">
+<section class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop pt-16 pb-8 text-center">
+<span class="font-label-caps text-label-caps text-primary mb-3 block tracking-[0.3em]">FROM PLOT TO CONCEPT</span>
+<h1 class="font-display-lg text-display-lg-mobile text-on-surface mb-4">See your plot, <span class="italic text-primary">built.</span></h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-xl mx-auto">Upload a photo of your plot with its dimensions to get a computed floor layout and an AI-generated concept render.</p>
+</section>
 
-              <button type="submit" id="house-generate-btn" disabled>
-                <span class="btn-label">Generate Concept</span>
-              </button>
-            </form>
-          </section>
-        </div>
+<section class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop mb-section-gap w-full">
+<form id="house-upload-form" class="grid grid-cols-1 lg:grid-cols-12 gap-gutter items-start">
 
-        <section class="progress-card" id="house-progress-card" hidden>
-          <p class="progress-message" id="house-progress-message">Analyzing your plot&hellip;</p>
-          <p class="progress-subtitle" id="house-progress-subtitle"></p>
-          <div class="progress-bar" id="house-progress-bar">
-            <div class="progress-bar-fill" id="house-progress-bar-fill"></div>
-          </div>
-          <ol class="stage-stepper" id="house-stage-stepper"></ol>
-        </section>
+<div class="lg:col-span-7 flex flex-col gap-unit">
+<label id="house-dropzone" for="house-file-input" class="group relative aspect-[4/3] bg-surface-container-low border border-outline-variant/20 flex flex-col items-center justify-center cursor-pointer transition-all hover:border-primary/50 overflow-hidden block">
+<div class="absolute inset-0 opacity-10 pointer-events-none" style="background-image: radial-gradient(circle, #c5a059 1px, transparent 1px); background-size: 40px 40px;"></div>
+<input type="file" id="house-file-input" accept="image/png,image/jpeg,image/webp" hidden/>
+<div class="relative z-10 flex flex-col items-center text-center p-12 transition-transform group-hover:scale-105" id="house-dropzone-empty">
+<div class="w-20 h-20 mb-6 flex items-center justify-center border border-primary/30 rounded-full">
+<span class="material-symbols-outlined text-primary text-4xl">add_a_photo</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-2">Drop a plot photo here</h3>
+<p class="font-body-md text-on-surface-variant max-w-xs">or click to browse · JPG, PNG, WEBP</p>
+</div>
+<div class="absolute inset-0 bg-surface" id="house-dropzone-preview" hidden>
+<img class="w-full h-full object-cover" id="house-preview-img" alt="Selected plot photo"/>
+<p class="absolute bottom-3 left-0 right-0 text-center font-label-caps text-[11px] text-on-surface-variant" id="house-preview-filename"></p>
+<button type="button" class="absolute top-4 right-4 bg-surface/80 backdrop-blur-md p-2 rounded-full text-on-surface hover:text-primary transition-colors" id="house-remove-photo-btn" aria-label="Remove photo">
+<span class="material-symbols-outlined">close</span>
+</button>
+</div>
+</label>
+</div>
 
-        <section class="error-card" id="house-error-card" hidden>
-          <p class="error-title">Something went wrong</p>
-          <p class="error-detail" id="house-error-detail"></p>
-          <button type="button" id="house-retry-btn">Try another photo</button>
-        </section>
+<div class="lg:col-span-5">
+<div class="bg-surface-container border border-outline-variant/10 p-8 lg:p-10 h-full relative overflow-hidden">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-primary"></div>
+<header class="mb-8">
+<span class="font-label-caps text-label-caps text-primary mb-2 block">STEP 01</span>
+<h2 class="font-headline-md text-headline-md text-on-surface">Plot Parameters</h2>
+<div class="w-12 h-1 bg-primary mt-4"></div>
+</header>
+<div class="flex flex-col gap-8">
+<div class="flex gap-4">
+<div class="flex-1">
+<label for="house-length" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Length</label>
+<input type="number" id="house-length" name="length" min="0" step="0.1" placeholder="e.g. 40" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all"/>
+</div>
+<div class="flex-1">
+<label for="house-width" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Width</label>
+<input type="number" id="house-width" name="width" min="0" step="0.1" placeholder="e.g. 60" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all"/>
+</div>
+<div class="w-20">
+<label for="house-unit" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Unit</label>
+<select id="house-unit" name="unit" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all">
+<option value="ft">ft</option>
+<option value="m">m</option>
+</select>
+</div>
+</div>
+<div>
+<label for="house-prompt" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Requirements (optional)</label>
+<input type="text" id="house-prompt" name="prompt" maxlength="200" placeholder="e.g. 2 floors, 3 bedrooms, modern style" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all"/>
+</div>
+<div class="pt-2">
+<button type="submit" id="house-generate-btn" disabled class="w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 hover:brightness-110 disabled:opacity-35 disabled:cursor-not-allowed transition-all">
+<span class="font-label-caps text-label-caps font-bold uppercase btn-label">Generate Concept</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</form>
+</section>
+</div>
 
-        <section class="results" id="house-results" hidden>
-          <p class="room-description" id="plot-description"></p>
-          <div class="results-grid" id="house-results-grid"></div>
-          <div class="results-footer">
-            <button type="button" id="house-start-over-btn">Upload another plot</button>
-          </div>
-        </section>
-      </div>
-    </main>
-  </div>
+<section class="progress-card max-w-lg mx-auto text-center px-6 py-16" id="house-progress-card" hidden>
+<p class="font-headline-sm text-headline-sm text-on-surface progress-message" id="house-progress-message">Analyzing your plot&hellip;</p>
+<p class="font-body-md text-on-surface-variant text-sm mt-2 progress-subtitle" id="house-progress-subtitle"></p>
+<div class="w-full h-[2px] bg-outline-variant/20 mt-8 overflow-hidden" id="house-progress-bar">
+<div class="h-full bg-primary transition-[width] duration-500" id="house-progress-bar-fill" style="width:0%"></div>
+</div>
+<ol class="stage-stepper flex justify-between gap-2 mt-6 list-none p-0 m-0" id="house-stage-stepper"></ol>
+</section>
 
-  <footer class="footer">
-    <div class="footer-inner">
-      <div class="footer-brand">
-        <span class="brand-mark">◆</span>
-        <span>Interior&#8209;Gen</span>
-      </div>
-      <p>AI&#8209;generated visualizations for planning purposes.</p>
-      <p class="footer-links">
-        <a href="/terms">Terms</a>
-        <span aria-hidden="true">&middot;</span>
-        <a href="/privacy">Privacy Policy</a>
-      </p>
-    </div>
-  </footer>
+<section class="error-card max-w-xl mx-auto mt-8 px-8 py-6 text-center bg-error-container/10 border border-error/30" id="house-error-card" hidden>
+<p class="font-headline-sm text-error font-semibold mb-1">Something went wrong</p>
+<p class="font-body-md text-on-surface-variant text-sm mb-4" id="house-error-detail"></p>
+<button type="button" id="house-retry-btn" class="border border-error/50 text-error px-6 py-2 font-label-caps text-label-caps hover:bg-error/10 transition-colors">Try another photo</button>
+</section>
 
-  <div class="lightbox" id="lightbox" hidden>
-    <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
-    <img id="lightbox-img" alt="" />
-    <p class="lightbox-caption" id="lightbox-caption"></p>
-  </div>
+<section class="results max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop mt-14 mb-section-gap" id="house-results" hidden>
+<p class="room-description text-center font-body-md text-on-surface-variant italic max-w-2xl mx-auto mb-10" id="plot-description"></p>
+<div class="results-grid grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-gutter" id="house-results-grid"></div>
+<div class="text-center mt-10">
+<button type="button" id="house-start-over-btn" class="border border-outline-variant text-on-surface px-6 py-3 font-label-caps text-label-caps hover:border-primary hover:text-primary transition-colors">Upload another plot</button>
+</div>
+</section>
 
-  <div class="materials-modal-overlay" id="materials-modal-overlay" hidden>
-    <div class="materials-modal">
-      <button type="button" class="materials-modal-close" id="materials-modal-close" aria-label="Close">&times;</button>
-      <h3 class="materials-modal-title" id="materials-modal-title"></h3>
-      <div class="materials-modal-body" id="materials-modal-body"></div>
-    </div>
-  </div>
+</div>
 
-  <script src="/static/app.js"></script>
+</main>
+
+<footer class="bg-surface-container-lowest border-t border-outline-variant/10 py-14">
+<div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop flex flex-col md:flex-row justify-between items-center gap-4">
+<div class="flex items-center gap-2 font-headline-sm text-headline-sm text-on-surface-variant">
+<span class="w-6 h-6 flex items-center justify-center border border-primary text-primary rotate-45 text-xs"><span class="material-symbols-outlined -rotate-45 text-[14px]">architecture</span></span>
+Interior&#8209;Gen
+</div>
+<p class="font-body-md text-on-surface-variant text-sm">AI&#8209;generated visualizations for planning purposes.</p>
+<p class="font-label-caps text-label-caps text-on-surface-variant">
+<a href="/terms" class="hover:text-primary transition-colors">Terms</a>
+<span class="mx-2 opacity-40">&middot;</span>
+<a href="/privacy" class="hover:text-primary transition-colors">Privacy Policy</a>
+</p>
+</div>
+</footer>
+
+<div class="lightbox fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-8" id="lightbox" hidden>
+<button type="button" class="absolute top-6 right-6 bg-white/10 hover:bg-primary hover:text-on-primary text-white w-10 h-10 rounded-full flex items-center justify-center text-xl transition-colors" id="lightbox-close" aria-label="Close">&times;</button>
+<img id="lightbox-img" alt="" class="max-w-[90vw] max-h-[78vh] object-contain"/>
+<p class="text-on-surface-variant mt-4 font-headline-sm" id="lightbox-caption"></p>
+</div>
+
+<div class="materials-modal-overlay fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-6" id="materials-modal-overlay" hidden>
+<div class="materials-modal relative w-full max-w-xl max-h-[85vh] overflow-y-auto bg-surface-container p-8 border border-outline-variant/20 shadow-2xl">
+<button type="button" class="absolute top-4 right-4 bg-surface-container-high hover:bg-primary hover:text-on-primary text-on-surface w-9 h-9 rounded-full flex items-center justify-center text-xl transition-colors" id="materials-modal-close" aria-label="Close">&times;</button>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-4 pr-10" id="materials-modal-title"></h3>
+<div id="materials-modal-body"></div>
+</div>
+</div>
+
+<script src="/static/app.js"></script>
 </body>
 </html>

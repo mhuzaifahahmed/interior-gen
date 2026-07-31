@@ -101,3 +101,26 @@ class Provider(ABC):
         than degrade silently.
         """
         ...
+
+    @abstractmethod
+    def generate_room_layout(
+        self, dimensions: dict, prompt: str, plot_description: str | None = None
+    ) -> dict:
+        """Return a structured room list per floor for the free algorithmic
+        blueprint step (app/pipeline/floor_layout.py + blueprint_svg.py) - NOT
+        the same thing as generate_floor_plan()/idealhouse.py, which remains
+        the separate, still-inert slot reserved for a future real, paid
+        floor-plan vendor.
+
+        Shape: {"floors": [{"floor_number": int, "rooms": [{"name": str,
+        "area": number}]}]}. "area" is a relative weight, not literal square
+        footage - the layout algorithm rescales it to the real plot dimensions.
+
+        Must NEVER leave a floor without at least one room and must NEVER
+        raise - this is a harder guarantee than analyze_plot's "best effort,
+        degrade to None", same never-empty category as generate_materials:
+        implementations must synthesize a deterministic fallback layout
+        (still never-empty) rather than returning nothing, since the
+        blueprint-drawing step needs real rooms to draw.
+        """
+        ...

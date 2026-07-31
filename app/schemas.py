@@ -3,6 +3,27 @@ from typing import Optional
 from pydantic import BaseModel
 
 
+class SignupRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    identifier: str  # username or email
+    password: str
+
+
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    email: str
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+
+
 class ProjectCreateResponse(BaseModel):
     project_id: str
 
@@ -28,3 +49,8 @@ class HouseProjectStatusResponse(BaseModel):
     plot_description: Optional[str] = None
     images: dict[str, Optional[str]]
     floor_plan_status: str = "idle"
+    # Free algorithmic blueprint step (app/pipeline/floor_layout.py +
+    # blueprint_svg.py) - unrelated to floor_plan_status above, which stays
+    # reserved for a future real, paid floor-plan vendor (still inert).
+    blueprint_status: str = "idle"
+    blueprint_urls: list[str] = []

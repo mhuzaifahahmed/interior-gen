@@ -33,6 +33,7 @@ def run_pipeline(
     storage: Storage,
     user_style_notes: str | None = None,
     city: str | None = None,
+    username: str | None = None,
 ) -> None:
     """Runs the full 3-tier generation for a project. Intended to run as a
     background task; opens its own DB session since the request-scoped one
@@ -41,6 +42,12 @@ def run_pipeline(
     user_style_notes is the optional free-text style prompt the user typed in
     (static/index.html's style-prompt input) - passed through to every tier's
     build_prompt() call, see prompts.py for exactly how it's incorporated.
+
+    username namespaces every generated-image storage key under
+    users/{username}/output/... (see app/main.py's create_project) - required
+    in practice (the endpoint always has a logged-in user), optional here only
+    so this function's signature doesn't force every caller/test to pass it;
+    None falls back to the pre-auth flat key layout.
 
     city is optional (empty/None means the user chose images-only - see
     static/app.js's empty-city confirm dialog). When present, a materials/pricing
@@ -111,7 +118,8 @@ def run_pipeline(
             for tier in TIERS:
                 prompt = build_prompt(tier, room_description, tier_notes.get(tier), user_style_notes)
                 image_bytes = provider.generate_image(original_bytes, prompt, tier=tier)
-                key = f"local.output/{project_id}/{tier}.png"
+                key_prefix = f"users/{username}/output" if username else "local.output"
+                key = f"{key_prefix}/{project_id}/{tier}.png"
                 storage.put(key, image_bytes, content_type="image/png")
                 setattr(project, f"{tier}_key", key)
                 session.add(project)

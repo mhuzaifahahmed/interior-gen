@@ -13,3 +13,10 @@ python-dotenv>=1.0
 boto3>=1.34
 pytest>=8.3
 httpx>=0.27
+# bcrypt used directly, NOT via passlib - passlib 1.7.4 (its last release,
+# unmaintained) hard-fails against modern bcrypt (5.x removed the internal
+# __about__.__version__ attribute passlib's backend-detection probes for) -
+# a real, live-hit compatibility break, not a hypothetical. bcrypt's own
+# hashpw()/checkpw() API is stable and sufficient for this app's needs.
+bcrypt>=4.0
+itsdangerous>=2.2

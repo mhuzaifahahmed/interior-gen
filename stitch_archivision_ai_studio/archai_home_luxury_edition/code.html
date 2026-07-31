@@ -1,0 +1,509 @@
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<style>
+        @layer base {
+            html, body { margin: 0; padding: 0; }
+            body { overscroll-behavior: none; }
+            main > :first-child { margin-top: 0 !important; }
+            main > :last-child { margin-bottom: 0 !important; }
+        }
+        ::-webkit-scrollbar { display: none; }
+    </style>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "inverse-surface": "#e5e2e1",
+                        "surface-container-high": "#2a2a2a",
+                        "on-secondary-container": "#b6b5b1",
+                        "on-secondary": "#30312e",
+                        "primary-fixed-dim": "#e9c176",
+                        "surface-container": "#201f1f",
+                        "tertiary-fixed": "#e5e2e1",
+                        "inverse-primary": "#775a19",
+                        "background": "#131313",
+                        "surface-container-highest": "#353534",
+                        "primary-container": "#c5a059",
+                        "surface-variant": "#353534",
+                        "surface": "#131313",
+                        "secondary-fixed-dim": "#c8c6c3",
+                        "on-primary-fixed": "#261900",
+                        "tertiary-container": "#a7a5a5",
+                        "on-tertiary-container": "#3b3b3b",
+                        "primary": "#e9c176",
+                        "on-background": "#e5e2e1",
+                        "outline": "#9a8f80",
+                        "on-primary-fixed-variant": "#5d4201",
+                        "on-error-container": "#ffdad6",
+                        "on-primary": "#412d00",
+                        "surface-tint": "#e9c176",
+                        "on-primary-container": "#4e3700",
+                        "error": "#ffb4ab",
+                        "surface-container-low": "#1c1b1b",
+                        "secondary-fixed": "#e4e2de",
+                        "on-secondary-fixed-variant": "#474744",
+                        "on-tertiary-fixed": "#1c1b1b",
+                        "surface-container-lowest": "#0e0e0e",
+                        "on-surface": "#e5e2e1",
+                        "primary-fixed": "#ffdea5",
+                        "error-container": "#93000a",
+                        "secondary": "#c8c6c3",
+                        "on-tertiary": "#313030",
+                        "outline-variant": "#4e4639",
+                        "on-surface-variant": "#d1c5b4",
+                        "tertiary": "#c8c6c5",
+                        "surface-bright": "#3a3939",
+                        "surface-dim": "#131313",
+                        "inverse-on-surface": "#313030",
+                        "on-error": "#690005",
+                        "secondary-container": "#474744",
+                        "on-tertiary-fixed-variant": "#474746",
+                        "tertiary-fixed-dim": "#c8c6c5",
+                        "on-secondary-fixed": "#1b1c1a"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "section-gap": "128px",
+                        "unit": "8px",
+                        "margin-desktop": "64px",
+                        "gutter": "32px",
+                        "container-max": "1440px",
+                        "margin-mobile": "24px"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Playfair Display"],
+                        "body-md": ["IBM Plex Sans"],
+                        "label-caps": ["IBM Plex Sans"],
+                        "body-lg": ["IBM Plex Sans"],
+                        "headline-sm": ["Playfair Display"],
+                        "technical-data": ["IBM Plex Sans"],
+                        "display-lg": ["Playfair Display"],
+                        "display-lg-mobile": ["Playfair Display"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["32px", { "lineHeight": "1.3", "fontWeight": "600" }],
+                        "body-md": ["16px", { "lineHeight": "1.6", "fontWeight": "400" }],
+                        "label-caps": ["12px", { "lineHeight": "1.2", "letterSpacing": "0.15em", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "1.6", "fontWeight": "400" }],
+                        "headline-sm": ["24px", { "lineHeight": "1.4", "fontWeight": "500" }],
+                        "technical-data": ["14px", { "lineHeight": "1.4", "fontWeight": "500" }],
+                        "display-lg": ["64px", { "lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "display-lg-mobile": ["40px", { "lineHeight": "1.2", "letterSpacing": "-0.01em", "fontWeight": "700" }]
+                    }
+                },
+            },
+        }
+    </script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+</head>
+<body class="bg-background font-body-md text-on-surface">
+<header class="fixed top-0 w-full z-50 bg-surface/90 backdrop-blur-xl border-b border-white/5">
+<div class="h-16 w-full max-w-container-max mx-auto px-margin-desktop flex items-center justify-between">
+<div class="flex items-center gap-unit">
+<img alt="ArchAI Logo" class="h-8 w-auto object-contain brightness-150" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBbf22Ca6vbzsnU0TBpmC2NiAUTeggZKgTX4MvK7V-lqxZYZ-DclmsqTJ-7tEdNsGn-3Ukbcc2SzzvuE6n1l3uzCqYMmbCOXS3xF2HMMFUge8GN9DhMzy9c3vQhTv3X8_vcVwy_e-wwr1S7kmLyzPeBIW6QFa3wkFNDlRCQ9eFC-u7f8aQjSh67QuK0kTMU_5DCAbggEYh0yJHnNYhj0xIFSDZXK-VPj0wm7CTdCgwPmpyCiVfCNmLJoQ"/>
+<span class="font-headline-md text-[24px] text-primary tracking-tight">ArchAI</span>
+</div>
+<nav class="hidden md:flex items-center gap-margin-desktop" data-active-classes="text-primary border-b border-primary">
+<a aria-current="page" class="transition-colors py-2 text-primary border-b border-primary font-medium" data-path="home" href="#">Home</a>
+<a class="text-body-md text-on-surface-variant hover:text-primary transition-colors py-2" data-path="room-redesign" href="#">Room Redesign</a>
+<a class="text-body-md text-on-surface-variant hover:text-primary transition-colors py-2" data-path="build-a-house" href="#">Build a House</a>
+</nav>
+<div class="flex items-center gap-unit">
+<button class="text-on-surface-variant hover:text-primary transition-colors p-2 flex items-center">
+<span class="material-symbols-outlined">settings</span>
+</button>
+<div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center cursor-pointer">
+<span class="material-symbols-outlined text-on-primary text-[18px]">person</span>
+</div>
+</div>
+</div>
+</header>
+<main class="w-full pt-16 bg-background min-h-screen">
+<div class="flex flex-col w-full overflow-x-hidden">
+<!-- Hero Section -->
+<section class="relative w-full min-h-[90vh] flex items-center justify-center bg-surface overflow-hidden">
+<!-- Decorative background element -->
+<div class="absolute inset-0 z-0">
+<div class="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_20%_30%,rgba(233,193,118,0.12)_0%,transparent_50%)]"></div>
+<div class="absolute bottom-0 right-0 w-full h-full bg-[radial-gradient(circle_at_80%_70%,rgba(197,160,89,0.08)_0%,transparent_50%)]"></div>
+<!-- Fine grid lines mimicking a blueprint -->
+<div class="absolute inset-0 opacity-[0.05]" style="background-image: linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px); background-size: 60px 60px;"></div>
+</div>
+<div class="relative z-10 max-w-container-max mx-auto px-margin-desktop w-full grid grid-cols-12 gap-gutter items-center py-section-gap">
+<div class="col-span-12 lg:col-span-7 flex flex-col gap-margin-desktop">
+<div class="flex flex-col gap-margin-mobile">
+<div class="flex items-center gap-unit">
+<span class="w-12 h-[1px] bg-primary"></span>
+<span class="font-label-caps text-label-caps text-primary uppercase tracking-[0.2em]">Engineering the Future</span>
+</div>
+<h1 class="font-display-lg text-display-lg text-on-surface max-w-2xl leading-[1.05] lg:text-[72px]">
+                                Architectural Precision <br/>
+<span class="text-primary italic">Meets Intelligence.</span>
+</h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-xl">
+                                ArchAI transforms conceptual visions into professional-grade structural blueprints. Harness proprietary generative models designed specifically for luxury developments and high-end residential architecture.
+                            </p>
+</div>
+<div class="flex flex-wrap gap-margin-mobile">
+<button class="px-margin-desktop py-4 bg-primary text-on-primary font-label-caps text-label-caps rounded hover:bg-primary/90 transition-all shadow-[0_4px_20px_rgba(233,193,118,0.3)] active:scale-95">
+                                START ROOM REDESIGN
+                            </button>
+<button class="px-margin-desktop py-4 border border-outline text-on-surface font-label-caps text-label-caps rounded hover:bg-white/5 transition-all active:scale-95">
+                                BUILD A NEW HOUSE
+                            </button>
+</div>
+<div class="flex gap-margin-desktop mt-4 pt-8 border-t border-white/10">
+<div class="flex flex-col">
+<span class="font-technical-data text-technical-data text-primary">01. ACCURACY</span>
+<span class="font-body-md text-on-surface-variant">+/- 2mm spatial mapping</span>
+</div>
+<div class="flex flex-col">
+<span class="font-technical-data text-technical-data text-primary">02. COMPLIANCE</span>
+<span class="font-body-md text-on-surface-variant">Global building codes</span>
+</div>
+<div class="flex flex-col">
+<span class="font-technical-data text-technical-data text-primary">03. SPEED</span>
+<span class="font-body-md text-on-surface-variant">Real-time BIM exports</span>
+</div>
+</div>
+</div>
+<!-- Hero Visual -->
+<div class="hidden lg:flex col-span-5 relative h-full">
+<div class="relative w-full aspect-[4/5] bg-surface-container-low rounded-lg overflow-hidden shadow-2xl border border-white/5 transform lg:translate-x-12">
+<img class="w-full h-full object-cover" data-alt="A high-end architectural rendering of a minimalist modern villa with glass walls, concrete textures, and lush landscaping. The image is overlayed with thin cyan technical drafting lines and measurements, suggesting an AI-assisted design process. Sharp afternoon lighting casting long dramatic shadows." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAbO_Z-hG5RDfN02OuAx-6diGij1DWLh68lGVlvYkp-z-GW1q-58qEgEStxh_XZvlWI3j2YPlC_oQLUz_SqgZSCaT3BfZ5je70j33Xzmqyrl7McDmZjs_7qNFwhujs7LJBo8N4fjKVSSfAYaYohPXyD-I8qj2xNpDfi-qlLiFWyRZNveEP2XPnBGK76lVS3GXOgrPIeFsKXympHQN02eLfgmU_-772nFt3HXRfr0Xx-mxJFAighpOsyWA"/>
+<div class="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent opacity-60"></div>
+<div class="absolute bottom-margin-mobile left-margin-mobile p-6 bg-surface/80 backdrop-blur-md rounded border border-white/10 shadow-lg max-w-[240px]">
+<span class="font-technical-data text-[10px] text-primary block mb-2 uppercase tracking-widest">Real-time Render</span>
+<div class="h-1 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-primary w-3/4"></div>
+</div>
+<p class="font-label-caps text-[10px] mt-3 text-on-surface-variant">STRUCTURAL INTEGRITY: 99.8%</p>
+</div>
+</div>
+<!-- Overlapping technical card -->
+<div class="absolute -bottom-8 -left-6 p-8 bg-surface-container-highest border border-outline-variant/30 rounded shadow-2xl max-w-[260px] animate-bounce-slow">
+<span class="material-symbols-outlined text-primary mb-2">architecture</span>
+<p class="font-headline-sm text-primary">CAD-Ready</p>
+<p class="font-body-md text-[14px] text-on-surface-variant">Direct export to Revit, AutoCAD, and Rhino with full layer support.</p>
+</div>
+</div>
+</div>
+</section>
+<!-- Sophisticated Tabs Section -->
+<section class="w-full py-section-gap bg-surface-container-lowest">
+<div class="max-w-container-max mx-auto px-margin-desktop">
+<div class="flex flex-col items-center mb-margin-desktop">
+<span class="font-label-caps text-label-caps text-primary mb-unit uppercase tracking-widest">The Toolkit</span>
+<h2 class="font-headline-md text-on-surface lg:text-[40px]">Integrated Design Ecosystem</h2>
+</div>
+<div class="w-full" id="tabs-container">
+<!-- Tab Headers -->
+<div class="flex justify-center border-b border-white/5 mb-margin-desktop">
+<div class="flex gap-margin-desktop">
+<button class="tab-btn active px-margin-mobile py-4 font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-all relative" data-index="0" onclick="switchTab(0)">
+                                    ROOM REDESIGN
+                                    <div class="tab-indicator absolute bottom-0 left-0 w-full h-[2px] bg-primary scale-x-100 transition-transform origin-left"></div>
+</button>
+<button class="tab-btn px-margin-mobile py-4 font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-all relative" data-index="1" onclick="switchTab(1)">
+                                    STRUCTURAL BUILDS
+                                    <div class="tab-indicator absolute bottom-0 left-0 w-full h-[2px] bg-primary scale-x-0 transition-transform origin-left"></div>
+</button>
+<button class="tab-btn px-margin-mobile py-4 font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-all relative" data-index="2" onclick="switchTab(2)">
+                                    MATERIAL ANALYSIS
+                                    <div class="tab-indicator absolute bottom-0 left-0 w-full h-[2px] bg-primary scale-x-0 transition-transform origin-left"></div>
+</button>
+</div>
+</div>
+<!-- Tab Content -->
+<div class="relative overflow-hidden min-h-[460px]">
+<div class="tab-panel flex flex-col lg:flex-row gap-margin-desktop items-center transition-opacity duration-500 opacity-100" id="tab-content-0">
+<div class="lg:w-1/2 flex flex-col gap-margin-mobile">
+<h3 class="font-headline-sm text-primary text-[28px]">AI-Powered Interior Metamorphosis</h3>
+<p class="font-body-md text-on-surface-variant">Upload a photo of any space. Our engine identifies load-bearing walls, plumbing stacks, and electrical runs before suggesting aesthetically superior layouts that remain structurally viable.</p>
+<ul class="flex flex-col gap-4 mt-4">
+<li class="flex items-center gap-4 text-body-md"><span class="material-symbols-outlined text-primary text-[20px]">check_circle</span> Auto-detection of spatial dimensions</li>
+<li class="flex items-center gap-4 text-body-md"><span class="material-symbols-outlined text-primary text-[20px]">check_circle</span> Lighting and shadow simulation</li>
+<li class="flex items-center gap-4 text-body-md"><span class="material-symbols-outlined text-primary text-[20px]">check_circle</span> Vendor-integrated furniture sourcing</li>
+</ul>
+</div>
+<div class="lg:w-1/2 w-full aspect-video rounded-lg overflow-hidden bg-surface-container border border-white/5 shadow-2xl">
+<img class="w-full h-full object-cover" data-alt="Split screen visualization showing a messy outdated living room on the left and a stunning Scandinavian-modern redesigned space on the right. The image includes subtle UI overlays showing furniture names and pricing tags." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAfzoawvDZoNyazE0l5FL7rV9AedVBqANL4Bj6mHQg5y-uQoLZtFIoTxddLp-n6Mb2qN0QKQUWyabKeFmhIoJY7jH0uY8vfWTPVim-awN91zO30ZVpIhqxqX1N0Cx_E66MBFVXE8CzmslJaRelq_1AhJmK4yLKjkTbx7CeO2_EtFZpiNZx4h2MbrFT2eZD2tjXRxFCqONEPoFpyVIG4Kp4Z2xIyINwaNoi_NBveB6wtdRdkHPaoBWx5vw"/>
+</div>
+</div>
+<div class="tab-panel absolute inset-0 flex flex-col lg:flex-row gap-margin-desktop items-center transition-opacity duration-500 opacity-0 pointer-events-none" id="tab-content-1">
+<div class="lg:w-1/2 flex flex-col gap-margin-mobile">
+<h3 class="font-headline-sm text-primary text-[28px]">From Scratch to Schematic</h3>
+<p class="font-body-md text-on-surface-variant">Describe your plot of land and local requirements. ArchAI generates optimized floorplans that maximize natural light, thermal efficiency, and square footage utility.</p>
+<div class="p-6 bg-primary/5 border-l-4 border-primary rounded-r">
+<p class="font-technical-data italic text-primary">"Generate a 3-bedroom passive house for a steep north-facing slope in the Pacific Northwest."</p>
+</div>
+</div>
+<div class="lg:w-1/2 w-full aspect-video rounded-lg overflow-hidden bg-surface-container border border-white/5 shadow-2xl">
+<img class="w-full h-full object-cover" data-alt="A clean 3D isometric blueprint of a modern house showing layers of construction from the foundation to the timber frame. Bright cyan and white color scheme with labels pointing to structural elements like beams and insulation layers." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBaoiKH8shRLFTlyhEbFf1bjnYJ22-PrC3L3w-FWuwISCugNvdinNsi92Cp4X0aaijmBXtfJgYAcrpxlFgh3D27-XwlVzy6xFEnYYRqjiBdl15pnVg0FSV5mEUfKR2XQoi6nEAPXlchY9Wm62JpQPAJ8tQtOjRKzBhOPn8QWIOslPGqDbfyzmsUqbSAfiaUWRyfvl4-XmJIbImo_nngjMARgVXWOXeaUkE6wrTTpJtdEEhQIRolVeIu7A"/>
+</div>
+</div>
+<div class="tab-panel absolute inset-0 flex flex-col lg:flex-row gap-margin-desktop items-center transition-opacity duration-500 opacity-0 pointer-events-none" id="tab-content-2">
+<div class="lg:w-1/2 flex flex-col gap-margin-mobile">
+<h3 class="font-headline-sm text-primary text-[28px]">Precise Material Spec Sheets</h3>
+<p class="font-body-md text-on-surface-variant">Every pixel generated is backed by a real-world material. Get instant Bill of Materials (BOM) with current market pricing and sustainability ratings for every design iteration.</p>
+<div class="grid grid-cols-2 gap-4 mt-4">
+<div class="bg-surface-container-high p-6 rounded border border-white/5">
+<span class="font-label-caps text-[10px] text-on-surface-variant block uppercase mb-1">Carbon Footprint</span>
+<span class="font-headline-sm text-primary">A- (Low)</span>
+</div>
+<div class="bg-surface-container-high p-6 rounded border border-white/5">
+<span class="font-label-caps text-[10px] text-on-surface-variant block uppercase mb-1">Est. Cost</span>
+<span class="font-headline-sm text-primary">$420/sqft</span>
+</div>
+</div>
+</div>
+<div class="lg:w-1/2 w-full aspect-video rounded-lg overflow-hidden bg-surface-container border border-white/5 shadow-2xl">
+<img class="w-full h-full object-cover" data-alt="A data-rich interface showing material swatches (oak, polished concrete, brushed steel) next to complex bar charts and sustainability graphs. The aesthetic is clean, dark-mode technical luxury." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA6L9HXnujlts4Eq9ykTmADW4fF724h8pax1VUvCRpwajZ5P3GU-PPLBgWRAGP6SJsM7eEUpKeo20Qnp57LMRUCGivNezV63OpAIPyMP4wwk7uQyLoq8oQWihTAcMpPa31E8mOnFbzVCygsazppyUPBuDoCSDA1dBpo_XebgZdrhVCWeUcbCgbYFdKhrwd4nXPF7_73Gjeddr2W2qrJKzOzHCjLvn20quftxcgVMwdSvD9VsUNQzjT1kA"/>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Before/After Section -->
+<section class="w-full py-section-gap bg-surface">
+<div class="max-w-container-max mx-auto px-margin-desktop">
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-gutter mb-margin-desktop">
+<div class="flex flex-col gap-unit">
+<span class="font-label-caps text-label-caps text-primary uppercase tracking-widest">Results Oriented</span>
+<h2 class="font-headline-md text-on-surface">The ArchAI Transformation</h2>
+</div>
+<p class="font-body-md text-on-surface-variant max-w-sm">Observe the shift from raw spatial data to engineered aesthetic perfection.</p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-gutter">
+<!-- Case 1 -->
+<div class="group relative flex flex-col bg-surface-container-low rounded-lg overflow-hidden border border-white/5 shadow-lg">
+<div class="relative w-full aspect-[16/10] overflow-hidden cursor-ew-resize">
+<div class="absolute inset-0 flex">
+<div class="w-1/2 relative overflow-hidden transition-all duration-300">
+<img class="absolute inset-0 w-full h-full object-cover grayscale opacity-50" data-alt="A grainy, poorly lit photo of a derelict attic with exposed rafters and dust." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAOF58DYrdsFz-Ryq8M5o4zfZShXXfxh76KF-4AyYUUWxms-W7_BtGJSSmuBq49ArhjCX0lTujUlfYZAkj5xkIdrM-4QaYRVLKqCOSHzyP5b6YwLaDVbryhDBKY28w8qzKPNXQAMllqvtj4Q0jh46u6plpiWdhT37WsfPrD6G6uYjV24ibNBTJQcKVAGCvLz0URM1vGEoBQn1iyq3jcZLWEUK4q2UPA72ihps5f-8V0tEWeqQJQqRKeVg"/>
+<div class="absolute top-4 left-4 bg-background/80 text-on-surface px-3 py-1 font-label-caps text-[10px] rounded border border-white/10">INPUT</div>
+</div>
+<div class="w-1/2 relative overflow-hidden transition-all duration-300">
+<img class="absolute inset-0 w-full h-full object-cover" data-alt="The same attic space transformed into a luxury home office with skylights, built-in shelving, and warm ambient lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAXJYCwo-5ZOPj24aPYtlVTxekOCpAlBCdhanAERNNY96Nd36Rz6AErZMzA6S48F3wW8jLHELPokWKC5xDvpnUweOiPwQPEkU1yvOPrDsYH0EMCpQrha1XDEk-9soux6XXlgnKVxx3_2qq6-lYRxmU6tLFToeMPfkgj2VVd1nid0TFA3sdo22h1_18CnZV1tZUSC8Xns31JIjQ8qQUARWCe8R3b-gmQIuQjTWCSfqhuBcqGd4-IWlRZfQ"/>
+<div class="absolute top-4 right-4 bg-primary text-on-primary px-3 py-1 font-label-caps text-[10px] rounded">RESULT</div>
+</div>
+</div>
+<div class="absolute inset-y-0 left-1/2 w-[2px] bg-primary z-20 shadow-[0_0_15px_rgba(233,193,118,0.5)]">
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-primary flex items-center justify-center shadow-2xl border-4 border-background">
+<span class="material-symbols-outlined text-on-primary text-[18px]">unfold_more</span>
+</div>
+</div>
+</div>
+<div class="p-8 flex flex-col gap-2">
+<div class="flex justify-between items-center">
+<span class="font-label-caps text-label-caps text-primary">PROJECT 0124</span>
+<span class="font-technical-data text-on-surface-variant">Attic Conversion</span>
+</div>
+<p class="font-body-md text-on-surface-variant">Full structural reimagining of a non-functional attic space into a 400sqft luxury studio.</p>
+</div>
+</div>
+<!-- Case 2 -->
+<div class="group relative flex flex-col bg-surface-container-low rounded-lg overflow-hidden border border-white/5 shadow-lg">
+<div class="relative w-full aspect-[16/10] overflow-hidden cursor-ew-resize">
+<div class="absolute inset-0 flex">
+<div class="w-1/2 relative overflow-hidden transition-all duration-300">
+<img class="absolute inset-0 w-full h-full object-cover grayscale opacity-50" data-alt="A blurry outdoor photo of a suburban lot." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAa8WGQvncbHWCPr92gK5Zixaxpxx-QfW-kSESFusYceUPkC-meXNkFiMftUMTC8V24GeMmQWSnka503ZfqIG56k8jGg5FrNklNJ27phqcM-pPX4D1VAmTbbkrdodkhvoCOprj4u_PzxfrFdCQBc2kftHgsw1FfPmROPKPnE6ZOqiMKIqoAGdjrZ_VQLpCD43n8iOjSSBOFnC2XOESU30AaWMZA6KRMjtnwv6SSvOYXceag9bxDEy1-qw"/>
+<div class="absolute top-4 left-4 bg-background/80 text-on-surface px-3 py-1 font-label-caps text-[10px] rounded border border-white/10">INPUT</div>
+</div>
+<div class="w-1/2 relative overflow-hidden transition-all duration-300">
+<img class="absolute inset-0 w-full h-full object-cover" data-alt="A stunning 3D architectural rendering of a multi-level brutalist concrete house." src="https://lh3.googleusercontent.com/aida-public/AB6AXuB9e19OSSOp_yaW0xG7Zg-5twXM_r9cHjAH1suFWNdzaWFzm37TcdWqDkGdUGXt5c1uQ-WssJDYgNNZzTT-u1ivlzN6MhIwzWyDHxxqfeEcXpnBkwZiYIbYryelaC8C9gM74BWpqVfjSdV212W0hZiOllGpdL7_uN7Xjmt_cKbIKV_6xwJ3fLXtn3_ZV8oWCzJQU36WqDsDgBikULC3MxFG2RYHRt8OHLQ60IbCXopZ-5VEWqMmUwY1yg"/>
+<div class="absolute top-4 right-4 bg-primary text-on-primary px-3 py-1 font-label-caps text-[10px] rounded">RESULT</div>
+</div>
+</div>
+<div class="absolute inset-y-0 left-1/2 w-[2px] bg-primary z-20 shadow-[0_0_15px_rgba(233,193,118,0.5)]">
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-primary flex items-center justify-center shadow-2xl border-4 border-background">
+<span class="material-symbols-outlined text-on-primary text-[18px]">unfold_more</span>
+</div>
+</div>
+</div>
+<div class="p-8 flex flex-col gap-2">
+<div class="flex justify-between items-center">
+<span class="font-label-caps text-label-caps text-primary">PROJECT 0125</span>
+<span class="font-technical-data text-on-surface-variant">Ground-Up Residence</span>
+</div>
+<p class="font-body-md text-on-surface-variant">Automated schematic design for a 3-bedroom modern estate on a constrained plot.</p>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Output Tiers Section -->
+<section class="w-full py-section-gap bg-surface-container-lowest border-y border-white/5">
+<div class="max-w-container-max mx-auto px-margin-desktop">
+<div class="text-center mb-margin-desktop">
+<h2 class="font-headline-md text-on-surface mb-margin-mobile">Comprehensive Technical Outputs</h2>
+<p class="font-body-md text-on-surface-variant max-w-2xl mx-auto">ArchAI doesn't just generate pictures. We generate actionable, buildable technical data packages for elite architecture.</p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<!-- Tier 1 -->
+<div class="bg-surface-container p-margin-mobile rounded-lg border border-white/5 flex flex-col gap-margin-mobile relative overflow-hidden group hover:border-primary/30 transition-all">
+<div class="absolute top-0 right-0 w-24 h-24 bg-primary/5 rounded-bl-full transition-all group-hover:w-32 group-hover:h-32"></div>
+<span class="font-label-caps text-label-caps text-primary">STAGE 01</span>
+<h3 class="font-headline-sm text-on-surface">Concept Visualization</h3>
+<p class="font-body-md text-[14px] text-on-surface-variant">High-fidelity 8K renders that capture lighting, atmosphere, and aesthetic intent. Perfect for private client presentations and early-stage buy-in.</p>
+<div class="flex flex-col gap-2 mt-auto">
+<div class="flex items-center justify-between text-technical-data text-[11px] border-b border-white/10 pb-2">
+<span>RESOLUTION</span>
+<span class="text-primary">8192 x 8192</span>
+</div>
+<div class="flex items-center justify-between text-technical-data text-[11px]">
+<span>FORMATS</span>
+<span class="text-primary">RAW, JPG, PNG</span>
+</div>
+</div>
+</div>
+<!-- Tier 2 -->
+<div class="bg-surface-container p-margin-mobile rounded-lg border border-primary/50 flex flex-col gap-margin-mobile relative shadow-[0_0_40px_rgba(233,193,118,0.1)]">
+<span class="font-label-caps text-label-caps text-primary">STAGE 02</span>
+<h3 class="font-headline-sm text-on-surface">Technical Drafts</h3>
+<p class="font-body-md text-[14px] text-on-surface-variant">Dimensional floor plans, sections, and elevations. Scaled drawings that can be imported directly into CAD software for engineering validation.</p>
+<div class="flex flex-col gap-2 mt-auto">
+<div class="flex items-center justify-between text-technical-data text-[11px] border-b border-white/10 pb-2">
+<span>PRECISION</span>
+<span class="text-primary">+/- 0.02%</span>
+</div>
+<div class="flex items-center justify-between text-technical-data text-[11px]">
+<span>FORMATS</span>
+<span class="text-primary">DWG, DXF, PDF</span>
+</div>
+</div>
+<div class="absolute -top-3 right-6 px-3 py-1 bg-primary text-on-primary font-label-caps text-[9px] rounded">SIGNATURE CHOICE</div>
+</div>
+<!-- Tier 3 -->
+<div class="bg-surface-container p-margin-mobile rounded-lg border border-white/5 flex flex-col gap-margin-mobile relative overflow-hidden group hover:border-primary/30 transition-all">
+<div class="absolute bottom-0 right-0 w-24 h-24 bg-primary/5 rounded-tl-full transition-all group-hover:w-32 group-hover:h-32"></div>
+<span class="font-label-caps text-label-caps text-primary">STAGE 03</span>
+<h3 class="font-headline-sm text-on-surface">Material Specs</h3>
+<p class="font-body-md text-[14px] text-on-surface-variant">Exhaustive Bill of Materials (BOM) including quantities, R-values, structural load capacities, and estimated carbon impact for the entire build.</p>
+<div class="flex flex-col gap-2 mt-auto">
+<div class="flex items-center justify-between text-technical-data text-[11px] border-b border-white/10 pb-2">
+<span>COMPLIANCE</span>
+<span class="text-primary">ISO 14001 READY</span>
+</div>
+<div class="flex items-center justify-between text-technical-data text-[11px]">
+<span>FORMATS</span>
+<span class="text-primary">XLSX, CSV, JSON</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Final CTA Section -->
+<section class="w-full py-[120px] bg-primary relative overflow-hidden">
+<div class="absolute inset-0 z-0">
+<div class="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_center,rgba(0,0,0,0.1)_0%,transparent_70%)]"></div>
+<!-- Blueprint texture in CTA -->
+<div class="absolute inset-0 opacity-[0.15]" style="background-image: linear-gradient(#000 1px, transparent 1px), linear-gradient(90deg, #000 1px, transparent 1px); background-size: 80px 80px;"></div>
+</div>
+<div class="relative z-10 max-w-container-max mx-auto px-margin-desktop text-center">
+<h2 class="font-display-lg text-on-primary mb-margin-mobile text-[48px] lg:text-[64px]">Ready to Draft the Future?</h2>
+<p class="font-body-lg text-on-primary/80 mb-margin-desktop max-w-2xl mx-auto">Join the world's most prestigious architectural firms using ArchAI to define the next century of design.</p>
+<div class="flex flex-col sm:flex-row gap-4 justify-center">
+<button class="px-12 py-5 bg-background text-primary font-label-caps text-label-caps rounded hover:bg-black transition-all shadow-2xl">CREATE FREE ACCOUNT</button>
+<button class="px-12 py-5 border border-on-primary/30 text-on-primary font-label-caps text-label-caps rounded hover:bg-white/10 transition-all">TALK TO AN ENGINEER</button>
+</div>
+</div>
+</section>
+</div>
+</main>
+<footer class="w-full bg-surface-container-low py-margin-desktop">
+<div class="max-w-container-max mx-auto px-margin-desktop flex flex-col md:flex-row justify-between items-center gap-margin-mobile border-t border-white/5 pt-12">
+<div class="text-label-caps font-label-caps text-on-surface-variant">© 2024 ARCHAI PLATFORM. AURELIAN MONOLITH EDITION.</div>
+<div class="flex gap-margin-desktop">
+<a class="text-body-md text-on-surface-variant hover:text-primary transition-colors" href="#">Privacy</a>
+<a class="text-body-md text-on-surface-variant hover:text-primary transition-colors" href="#">Terms</a>
+<a class="text-body-md text-on-surface-variant hover:text-primary transition-colors" href="#">Contact</a>
+</div>
+</div>
+</footer>
+<script>
+        function switchTab(index) {
+            const panels = document.querySelectorAll('.tab-panel');
+            const buttons = document.querySelectorAll('.tab-btn');
+            const indicators = document.querySelectorAll('.tab-indicator');
+
+            panels.forEach((panel, i) => {
+                if (i === index) {
+                    panel.classList.remove('opacity-0', 'pointer-events-none');
+                    panel.classList.add('opacity-100');
+                    panel.classList.remove('absolute');
+                    panel.classList.add('relative');
+                } else {
+                    panel.classList.remove('opacity-100');
+                    panel.classList.add('opacity-0', 'pointer-events-none');
+                    panel.classList.remove('relative');
+                    panel.classList.add('absolute');
+                }
+            });
+
+            buttons.forEach((btn, i) => {
+                if (i === index) {
+                    btn.classList.add('text-primary');
+                    btn.classList.remove('text-on-surface-variant');
+                    indicators[i].classList.add('scale-x-100');
+                    indicators[i].classList.remove('scale-x-0');
+                } else {
+                    btn.classList.remove('text-primary');
+                    btn.classList.add('text-on-surface-variant');
+                    indicators[i].classList.remove('scale-x-100');
+                    indicators[i].classList.add('scale-x-0');
+                }
+            });
+        }
+
+        // Handle Slider
+        document.querySelectorAll('.group.relative.flex.flex-col').forEach(card => {
+            const handle = card.querySelector('.absolute.inset-y-0.left-1/2');
+            const leftPanel = card.querySelector('.w-1/2.relative:first-child');
+            const rightPanel = card.querySelector('.w-1/2.relative:last-child');
+            
+            card.addEventListener('mousemove', (e) => {
+                const rect = card.getBoundingClientRect();
+                const x = Math.max(5, Math.min(95, ((e.clientX - rect.left) / rect.width) * 100));
+                handle.style.left = `${x}%`;
+                leftPanel.style.width = `${x}%`;
+                rightPanel.style.width = `${100 - x}%`;
+            });
+
+            card.addEventListener('mouseleave', () => {
+                handle.style.transition = 'left 0.8s cubic-bezier(0.4, 0, 0.2, 1)';
+                leftPanel.style.transition = 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)';
+                rightPanel.style.transition = 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)';
+                handle.style.left = '50%';
+                leftPanel.style.width = '50%';
+                rightPanel.style.width = '50%';
+                setTimeout(() => {
+                    handle.style.transition = '';
+                    leftPanel.style.transition = '';
+                    rightPanel.style.transition = '';
+                }, 800);
+            });
+        });
+    </script>
+<style>
+        @keyframes bounce-slow {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-15px); }
+        }
+        .animate-bounce-slow {
+            animation: bounce-slow 5s ease-in-out infinite;
+        }
+    </style>
+</body></html>

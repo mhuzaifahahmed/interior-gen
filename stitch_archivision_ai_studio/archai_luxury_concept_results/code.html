@@ -1,0 +1,236 @@
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"inverse-surface":"#e5e2e1","surface-container-high":"#2a2a2a","on-secondary-container":"#b6b5b1","on-secondary":"#30312e","primary-fixed-dim":"#e9c176","surface-container":"#201f1f","tertiary-fixed":"#e5e2e1","inverse-primary":"#775a19","background":"#131313","surface-container-highest":"#353534","primary-container":"#c5a059","surface-variant":"#353534","surface":"#131313","secondary-fixed-dim":"#c8c6c3","on-primary-fixed":"#261900","tertiary-container":"#a7a5a5","on-tertiary-container":"#3b3b3b","primary":"#e9c176","on-background":"#e5e2e1","outline":"#9a8f80","on-primary-fixed-variant":"#5d4201","on-error-container":"#ffdad6","on-primary":"#412d00","surface-tint":"#e9c176","on-primary-container":"#4e3700","error":"#ffb4ab","surface-container-low":"#1c1b1b","secondary-fixed":"#e4e2de","on-secondary-fixed-variant":"#474744","on-tertiary-fixed":"#1c1b1b","surface-container-lowest":"#0e0e0e","on-surface":"#e5e2e1","primary-fixed":"#ffdea5","error-container":"#93000a","secondary":"#c8c6c3","on-tertiary":"#313030","outline-variant":"#4e4639","on-surface-variant":"#d1c5b4","tertiary":"#c8c6c5","surface-bright":"#3a3939","surface-dim":"#131313","inverse-on-surface":"#313030","on-error":"#690005","secondary-container":"#474744","on-tertiary-fixed-variant":"#474746","tertiary-fixed-dim":"#c8c6c5","on-secondary-fixed":"#1b1c1a"},"borderRadius":{"DEFAULT":"0.25rem","lg":"0.5rem","xl":"0.75rem","full":"9999px"},"spacing":{"section-gap":"128px","unit":"8px","margin-desktop":"64px","gutter":"32px","container-max":"1440px","margin-mobile":"24px"},"fontFamily":{"headline-md":["Playfair Display"],"body-md":["IBM Plex Sans"],"label-caps":["IBM Plex Sans"],"body-lg":["IBM Plex Sans"],"headline-sm":["Playfair Display"],"technical-data":["IBM Plex Sans"],"display-lg":["Playfair Display"],"display-lg-mobile":["Playfair Display"]},"fontSize":{"headline-md":["32px",{"lineHeight":"1.3","fontWeight":"600"}],"body-md":["16px",{"lineHeight":"1.6","fontWeight":"400"}],"label-caps":["12px",{"lineHeight":"1.2","letterSpacing":"0.15em","fontWeight":"600"}],"body-lg":["18px",{"lineHeight":"1.6","fontWeight":"400"}],"headline-sm":["24px",{"lineHeight":"1.4","fontWeight":"500"}],"technical-data":["14px",{"lineHeight":"1.4","fontWeight":"500"}],"display-lg":["64px",{"lineHeight":"1.1","letterSpacing":"-0.02em","fontWeight":"700"}],"display-lg-mobile":["40px",{"lineHeight":"1.2","letterSpacing":"-0.01em","fontWeight":"700"}]}}}}</script></head><body class="bg-background font-body-md text-on-background"><header class="fixed top-0 w-full z-50 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/10"><div class="h-20 max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop flex items-center justify-between"><div class="flex items-center gap-4"><img alt="Logo" class="h-8 w-auto object-contain grayscale brightness-125 sepia-[.3]" src="https://lh3.googleusercontent.com/aida/AP1WRLvih3vfBmVjkJf67RcY4aUwV-IbHC-iRw_bVIbEKrLOgba0eicre3r3TV9bYzCRH2Nm5HSBHJ1yg5crwdTXo_0i_HyGv8Hrlj0kyr_pZ9UdfhAYWiKI8NsQOcE0cV-Blb9fjKIGlFbrzLg2Ar6xdY2A_FUBRS1GeivOgwXbPk46ZXW1mwDr8SgZSA5N48UxaOi_epbi6NNPndYXxwWz1K8XSWD9TXJ2OaWDsxaGCxgIksbl7tZIROZ5590"/><span class="font-headline-sm text-headline-sm tracking-tight text-on-surface">ArchAI</span></div><nav class="hidden md:flex items-center gap-margin-mobile" data-active-classes="text-primary font-semibold"><a class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-colors" data-path="home" href="#">HOME</a><a class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-colors" data-path="room-redesign" href="#">ROOM REDESIGN</a><a aria-current="page" class="transition-colors text-primary font-semibold" data-path="build-a-house" href="#">BUILD A HOUSE</a></nav><div class="flex items-center gap-4"><a class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary flex items-center gap-2" data-path="settings" href="#"><div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center"><span class="material-symbols-outlined text-on-primary text-[18px]">person</span></div></a></div></div></header><main class="w-full pt-20 bg-background"><div class="flex flex-col w-full">
+<!-- Hero Visualization Section -->
+<section class="relative w-full h-[85vh] overflow-hidden flex items-end">
+<div class="absolute inset-0 z-0">
+<div class="w-full h-full bg-cover bg-center transition-transform duration-[2000ms] hover:scale-105" data-alt="An ultra-modern architectural masterpiece house at dusk. The structure features massive floor-to-ceiling glass walls, floating concrete planes, and a shimmering infinity pool that reflects the warm champagne gold interior lighting. The surrounding landscape is a minimalist desert garden with sculptural agave plants. High-end architectural photography style, 8k resolution, dramatic shadows, twilight atmosphere." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuDS9dBOY7ZfIJdHevpwWPKHaYUvDfuDwNevrt6Mjp26koCVGfc1fmPRNAI9ERP970tVmSX9_FfyP_eO271Ee1ofbPcGDbH2i4df1zLfQSpcIscoY-S0eehGcj8Gsm69XIDZOKAE9t47D8FJsqrcZJFCLhlyyPl71Zd4frkmrgiOC7AzeqC3RqS-4OpESxUe_6cKDtLrNMkCH12SULjjPDkmJwgrZBKU2jodThdIegtUpOmG-ekYU1AqWg')"></div>
+<div class="absolute inset-0 bg-gradient-to-t from-background via-background/20 to-transparent"></div>
+</div>
+<div class="relative z-10 max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop pb-16 w-full">
+<div class="flex flex-col gap-6 max-w-3xl">
+<div class="flex items-center gap-4">
+<span class="w-12 h-[1px] bg-primary"></span>
+<span class="font-label-caps text-label-caps text-primary uppercase tracking-[0.3em]">Project Manifest #8291</span>
+</div>
+<h1 class="font-display-lg text-display-lg-mobile lg:text-display-lg text-on-background leading-none">
+                    The Obsidian <br/> <span class="italic font-normal text-primary">Monolith</span>
+</h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-xl">
+                    A synthesis of brutalist geometry and organic warmth. Designed for the high-altitude topography of the Sierra Nevada range.
+                </p>
+<div class="flex gap-4 mt-4">
+<button class="bg-primary text-on-primary px-8 py-4 font-label-caps text-label-caps hover:bg-primary-container transition-all flex items-center gap-2 group">
+                        DOWNLOAD FULL DOSSIER
+                        <span class="material-symbols-outlined text-[18px] group-hover:translate-x-1 transition-transform">download</span>
+</button>
+<button class="border border-outline-variant/30 text-on-surface px-8 py-4 font-label-caps text-label-caps hover:bg-surface-variant/20 transition-all">
+                        VR WALKTHROUGH
+                    </button>
+</div>
+</div>
+</div>
+</section>
+<!-- Technical Specs Ribbon -->
+<div class="w-full border-y border-outline-variant/10 bg-surface-container-lowest">
+<div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop py-12">
+<div class="grid grid-cols-2 md:grid-cols-4 gap-gutter">
+<div class="flex flex-col gap-1">
+<span class="font-label-caps text-[10px] text-outline tracking-widest uppercase text-on-surface-variant/60">Total Area</span>
+<span class="font-technical-data text-headline-sm text-primary">8,450 <span class="text-xs text-on-surface-variant">SQ FT</span></span>
+</div>
+<div class="flex flex-col gap-1">
+<span class="font-label-caps text-[10px] text-outline tracking-widest uppercase text-on-surface-variant/60">Estimated Cost</span>
+<span class="font-technical-data text-headline-sm text-primary">$4.2M - $5.1M</span>
+</div>
+<div class="flex flex-col gap-1">
+<span class="font-label-caps text-[10px] text-outline tracking-widest uppercase text-on-surface-variant/60">Build Duration</span>
+<span class="font-technical-data text-headline-sm text-primary">18-22 <span class="text-xs text-on-surface-variant">MONTHS</span></span>
+</div>
+<div class="flex flex-col gap-1">
+<span class="font-label-caps text-[10px] text-outline tracking-widest uppercase text-on-surface-variant/60">Carbon Rating</span>
+<span class="font-technical-data text-headline-sm text-primary text-emerald-400">A+</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Layout Explorations: Bento Grid -->
+<section class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop py-section-gap w-full">
+<div class="flex flex-col lg:flex-row justify-between items-end mb-16 gap-8">
+<div class="max-w-xl">
+<h2 class="font-headline-md text-headline-md text-on-surface mb-4">Structural Narratives</h2>
+<p class="font-body-md text-body-md text-on-surface-variant">Every angle has been calculated to optimize natural light cycles and thermal retention. We don't just build shelters; we construct temporal experiences.</p>
+</div>
+<div class="flex gap-4 border-b border-outline-variant/20 pb-2">
+<button class="font-label-caps text-label-caps text-primary border-b-2 border-primary pb-2">RENDERINGS</button>
+<button class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary pb-2 transition-colors">BLUEPRINTS</button>
+<button class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary pb-2 transition-colors">MATERIALS</button>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-12 gap-8 h-auto lg:h-[1000px]">
+<!-- Main Render -->
+<div class="md:col-span-8 relative group overflow-hidden bg-surface-container">
+<div class="w-full h-full bg-cover bg-center transition-transform duration-700 group-hover:scale-105" data-alt="Interior of a luxury living room with double-height ceilings. One wall is made entirely of raw board-formed concrete, another is a massive pane of glass overlooking a misty pine forest. A minimalist black marble fireplace sits centrally. The furniture is mid-century modern with tan leather and dark walnut accents." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuDgqJwLoP-JxHwxDWEbwKzCWrHbWE8EQx9aE-Kg84rHzfczTQdEA3tqKhtSEbcGqfhezOXgUrADTK6PUOk1BC-5wj-XLvmdddPmDPGE0qx6prQo5kGJuC1-X7NmsikyjKQL7K8Mr4Nmubly6uwl1-EJRjkzlAFnbkGN7rk7JEbVGXGRi7RSMBWG_PqWpRyfSv1grWyi9Oio7SUdfwwJelJXDgEIaEk5De8RbrmRPeYB9LqK7U55aYTJhA')"></div>
+<div class="absolute bottom-0 left-0 p-8 bg-background/60 backdrop-blur-md border-t border-r border-outline-variant/20">
+<span class="font-label-caps text-[10px] text-primary tracking-tighter">VIEW 01 // GREAT HALL</span>
+</div>
+</div>
+<!-- Detail 1 -->
+<div class="md:col-span-4 relative group overflow-hidden bg-surface-container">
+<div class="w-full h-full bg-cover bg-center transition-transform duration-700 group-hover:scale-105" data-alt="Close-up of high-end architectural materials. A piece of honed black basalt stone, a sample of brushed champagne gold metal, and a slab of smoked oak wood. Arranged neatly like a gallery exhibit. Soft, focused museum lighting." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuCfGoELP42cwdnEjsTbmc6S8uZtoF624YbeD5emYmRusUY6L7QBeXlJ8TSz_OH_QP-Nt3yssNmRd7oCMArkg9hfRfG67B00tKgmlJV8CRjqi2tt_Hmdu-JqGJ8zgX6ExhVX-RE27trBTzDZDbRggNBXn4oOiMaM1rLiNP8jBeSu5p80BX9qIYiP214zu1D6xoLtZ4880PB9FeUmQjoJhT8l77jnsHHb0hn1kZpIzTNIX2_J8J7cgHElZw')"></div>
+<div class="absolute top-0 right-0 p-6">
+<span class="material-symbols-outlined text-on-surface/50">zoom_in</span>
+</div>
+</div>
+<!-- Detail 2 -->
+<div class="md:col-span-4 relative group overflow-hidden bg-surface-container">
+<div class="w-full h-full bg-cover bg-center transition-transform duration-700 group-hover:scale-105" data-alt="A master bathroom featuring a freestanding black volcanic stone bathtub. The floor is heated ivory travertine. Large windows reveal a private bamboo courtyard. The mood is serene, zen, and ultra-expensive." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuAkjYwgSUrT4J71g-dEVAuTE0p9GINPyk41th1X72QPD2xcHl7xfJOMSOQd7Y7v4QtFqOcfO5LLDsQpeTi79ZR14PfDu2haxmEuz2UfIiYYgjuWYCTOj1dH6BZjoPech1iOksip7PHQNP9sXMJemiGSOMzvz4hV-SRPNpFeNPyubr-qk69l4Ra-UE6rDbHD6E34ABwRDfiW3fk40hHLUBqicWpPzSnsCfv7zcGz5cD-wYntzCWmH4HPVw')"></div>
+</div>
+<!-- Blueprint Card -->
+<div class="md:col-span-8 bg-surface-container-high p-12 flex flex-col justify-between border border-outline-variant/10 relative overflow-hidden">
+<div class="absolute -right-20 -bottom-20 opacity-10">
+<span class="material-symbols-outlined text-[300px] text-primary">architecture</span>
+</div>
+<div class="relative z-10">
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-4">Site Integration Plan</h3>
+<p class="font-body-md text-body-md text-on-surface-variant max-w-md">Our AI analyzed 50 years of wind patterns and solar paths to orient the master wing for optimal morning light without overheating in the summer solstice.</p>
+</div>
+<div class="relative z-10 flex flex-wrap gap-12 mt-12">
+<div class="flex flex-col">
+<span class="font-label-caps text-[10px] text-primary mb-2">FOUNDATION</span>
+<span class="font-technical-data text-on-surface">Reinforced Obsidian Concrete</span>
+</div>
+<div class="flex flex-col">
+<span class="font-label-caps text-[10px] text-primary mb-2">FENESTRATION</span>
+<span class="font-technical-data text-on-surface">Triple-Glazed Low-E Stealth Glass</span>
+</div>
+<div class="flex flex-col">
+<span class="font-label-caps text-[10px] text-primary mb-2">HVAC</span>
+<span class="font-technical-data text-on-surface">Geothermal Closed-Loop System</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Interactive Customization Slider -->
+<section class="w-full bg-surface-container-lowest py-section-gap border-y border-outline-variant/10">
+<div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop grid grid-cols-1 lg:grid-cols-2 gap-section-gap items-center">
+<div class="relative aspect-square">
+<!-- Comparison Tool Simulation -->
+<div class="absolute inset-0 border border-outline-variant/20 overflow-hidden">
+<div class="w-full h-full bg-cover bg-center" data-alt="An architectural facade transition. On the left, a raw concrete wall. On the right, after a vertical divider, a warm cedar wood cladding. High contrast, sharp detail." id="material-preview" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuC2zFpyPrYqAndmIG1BGV0UFOrQobQZKp4F8SiZfnht2lnP36G_kOW9L1Qjoz4oYNEvBnMki-Fkhm2YTazVZRJ2udzjMQXd0Xx5u1u9TMOR8D8jJ4bzuIsxmoKPjoSvvAMru37u2nko97YjLIVpYJyokE3vevXL4y1FSpu6Fi1ceIvzF2VnU_Qevg8C_yDUAUSlgMokN8iqgiAdtTki2O4J9QH2EQI26TtM6VqopmMLJMzJKtqTG36zOg')"></div>
+<div class="absolute inset-0 pointer-events-none bg-gradient-to-tr from-background/40 to-transparent"></div>
+<!-- UI Elements for "Tool" -->
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-primary rounded-full flex items-center justify-center cursor-ew-resize shadow-xl">
+<span class="material-symbols-outlined text-on-primary">unfold_more</span>
+</div>
+</div>
+</div>
+<div class="flex flex-col gap-8">
+<span class="font-label-caps text-label-caps text-primary tracking-[0.2em]">CONFIGURATION ENGINE</span>
+<h2 class="font-headline-md text-headline-md text-on-surface">Refine the Material Palette</h2>
+<div class="space-y-6">
+<div class="p-6 bg-surface border border-outline-variant/20 hover:border-primary/50 transition-colors cursor-pointer group">
+<div class="flex justify-between items-center mb-2">
+<span class="font-body-md font-semibold text-on-surface">Alpine Brutalism</span>
+<span class="font-technical-data text-primary">SELECTED</span>
+</div>
+<p class="font-technical-data text-on-surface-variant text-sm">Exposed concrete, dark steel, and silver fir. Minimalist and cold-weather optimized.</p>
+</div>
+<div class="p-6 bg-surface-container border border-transparent hover:border-outline-variant/50 transition-colors cursor-pointer">
+<div class="flex justify-between items-center mb-2">
+<span class="font-body-md font-semibold text-on-surface">Organic Modernism</span>
+<span class="font-technical-data text-on-surface-variant">+ $145,000</span>
+</div>
+<p class="font-technical-data text-on-surface-variant text-sm">Hand-stacked stone, warm cedar, and floor-to-ceiling travertine. Softens the structural geometry.</p>
+</div>
+</div>
+<div class="mt-4">
+<button class="w-full py-5 border border-primary text-primary font-label-caps text-label-caps hover:bg-primary hover:text-on-primary transition-all">
+                        UPDATE COST ESTIMATE
+                    </button>
+</div>
+</div>
+</div>
+</section>
+<!-- Location Integration -->
+<section class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop py-section-gap w-full">
+<div class="flex flex-col md:flex-row gap-16 items-start">
+<div class="w-full md:w-1/3 sticky top-32">
+<h2 class="font-headline-md text-headline-md text-on-surface mb-6">Site Analysis</h2>
+<div class="space-y-8">
+<div class="flex items-start gap-4">
+<span class="font-technical-data text-primary">01</span>
+<div>
+<h4 class="font-body-md font-semibold text-on-surface">Topography Integration</h4>
+<p class="font-technical-data text-on-surface-variant text-sm mt-1">The cantilevered master bedroom floats 12 feet above the natural slope, preserving existing granite outcrops.</p>
+</div>
+</div>
+<div class="flex items-start gap-4">
+<span class="font-technical-data text-primary">02</span>
+<div>
+<h4 class="font-body-md font-semibold text-on-surface">Solar Exposure</h4>
+<p class="font-technical-data text-on-surface-variant text-sm mt-1">Passive solar heating reduces energy consumption by 40% during winter months.</p>
+</div>
+</div>
+<div class="flex items-start gap-4">
+<span class="font-technical-data text-primary">03</span>
+<div>
+<h4 class="font-body-md font-semibold text-on-surface">Vegetation Shield</h4>
+<p class="font-technical-data text-on-surface-variant text-sm mt-1">Design preserves 95% of existing old-growth trees on the eastern parcel.</p>
+</div>
+</div>
+</div>
+</div>
+<div class="w-full md:w-2/3 h-[600px] grayscale brightness-75 hover:grayscale-0 transition-all duration-1000">
+<div class="w-full h-full bg-cover bg-center rounded-sm shadow-2xl" data-location="Lake Tahoe, California" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuBb7eDpDK5jIEHkz9eVnWHZOZ0Ltpjrf49kBZOA9lQjMTZGuJ28V0JCYULpd8W2p5_hV6p6hi-vwD0fTVv7trcdR5Tnc--K6aJRnVncYHARTJT9iDnzoyb0owLXQ_wvrCi_OEhoPkcgMIvIdZjVKOpLnN-El4WXeUcDYUeIi0-wgq8Dst3VN4_oxVehfHFUaf3cWQomCN-DFvDdM3cOmjHi0SUAlF0RTNz1cxm5Z9Osyc73127Nz2M3tA')"></div>
+</div>
+</div>
+</section>
+<!-- CTA Section -->
+<section class="w-full py-section-gap px-margin-mobile">
+<div class="max-w-4xl mx-auto text-center flex flex-col items-center">
+<div class="w-20 h-[1px] bg-primary mb-12"></div>
+<h2 class="font-display-lg text-display-lg-mobile lg:text-headline-md text-on-surface mb-8">Ready to break ground?</h2>
+<p class="font-body-lg text-on-surface-variant mb-12 max-w-2xl">
+                Our lead architects are ready to finalize the technical documentation and begin the permitting phase for your custom build.
+            </p>
+<div class="flex flex-col md:flex-row gap-6 w-full md:w-auto">
+<button class="bg-primary text-on-primary px-12 py-5 font-label-caps text-label-caps tracking-widest hover:scale-105 transition-transform">
+                    RESERVE BUILD SLOT
+                </button>
+<button class="border border-outline-variant/30 text-on-surface px-12 py-5 font-label-caps text-label-caps tracking-widest hover:bg-surface-variant/10 transition-all">
+                    SPEAK WITH ARCHITECT
+                </button>
+</div>
+<div class="mt-16 font-technical-data text-on-surface-variant/40 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">verified</span>
+                AI-OPTIMIZED STRUCTURAL INTEGRITY CERTIFIED
+            </div>
+</div>
+</section>
+<!-- Micro-interaction Script -->
+<script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const materialOptions = document.querySelectorAll('.cursor-pointer');
+            materialOptions.forEach(option => {
+                option.addEventListener('click', function() {
+                    materialOptions.forEach(opt => {
+                        opt.classList.remove('border-primary/50', 'bg-surface');
+                        opt.classList.add('border-transparent', 'bg-surface-container');
+                    });
+                    this.classList.remove('border-transparent', 'bg-surface-container');
+                    this.classList.add('border-primary/50', 'bg-surface');
+                });
+            });
+
+            // Parallax effect on hero
+            window.addEventListener('scroll', () => {
+                const scrolled = window.pageYOffset;
+                const heroImage = document.querySelector('[data-alt*="architectural masterpiece"]');
+                if(heroImage) {
+                    heroImage.style.transform = `translateY(${scrolled * 0.4}px)`;
+                }
+            });
+        });
+    </script>
+</div></main><footer class="w-full bg-surface-container-lowest py-section-gap border-t border-outline-variant/10"><div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop flex flex-col md:flex-row justify-between items-center gap-unit"><div class="font-headline-sm text-headline-sm text-on-surface-variant">ArchAI</div><div class="flex gap-8"><a class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary" href="#">Privacy</a><a class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary" href="#">Terms</a></div><div class="font-technical-data text-technical-data text-on-surface-variant/50">© 2024 ArchAI Master Architects</div></div></footer></body></html>

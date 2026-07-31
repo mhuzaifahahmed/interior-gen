@@ -90,5 +90,18 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///data/app.db"
 
+    # Signs the session cookie (Starlette SessionMiddleware) that holds the
+    # logged-in user's id - see app/auth.py. Real random value lives in .env
+    # only, never in .env.example (same convention as the API keys above).
+    session_secret_key: str = ""
+
+    @property
+    def resolved_session_secret_key(self) -> str:
+        # Dev-only fallback so a fresh checkout without .env still boots -
+        # sessions just won't survive a secret-key rotation/restart, which is
+        # fine for local dev but NOT safe for a real deployment (auth cookies
+        # for every logged-in user would be forgeable with a known/fixed key).
+        return self.session_secret_key or "dev-only-insecure-secret-key-set-SESSION_SECRET_KEY-in-.env"
+
 
 settings = Settings()

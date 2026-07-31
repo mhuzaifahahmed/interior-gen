@@ -9,11 +9,34 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class User(SQLModel, table=True):
+    """Real account, not a placeholder - see app/auth.py for the session/
+    password-hashing logic. username is validated (app.auth.validate_username)
+    to a safe charset ([a-z0-9_], 3-32 chars) BEFORE a row is ever created,
+    since it's also used verbatim as an S3 key path segment
+    (users/{username}/...) - see app/pipeline/generate.py / generate_house.py.
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    created_at: datetime = Field(default_factory=_now)
+    username: str = Field(unique=True, index=True)
+    email: str = Field(unique=True, index=True)
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    password_hash: str
+
+
 class Project(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     created_at: datetime = Field(default_factory=_now)
     status: str = Field(default="queued")  # queued | running | done | failed
     error: Optional[str] = None
+
+    # Nullable so any pre-auth dev-DB rows (from before login was required)
+    # still load - not backfilled, this is a dev prototype, not a real
+    # migration target. Every NEW row always gets a real owner (main.py's
+    # create_project requires a logged-in user).
+    user_id: Optional[str] = Field(default=None, foreign_key="user.id")
 
     original_key: Optional[str] = None
     room_description: Optional[str] = None
@@ -44,6 +67,9 @@ class HouseProject(SQLModel, table=True):
     status: str = Field(default="queued")  # queued | running | done | failed
     error: Optional[str] = None
 
+    # Same nullable-for-pre-auth-rows reasoning as Project.user_id above.
+    user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+
     plot_image_key: Optional[str] = None
     # {"length": float, "width": float, "unit": str} as JSON text - same
     # JSON-as-text convention as Project.materials_json/meta_json.
@@ -52,11 +78,24 @@ class HouseProject(SQLModel, table=True):
 
     plot_description: Optional[str] = None
 
-    # Floor-plan generation is deferred (no vendor wired in yet - see
-    # app/providers/idealhouse.py) - floor_plan_key stays None until one is.
+    # Floor-plan generation via a real, PAID vendor is deferred (no vendor
+    # wired in yet - see app/providers/idealhouse.py) - floor_plan_key stays
+    # None until one is. NOT the same thing as room_layout_json/
+    # blueprint_keys_json below - those power a separate, free, ALGORITHMIC
+    # blueprint step that's live today (see app/pipeline/generate_house.py).
     floor_plan_key: Optional[str] = None
     floor_plan_status: str = Field(default="idle")  # idle | running | not_configured | done | failed
 
     render_key: Optional[str] = None
+
+    # Free algorithmic blueprint step: Gemini's structured room list per floor
+    # (app/providers/gemini.py's generate_room_layout), the computed room
+    # rectangles, and one drawn PNG key per floor (app/pipeline/floor_layout.py
+    # + blueprint_svg.py). blueprint_keys_json is a JSON list of storage keys,
+    # floor-ordered (index 0 = ground floor - also the image fed to the paid
+    # AI render step as its reference).
+    room_layout_json: Optional[str] = None
+    blueprint_keys_json: Optional[str] = None
+    blueprint_status: str = Field(default="idle")  # idle | running | done | failed
 
     meta_json: Optional[str] = None

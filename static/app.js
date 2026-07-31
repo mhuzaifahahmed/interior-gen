@@ -46,6 +46,45 @@ const homeTabPanel = document.getElementById("home-tab-panel");
 const roomTabPanel = document.getElementById("room-tab-panel");
 const houseTabPanel = document.getElementById("house-tab-panel");
 const homeCtaBtn = document.getElementById("home-cta-btn");
+const homeHeroHouseBtn = document.getElementById("home-hero-house-btn");
+
+/* ---------- Auth ---------- */
+/* Real accounts (app/auth.py) - the room/house generators are gated behind
+   login (require_user in app/main.py), so a logged-out visitor can still
+   browse the landing page and switch tabs, but POSTing to /api/projects or
+   /api/house-projects 401s. checkAuthState() drives which nav block shows
+   (guest links vs. username + log out) and doubles as the redirect trigger
+   for a 401 hit mid-submit. */
+
+const navAuthGuest = document.getElementById("nav-auth-guest");
+const navAuthUser = document.getElementById("nav-auth-user");
+const navUsernameEl = document.getElementById("nav-username");
+const navLoginBtn = document.getElementById("nav-login-btn");
+const navSignupBtn = document.getElementById("nav-signup-btn");
+const navLogoutBtn = document.getElementById("nav-logout-btn");
+
+navLoginBtn.addEventListener("click", () => (window.location.href = "/login"));
+navSignupBtn.addEventListener("click", () => (window.location.href = "/signup"));
+navLogoutBtn.addEventListener("click", async () => {
+  await fetch("/api/auth/logout", { method: "POST" });
+  window.location.href = "/";
+});
+
+async function checkAuthState() {
+  try {
+    const res = await fetch("/api/auth/me");
+    if (!res.ok) throw new Error("not logged in");
+    const user = await res.json();
+    navUsernameEl.textContent = user.username;
+    navAuthGuest.classList.add("hidden");
+    navAuthUser.classList.remove("hidden");
+  } catch {
+    navAuthGuest.classList.remove("hidden");
+    navAuthUser.classList.add("hidden");
+  }
+}
+
+checkAuthState();
 
 const houseUploadView = document.getElementById("house-upload-view");
 const houseForm = document.getElementById("house-upload-form");
@@ -101,6 +140,7 @@ tabBtnRoom.addEventListener("click", () => switchTab("room"));
 tabBtnHouse.addEventListener("click", () => switchTab("house"));
 
 homeCtaBtn.addEventListener("click", () => switchTab("room"));
+homeHeroHouseBtn.addEventListener("click", () => switchTab("house"));
 
 const TIERS = [
   { key: "original", label: "Original", desc: "Your uploaded room." },
@@ -244,6 +284,10 @@ form.addEventListener("submit", async (e) => {
   let projectId;
   try {
     const res = await fetch("/api/projects", { method: "POST", body: formData });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
     if (!res.ok) throw new Error(await res.text());
     ({ project_id: projectId } = await res.json());
   } catch (err) {
@@ -700,6 +744,10 @@ houseForm.addEventListener("submit", async (e) => {
   let houseProjectId;
   try {
     const res = await fetch("/api/house-projects", { method: "POST", body: formData });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
     if (!res.ok) throw new Error(await res.text());
     ({ house_project_id: houseProjectId } = await res.json());
   } catch (err) {
@@ -712,13 +760,16 @@ houseForm.addEventListener("submit", async (e) => {
 
 /* ---------- Progress engine ---------- */
 /* Same real-signal-driven philosophy as the room flow's stepper (see above),
-   scaled down to this feature's actual shape: 3 stages, no per-item reveals,
-   since there's exactly one deliverable render (no 3-tier concept previews)
-   and floor-plan generation is currently a stub (see app/providers/
-   idealhouse.py) so there's nothing to preview mid-flight there either. */
+   scaled down to this feature's actual shape: 4 stages, no per-item reveals,
+   since there's exactly one deliverable render (no 3-tier concept previews).
+   "Drawing your floor plan" tracks the free algorithmic blueprint step
+   (app/pipeline/floor_layout.py + blueprint_svg.py) - the still-inert real
+   floor-plan VENDOR slot (app/providers/idealhouse.py) has nothing to
+   preview mid-flight, so it isn't its own stage. */
 
 const HOUSE_STAGES = [
   { label: "Analyzing your plot…" },
+  { label: "Drawing your floor plan…" },
   { label: "Generating your concept render…" },
   { label: "Finalizing…" },
 ];
@@ -751,13 +802,17 @@ function setHouseStageLabel(index) {
   }, 220);
 }
 
-/* Derives which of the 3 stages we're in from REAL data on every poll
-   response (app/main.py's get_house_project), not a timer - plot_description
-   and images.render are both committed to the DB (and so returned here) as
-   soon as each step actually finishes, well before the overall project is
-   "done". */
+/* Derives which of the 4 stages we're in from REAL data on every poll
+   response (app/main.py's get_house_project), not a timer - plot_description,
+   blueprint_status, and images.render are all committed to the DB (and so
+   returned here) as soon as each step actually finishes, well before the
+   overall project is "done". blueprint_status is the free algorithmic
+   blueprint step (app/pipeline/floor_layout.py + blueprint_svg.py) -
+   unrelated to floor_plan_status, which stays reserved for a still-inert
+   future paid vendor. */
 function deriveHouseStageIndex(data) {
   if (data.status === "done" || (data.images && data.images.render)) return HOUSE_STAGES.length - 1;
+  if (data.blueprint_status !== "idle") return 2;
   if (data.plot_description || data.floor_plan_status !== "idle") return 1;
   return 0;
 }
@@ -855,11 +910,43 @@ function renderHouseResults(data) {
     houseResultsGrid.appendChild(card);
   }
 
-  // Floor-plan generation is deferred (no vendor wired in yet - see
-  // app/providers/idealhouse.py) - deliberately show NO floor-plan card at all
-  // rather than a broken/empty placeholder. Once a vendor is wired in, this is
-  // where a floor-plan card should be added, labeled "Concept Layout - not a
-  // precise blueprint" (no image-gen API guarantees dimensional accuracy).
+  // Free algorithmic blueprint step (app/pipeline/floor_layout.py +
+  // blueprint_svg.py) - unrelated to floor_plan_status below, which stays
+  // reserved for a still-inert future paid vendor. Unlike that hypothetical
+  // AI-generated floor plan, these ARE dimensionally accurate: the room
+  // rectangles are computed directly from the stated plot dimensions, not
+  // guessed by an image model - hence the different, non-disclaiming label.
+  if (data.blueprint_status === "done" && data.blueprint_urls && data.blueprint_urls.length) {
+    data.blueprint_urls.forEach((url, i) => {
+      const floorNumber = i + 1;
+      const label = `Floor ${floorNumber} Layout`;
+      const card = document.createElement("div");
+      card.className = "result-card";
+      card.innerHTML = `
+        <div class="img-wrap">
+          <img src="${url}" alt="${label}" loading="lazy" />
+          <a class="download-btn" href="${url}" download="blueprint_floor${floorNumber}.png" aria-label="Download ${label}" title="Download image">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+        </div>
+        <div class="caption">
+          <p class="tier-name">${label}</p>
+          <p class="tier-desc">Computed from your stated dimensions - an accurate room layout, though not a full architectural/code-compliant plan.</p>
+        </div>
+      `;
+      card.addEventListener("click", () => openLightbox(url, label));
+      card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
+      houseResultsGrid.appendChild(card);
+    });
+  }
+
+  // Floor-plan generation via a real, PAID vendor is deferred (no vendor
+  // wired in yet - see app/providers/idealhouse.py) - deliberately show NO
+  // floor-plan card at all rather than a broken/empty placeholder. Once a
+  // vendor is wired in, this is where a floor-plan card should be added,
+  // labeled "Concept Layout - not a precise blueprint" (no image-gen API
+  // guarantees dimensional accuracy) - NOT the same as the blueprint cards
+  // above, which already are dimensionally accurate.
   if (data.floor_plan_status === "done" && data.images.floor_plan) {
     const card = document.createElement("div");
     card.className = "result-card";
