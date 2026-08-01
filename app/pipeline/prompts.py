@@ -33,31 +33,61 @@ an instruction-following editor and had no reason to keep shaping this file's de
 
 PROMPT_VERSION = "v9"
 
-TIER_SPECS: dict[str, dict[str, str]] = {
+import random
+TIER_SPECS = {
+
     "economical": {
+
         "label": "budget renovation",
-        "paint": "plain flat cream and sage-green two-tone paint, cheap and utilitarian looking",
-        "flooring": "ordinary matte grey ceramic tile flooring, plain and unpolished, no shine, no gloss",
         "lighting_temp": "cool white practical lighting, 5000-6000K",
-        "feature_wall": "no accent wall, no wall mouldings, bare plain walls",
         "ceiling": "plain flat white ceiling, no false ceiling, a simple ceiling fan",
+        "feature_wall": "no accent wall, no wall mouldings, bare plain walls",
         "materials": "paint only, no premium materials, no wood paneling, no marble",
-        "palette": "muted cream, sage green, and grey tones",
         "density": "sparse furniture, about 80 percent of floor space left empty, uncluttered and clean",
-        "decor": "one or two potted plants, simple thin plain curtains, one or two plain framed prints",
         "structure_reminder": "",
+
+        "paint": [
+            "plain flat cream paint",
+            "soft warm white paint",
+            "light beige paint",
+            "light greige paint",
+            "muted sage paint",
+            "warm ivory paint",
+            "off-white paint"
+        ],
+
+        "flooring": [
+            "ordinary matte ceramic tile flooring",
+            "basic porcelain tile flooring",
+            "entry-level vinyl flooring",
+            "simple laminate flooring"
+        ],
+
+        "palette": [
+            "soft neutral colors",
+            "light earth tones",
+            "muted contemporary colors",
+            "warm neutral palette",
+            "cool neutral palette"
+        ],
+
+        "decor": [
+            "one or two potted plants with simple curtains",
+            "minimal framed artwork and simple curtains",
+            "small indoor plants with basic decor",
+            "simple contemporary accessories"
+        ],
+
     },
+
     "mid": {
+
         "label": "mid-level renovation",
-        "paint": "warm beige walls with olive-green wainscoting panel on the lower half",
-        "flooring": "warm wood-look laminate flooring",
         "lighting_temp": "neutral warm lighting, 3500-4000K",
-        "feature_wall": "wall mouldings and a few framed art prints",
         "ceiling": "false ceiling with a warm cove lighting strip",
+        "feature_wall": "wall mouldings and a few framed art prints",
         "materials": "paint, wall mouldings, wainscoting, laminate wood flooring",
-        "palette": "warm beige, olive green, and light wood tones",
         "density": "balanced furniture arrangement, tidy and comfortable, not crowded",
-        "decor": "an area rug, framed art prints, a few potted plants",
         # Mid's "false ceiling" instruction reworks the ceiling plane - the same
         # kind of depth-carrying surface change that required premium's reminder
         # below. A real generation showed mid's ceiling change flattening the
@@ -66,27 +96,88 @@ TIER_SPECS: dict[str, dict[str, str]] = {
         # ceiling plane at all - "no false ceiling"). Same generic wording as
         # premium's, not reworded for any specific room type.
         "structure_reminder": "still the same original room shape and window, do not enlarge or change the space",
+
+        "paint": [
+            "warm beige walls",
+            "soft greige walls",
+            "light taupe walls",
+            "warm ivory walls",
+            "subtle mushroom-colored walls"
+        ],
+
+        "flooring": [
+            "quality wood-look laminate flooring",
+            "engineered oak flooring",
+            "high-quality vinyl plank flooring",
+            "natural wood laminate flooring"
+        ],
+
+        "palette": [
+            "warm natural colors",
+            "earth inspired colors",
+            "soft Scandinavian palette",
+            "Japandi inspired palette",
+            "modern neutral palette"
+        ],
+
+        "decor": [
+            "tasteful artwork, plants and textured rug",
+            "minimal designer decor",
+            "balanced contemporary decor",
+            "soft modern accessories"
+        ],
+
     },
+
     "premium": {
+
         "label": "premium luxury renovation",
-        "paint": "dark wood panel and marble feature wall with brass trim accents",
-        "flooring": "polished Italian marble flooring, reflective and bright",
         "lighting_temp": "warm luxury lighting, 2700-3000K, layered recessed and cove fixtures",
-        "feature_wall": "marble and dark wood panel wall with brass inlay",
         "ceiling": "designer multi-layer cove ceiling with warm gold-lit trim",
+        "feature_wall": "marble and dark wood panel wall with brass inlay",
         "materials": "real marble, brass trim, dark wood paneling",
-        "palette": "rich dark wood tones with gold and brass metallic accents",
         "density": "furniture arranged in curated symmetrical conversation zones, restrained, not overfilled",
-        "decor": "floor-to-ceiling heavy fabric curtains, framed art, symmetrical furniture placement",
         # Reactivated after a real observed failure: premium's vivid luxury vocabulary
         # (marble, brass, "designer ceiling") pulled gpt-image-1 toward a hallucinated
         # generic luxury lobby (different column layout, narrower room) even with the
         # universal PRESERVE_STRUCTURE present earlier in the prompt. Restating the
         # structural lock tier-specifically, AFTER the tempting vocabulary rather than
         # only before it, is what actually anchors it back to the input photo - see
-        # build_prompt() step 4b. Empty for economical/mid, which don't show this pull.
+        # build_prompt() step 4b. Empty for economical, which doesn't show this pull.
         "structure_reminder": "still the same original room shape and window, do not enlarge or change the space",
-    },
+
+        "paint": [
+            "architectural painted walls with premium finishes",
+            "designer textured wall finishes",
+            "luxury limewash walls",
+            "high-end matte architectural walls"
+        ],
+
+        "flooring": [
+            "premium marble flooring",
+            "large-format natural stone flooring",
+            "luxury travertine flooring",
+            "high-end oak flooring",
+            "premium walnut flooring"
+        ],
+
+        "palette": [
+            "quiet luxury palette",
+            "rich warm neutrals",
+            "timeless natural colors",
+            "organic luxury palette",
+            "high-end contemporary colors"
+        ],
+
+        "decor": [
+            "curated luxury decor with premium artwork",
+            "minimal luxury accessories",
+            "designer furniture styling",
+            "high-end contemporary decor"
+        ],
+
+    }
+
 }
 
 # An imperative structural-lock instruction - the single most important sentence
@@ -187,15 +278,15 @@ def build_prompt(
         sentences.append(user_notes.strip()[:USER_NOTES_MAX_CHARS])
 
     sentences += [
-        f"Paint the walls with {spec['paint']}.",
-        f"Install {spec['flooring']}.",
+        f"Paint the walls with {random.choice(TIER_SPECS[tier]['paint'])}.",
+        f"Install {random.choice(TIER_SPECS[tier]['flooring'])}.",
         f"Light the room with {spec['lighting_temp']}.",
         f"For the ceiling, use {spec['ceiling']}.",
         f"For the feature wall, use {spec['feature_wall']}.",
         f"Use these materials throughout: {spec['materials']}.",
-        f"The overall color palette should be {spec['palette']}.",
+        f"The overall color palette should be {random.choice(TIER_SPECS[tier]['palette'])}.",
         f"Furniture density: {spec['density']}.",
-        f"Add this decor: {spec['decor']}.",
+        f"Add this decor: {random.choice(TIER_SPECS[tier]['decor'])}.",
     ]
 
     if spec["structure_reminder"]:

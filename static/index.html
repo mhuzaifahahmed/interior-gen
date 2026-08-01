@@ -61,8 +61,14 @@ Picture it <br/><span class="text-primary italic">before you build it.</span>
 Upload a tired room or a bare plot of land, and watch it become three real redesigns or a full concept build — in minutes, not months.
 </p>
 <div class="flex flex-wrap gap-margin-mobile pt-2">
-<button type="button" class="px-margin-desktop py-4 bg-primary text-on-primary font-label-caps text-label-caps hover:brightness-110 transition-all shadow-[0_4px_20px_rgba(233,193,118,0.25)] active:scale-95" id="home-cta-btn">START ROOM REDESIGN</button>
-<button type="button" class="px-margin-desktop py-4 border border-outline text-on-surface font-label-caps text-label-caps hover:bg-white/5 transition-all active:scale-95" id="home-hero-house-btn">BUILD A NEW HOUSE</button>
+<button type="button" class="group relative px-margin-desktop py-4 bg-primary text-on-primary font-label-caps text-label-caps overflow-hidden active:scale-95 transition-transform shadow-[0_4px_20px_rgba(233,193,118,0.25)]" id="home-cta-btn">
+<span class="relative z-10">START ROOM REDESIGN</span>
+<div class="absolute inset-0 bg-white/20 -translate-x-full group-hover:translate-x-0 transition-transform duration-300"></div>
+</button>
+<button type="button" class="group px-margin-desktop py-4 border border-outline text-on-surface font-label-caps text-label-caps hover:border-primary hover:text-primary transition-colors active:scale-95 flex items-center gap-2" id="home-hero-house-btn">
+BUILD A NEW HOUSE
+<span class="material-symbols-outlined text-[16px] group-hover:translate-x-1 transition-transform">arrow_forward</span>
+</button>
 </div>
 <div class="flex flex-wrap gap-margin-desktop mt-4 pt-8 border-t border-white/10">
 <div class="flex flex-col">
@@ -164,9 +170,11 @@ Upload a tired room or a bare plot of land, and watch it become three real redes
 <div class="lg:col-span-7 flex flex-col gap-unit">
 <label id="dropzone" for="file-input" class="group relative aspect-[4/3] bg-surface-container-low border border-outline-variant/20 flex flex-col items-center justify-center cursor-pointer transition-all hover:border-primary/50 overflow-hidden block">
 <div class="absolute inset-0 opacity-10 pointer-events-none" style="background-image: radial-gradient(circle, #c5a059 1px, transparent 1px); background-size: 40px 40px;"></div>
+<div class="absolute top-4 left-4 w-8 h-8 border-t border-l border-primary/30 group-hover:border-primary transition-colors pointer-events-none"></div>
+<div class="absolute bottom-4 right-4 w-8 h-8 border-b border-r border-primary/30 group-hover:border-primary transition-colors pointer-events-none"></div>
 <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" hidden/>
 <div class="relative z-10 flex flex-col items-center text-center p-12 transition-transform group-hover:scale-105" id="dropzone-empty">
-<div class="w-20 h-20 mb-6 flex items-center justify-center border border-primary/30 rounded-full">
+<div class="w-20 h-20 mb-6 flex items-center justify-center border border-primary/30 rounded-full group-hover:border-primary group-hover:scale-110 transition-all duration-500">
 <span class="material-symbols-outlined text-primary text-4xl">add_a_photo</span>
 </div>
 <h3 class="font-headline-sm text-headline-sm text-on-surface mb-2">Drop a room photo here</h3>
@@ -206,8 +214,9 @@ Upload a tired room or a bare plot of land, and watch it become three real redes
 <input type="text" id="city-input" name="city" maxlength="80" placeholder="e.g. Karachi" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all"/>
 </div>
 <div class="pt-2">
-<button type="submit" id="generate-btn" disabled class="w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 hover:brightness-110 disabled:opacity-35 disabled:cursor-not-allowed transition-all">
-<span class="font-label-caps text-label-caps font-bold uppercase btn-label">Generate 3 Tiers</span>
+<button type="submit" id="generate-btn" disabled class="group relative w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 overflow-hidden disabled:opacity-35 disabled:cursor-not-allowed transition-all">
+<span class="relative z-10 font-label-caps text-label-caps font-bold uppercase btn-label">Generate 3 Tiers</span>
+<div class="absolute inset-0 bg-white/15 -translate-x-full group-hover:translate-x-0 transition-transform duration-300"></div>
 </button>
 </div>
 </div>
@@ -259,9 +268,11 @@ Upload a tired room or a bare plot of land, and watch it become three real redes
 <div class="lg:col-span-7 flex flex-col gap-unit">
 <label id="house-dropzone" for="house-file-input" class="group relative aspect-[4/3] bg-surface-container-low border border-outline-variant/20 flex flex-col items-center justify-center cursor-pointer transition-all hover:border-primary/50 overflow-hidden block">
 <div class="absolute inset-0 opacity-10 pointer-events-none" style="background-image: radial-gradient(circle, #c5a059 1px, transparent 1px); background-size: 40px 40px;"></div>
+<div class="absolute top-4 left-4 w-8 h-8 border-t border-l border-primary/30 group-hover:border-primary transition-colors pointer-events-none"></div>
+<div class="absolute bottom-4 right-4 w-8 h-8 border-b border-r border-primary/30 group-hover:border-primary transition-colors pointer-events-none"></div>
 <input type="file" id="house-file-input" accept="image/png,image/jpeg,image/webp" hidden/>
 <div class="relative z-10 flex flex-col items-center text-center p-12 transition-transform group-hover:scale-105" id="house-dropzone-empty">
-<div class="w-20 h-20 mb-6 flex items-center justify-center border border-primary/30 rounded-full">
+<div class="w-20 h-20 mb-6 flex items-center justify-center border border-primary/30 rounded-full group-hover:border-primary group-hover:scale-110 transition-all duration-500">
 <span class="material-symbols-outlined text-primary text-4xl">add_a_photo</span>
 </div>
 <h3 class="font-headline-sm text-headline-sm text-on-surface mb-2">Drop a plot photo here</h3>
@@ -308,8 +319,9 @@ Upload a tired room or a bare plot of land, and watch it become three real redes
 <input type="text" id="house-prompt" name="prompt" maxlength="200" placeholder="e.g. 2 floors, 3 bedrooms, modern style" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all"/>
 </div>
 <div class="pt-2">
-<button type="submit" id="house-generate-btn" disabled class="w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 hover:brightness-110 disabled:opacity-35 disabled:cursor-not-allowed transition-all">
-<span class="font-label-caps text-label-caps font-bold uppercase btn-label">Generate Concept</span>
+<button type="submit" id="house-generate-btn" disabled class="group relative w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 overflow-hidden disabled:opacity-35 disabled:cursor-not-allowed transition-all">
+<span class="relative z-10 font-label-caps text-label-caps font-bold uppercase btn-label">Generate Concept</span>
+<div class="absolute inset-0 bg-white/15 -translate-x-full group-hover:translate-x-0 transition-transform duration-300"></div>
 </button>
 </div>
 </div>

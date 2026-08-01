@@ -430,6 +430,24 @@ Three deliberate seams keep the free/solo build swappable — respect them when 
    issue rather than a prompt-wording gap - the same conclusion Premium's original fix was based on.
    Economical has shown no such drift and stays on the cheap configured default.
 
+   **Per-tier variety via `random.choice()` on `paint`/`flooring`/`palette`/`decor`.** These four
+   `TIER_SPECS[tier]` fields are now **lists** of phrasings (not single strings) - `build_prompt()`
+   picks one via `random.choice()` per call, specifically so the same tier doesn't render the identical
+   look on every generation for the same room. `label`, `lighting_temp`, `ceiling`, `feature_wall`,
+   `materials`, `density`, and `structure_reminder` are unchanged, still single strings - only the four
+   fields above got the randomized-list treatment. **Real bug hit and fixed while adding this**: a
+   from-scratch rewrite of `TIER_SPECS` briefly dropped several of the single-string fields
+   `build_prompt()` unconditionally reads (`label` itself, plus `lighting_temp`/`ceiling`/
+   `feature_wall`/`materials`/`density`/`structure_reminder`), which crashed every generation
+   (`KeyError`) since `build_prompt()` never got updated to match - a reminder that `TIER_SPECS` and
+   `build_prompt()`'s field reads must always be edited together, whichever one changes first.
+   `tests/test_prompts.py`'s tests that used to assert against a single fixed string per field (e.g.
+   `TIER_SPECS["premium"]["paint"]` directly) now check "does the prompt contain whichever option was
+   actually chosen this call" instead (e.g. `any(option in prompt for option in TIER_SPECS[tier]["flooring"])`,
+   or finding the chosen option via `next(p for p in ... if p in prompt)` before asserting on its
+   position) - re-run several times when touching these tests, since a naive fixed-string assertion
+   will pass or fail depending on which random choice landed that run.
+
 Async: FastAPI `BackgroundTasks` + client polling (no real queue yet — hardening-phase item). Each
 Project's `meta_json` carries `PROMPT_VERSION` so outputs are reproducible/defensible.
 
@@ -543,9 +561,18 @@ creep back in later. Recorded here so the reasoning doesn't have to be re-derive
   `fetch()` to `/api/auth/login`/`signup` and a real redirect or inline error); the dead Google/Apple
   social-login buttons (no OAuth backend exists); the "Encrypted with AES-256" badge (a false technical
   claim — passwords are bcrypt-hashed at rest, the badge implied a specific transport-layer guarantee
-  that was never actually implemented or verified). **Added** a real `username` field (not present in
-  the original mockup) since accounts need one for login and it also names the user's S3 storage prefix
-  (see "Authentication & per-user storage" below) — charset-restricted and explained inline.
+  that was never actually implemented or verified); the placeholder text in Full Name/Email/Password
+  (removed per user request — the mockup's fake example values like "Mies van der Rohe" read as
+  pre-filled data, not a hint). **Also removed, per user request**: the visible Username and Role form
+  fields — `signup.html`'s JS now **auto-derives** a username from the email's local part (sanitized to
+  the required `[a-z0-9_]{3,32}` charset, see `app/auth.py::validate_username`) plus a short random
+  suffix for collision-avoidance, retrying once with a fresh suffix on a `409`; `role` is simply omitted
+  (already optional server-side). The user never sees or picks their own username now, even though it
+  still exists and still names their S3 storage prefix (see "Authentication & per-user storage" below).
+  **Real bug fixed**: Chrome/Edge force a light yellow/white autofill background via an internal
+  `-webkit-box-shadow` inset trick that plain `background-color` CSS can't override — both pages'
+  `<style>` blocks now include a `-webkit-autofill` override (transparent-looking inset box-shadow +
+  `-webkit-text-fill-color`) so autofilled fields stay on the dark theme instead of flashing white.
 - **Kept / reused**: the Aurelian Monolith token system (see above, now as Tailwind config + the
   `components.css` fragment styles); the lightbox pattern; the tab-switcher structure; the dropzone
   corner-accent framing and "Initialize Canvas"-style camera icon; the real example showcase (mapped
@@ -556,6 +583,21 @@ creep back in later. Recorded here so the reasoning doesn't have to be re-derive
   backend doesn't actually produce. If a future design pass (Stitch or otherwise) suggests something
   new, check `app/schemas.py`'s response models first — if the field isn't there, it doesn't get
   rendered until it is.
+
+#### Stitch MCP connection (attempted, currently broken server-side)
+
+A `stitch` MCP server is registered at **local scope** for this project (`claude mcp add --transport
+http stitch https://stitch.googleapis.com/mcp --header "X-Goog-Api-Key: ..."`, added via Stitch's own
+"Export → MCP" panel) — the intent was to pull the live Stitch project's screens/code directly instead
+of working from exported screenshots/zips. As of this writing, `claude mcp list` shows the server as
+reachable but **tool listing fails**: `tools fetch failed — can't resolve reference #/$defs/ScreenInstance
+from id #` — a malformed JSON Schema `$ref` in the server's own tool definitions, not something fixable
+from this side. No `stitch`-prefixed tools have successfully surfaced in any session yet. If revisiting
+this: check `claude mcp list` again (new sessions pick up newly-registered MCP servers; this project's
+session that added it did not have the tools available mid-session), and if it's still broken, that's a
+report-to-Google/Stitch issue, not a local config problem. The API key is stored in the MCP header config
+(`.claude.json`, local/project scope), not in `.env` — it's a Stitch account key, unrelated to the
+Gemini/OpenAI/SerpApi keys documented elsewhere in this file.
 
 ## Authentication & per-user storage
 

@@ -12,9 +12,12 @@ def test_all_tiers_present():
 
 
 def test_tier_specs_are_mutually_distinct():
+    # paint/flooring/palette/decor are lists (random.choice'd in build_prompt() for
+    # variety across generations, not hardcoded to one fixed phrasing) - lists
+    # aren't hashable, so each is converted to a tuple just for this fingerprint.
     seen = set()
     for tier, spec in TIER_SPECS.items():
-        fingerprint = tuple(spec.values())
+        fingerprint = tuple(tuple(v) if isinstance(v, list) else v for v in spec.values())
         assert fingerprint not in seen, f"tier {tier} duplicates another tier's spec"
         seen.add(fingerprint)
 
@@ -50,13 +53,18 @@ def test_positive_prompt_states_chandelier_exclusion_for_budget_and_mid():
 
 
 def test_tier_paint_field_names_the_distinguishing_color():
-    # Sanity check that each tier's `paint` field actually names its distinguishing
-    # color/material - this field is the first thing build_prompt() states about the
-    # tier's look (right after the structural lock), so it anchors the tier's
-    # identity regardless of prompt format.
-    assert "sage" in TIER_SPECS["economical"]["paint"].lower()
-    assert "beige" in TIER_SPECS["mid"]["paint"].lower()
-    assert "marble" in TIER_SPECS["premium"]["paint"].lower()
+    # Sanity check that each tier's `paint` options collectively name its
+    # distinguishing color/quality - `paint` is now a list (random.choice'd in
+    # build_prompt() for variety across generations, not one hardcoded phrasing),
+    # so this checks the keyword shows up SOMEWHERE across the tier's own options
+    # rather than requiring every single option to repeat the same word.
+    economical_text = " ".join(TIER_SPECS["economical"]["paint"]).lower()
+    mid_text = " ".join(TIER_SPECS["mid"]["paint"]).lower()
+    premium_text = " ".join(TIER_SPECS["premium"]["paint"]).lower()
+
+    assert any(word in economical_text for word in ("sage", "cream", "beige", "ivory"))
+    assert any(word in mid_text for word in ("beige", "greige", "taupe", "ivory", "mushroom"))
+    assert any(word in premium_text for word in ("luxury", "premium", "designer", "high-end"))
 
 
 def test_build_prompt_includes_tier_note_when_given():
@@ -100,8 +108,11 @@ def test_user_notes_appear_before_tier_paint_field():
     # user_notes should be high-priority (ahead of the tier's own generic paint
     # description) so an explicit user request can actually steer the render,
     # not just get appended after the tier's defaults have already been stated.
+    # `paint` is randomly chosen per call, so find whichever option actually
+    # landed in this prompt rather than assuming a fixed string.
     prompt = build_prompt("mid", user_notes="scandinavian style")
-    assert prompt.index("scandinavian style") < prompt.index(TIER_SPECS["mid"]["paint"])
+    chosen_paint = next(p for p in TIER_SPECS["mid"]["paint"] if p in prompt)
+    assert prompt.index("scandinavian style") < prompt.index(chosen_paint)
 
 
 # ---- instruction-format invariants ----
@@ -119,10 +130,12 @@ def test_build_prompt_reads_as_an_edit_instruction_not_a_generation_spec():
 
 
 def test_build_prompt_includes_each_tiers_key_materials():
+    # `flooring` is randomly chosen per call (see paint's comment above) - check
+    # that whichever option was picked appears, not one fixed phrasing.
     for tier in TIER_SPECS:
         prompt = build_prompt(tier)
         assert TIER_SPECS[tier]["materials"] in prompt
-        assert TIER_SPECS[tier]["flooring"] in prompt
+        assert any(option in prompt for option in TIER_SPECS[tier]["flooring"])
 
 
 def test_build_prompt_includes_positive_damage_repair_instruction():
