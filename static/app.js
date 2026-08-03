@@ -45,7 +45,7 @@ const tabBtnHouse = document.getElementById("tab-btn-house");
 const homeTabPanel = document.getElementById("home-tab-panel");
 const roomTabPanel = document.getElementById("room-tab-panel");
 const houseTabPanel = document.getElementById("house-tab-panel");
-const homeCtaBtn = document.getElementById("home-cta-btn");
+const homeCtaBtns = document.querySelectorAll(".js-cta-room");
 const homeHeroHouseBtn = document.getElementById("home-hero-house-btn");
 
 /* ---------- Auth ---------- */
@@ -139,7 +139,7 @@ tabBtnHome.addEventListener("click", () => switchTab("home"));
 tabBtnRoom.addEventListener("click", () => switchTab("room"));
 tabBtnHouse.addEventListener("click", () => switchTab("house"));
 
-homeCtaBtn.addEventListener("click", () => switchTab("room"));
+homeCtaBtns.forEach((btn) => btn.addEventListener("click", () => switchTab("room")));
 homeHeroHouseBtn.addEventListener("click", () => switchTab("house"));
 
 const TIERS = [
