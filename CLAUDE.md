@@ -457,15 +457,57 @@ Layout: `app/{main,config,db,models,schemas}.py`, `app/pipeline/` (prompts + orc
 
 ### Frontend (`static/`)
 
-**Full Tailwind rebuild, "Aurelian Monolith" visual system** (dark "Midnight and Metal" — deep charcoal
-`#131313` base, champagne-gold `#e9c176` accent, Playfair Display headings + IBM Plex Sans body/
-technical text, sharp 0px corners on cards/buttons/inputs, 1px low-opacity gold hairline borders).
-Originally ported as vanilla-CSS tokens, then **superseded** by a full rebuild in **Tailwind CDN**
-(inline `tailwind.config` script per page, same config repeated in `index.html`/`login.html`/
-`signup.html`) at the user's explicit request to adopt Stitch's actual markup/framework, not just its
-color values — the no-build-step doctrine still holds (CDN script, no bundler), it's just Tailwind
-utilities instead of hand-written semantic CSS for static layout. See "Stitch reconciliation" below for
-which mockup screens were used as a base and what was stripped.
+**"Sage & Linen" visual system** (light, soft palette — warm linen/cream `#faf6ee` base, sage-mint
+`#3f7a61` accent, soft beige containers, 12–22px rounded corners on cards/buttons/inputs, soft
+mint-tinted hairline borders) — a full retheme of the prior **"Aurelian Monolith"** system (dark charcoal
+`#131313` base, champagne-gold `#e9c176` accent, sharp 0px corners), done at the user's explicit request
+for something calmer/warmer and less "flashy" than the old luxury-editorial look. The header and footer
+use `bg-background` (the same linen tone as the page), not a separate white/`surface` shade — an explicit
+user request so the chrome doesn't read as a different layer from the page.
+
+**Two-font pairing: Ranade (headings/display) + Poppins (body/labels/technical data)** — replaced an
+earlier one-font pass (Manrope for everything) at the user's explicit request to combine these two
+specific fonts instead. `fontFamily` in each page's inline `tailwind.config` maps `headline-md`/
+`headline-sm`/`display-lg`/`display-lg-mobile` to `["Ranade"]` and `body-md`/`body-lg`/`label-caps`/
+`technical-data` to `["Poppins"]`; `components.css`'s hardcoded `.tier-name`/`.materials-open-btn`
+font-family rules follow the same split. Poppins loads fine from Google Fonts' CDN. **Ranade does not** —
+a real bug, not a theoretical one: linking Fontshare's own CDN (`https://api.fontshare.com/v2/css?f[]=
+ranade@...`) returned a valid 200 CSS response with correct `@font-face` rules (confirmed via `curl`, and
+the exact same font-file URL loaded fine when fetched manually via the `FontFace` API in-page), but when
+loaded through a normal `<link rel="stylesheet">` tag the browser never registered any `Ranade` entry in
+`document.fonts` at all and never issued requests for the referenced font files — headings silently fell
+back to the browser's default serif with no console error. Root cause not fully pinned down (isolated to
+something about that specific cross-origin CDN response/redirect chain, reproduced in headless Chromium,
+not chased further once the fix below made it moot). **Fix: self-host Ranade** — the three weights used
+(400/500/700; Fontshare's API doesn't offer a 600 for this family) were downloaded once from Fontshare's
+CDN into `static/fonts/*.woff2`, and `static/fonts.css` declares plain same-origin `@font-face` rules
+pointing at them; all three HTML pages link `/static/fonts.css` instead of the Fontshare URL. Self-hosting
+sidesteps whatever cross-origin quirk caused the failure (same origin as everything else in `static/`, no
+CDN redirect chain) and is more consistent with the no-build-step, self-contained doctrine anyway. If
+Ranade's available weights ever need to change, re-fetch
+`https://api.fontshare.com/v2/css?f[]=ranade@<weights>&display=swap` to find the current file URLs, don't
+re-add the CDN `<link>` itself.
+
+One more real bug hit during the retheme, worth remembering for the next one: several
+`text-outline`/`text-on-background` usages on login/signup were tuned for the *old* dark theme, where
+those tokens were light colors sitting on a dark page — on the new light theme the same class names now
+point to muted/dark tokens, which either read as low-contrast on a light page (fixed by switching
+label/icon text to `text-on-surface-variant`) or vanish against a dark decorative photo overlay (fixed by
+hardcoding `text-white` on the signup hero's logo wordmark, which sits directly on an unfaded photo, not
+the page background) — any theme swap needs to re-check every text color that sits on a decorative
+photo/gradient, not just page-background text.
+
+Component structure, copy, and functionality were unchanged by any of the above — this was a token/font
+swap only. The retheme touched color tokens, font-family values, and `borderRadius` in each page's inline
+`tailwind.config` (plus the matching hardcoded hex/font-family in `components.css` — see its top-of-file
+comment — and a handful of decorative hex values baked directly into markup `style=`/`stroke=` attributes
+for hero glows, dot-pattern backgrounds, and the login page's SVG grid).
+
+Full Tailwind rebuild is still **Tailwind CDN**, no build step (inline `tailwind.config` script per page,
+same config repeated in `index.html`/`login.html`/`signup.html`) — adopted at the user's explicit request
+to use Stitch's actual markup/framework, not just its color values. See "Stitch reconciliation" below for
+which mockup screens were used as a base and what was stripped (that reconciliation predates the retheme
+and still describes the real backend-contract constraints, independent of the color/font choice).
 
 `static/style.css` still exists **unchanged**, used only by `static/terms.html`/`privacy.html` (out of
 scope for the rebuild — still on the old light vanilla theme, a known inconsistency, flag to the user
@@ -573,12 +615,12 @@ creep back in later. Recorded here so the reasoning doesn't have to be re-derive
   `-webkit-box-shadow` inset trick that plain `background-color` CSS can't override — both pages'
   `<style>` blocks now include a `-webkit-autofill` override (transparent-looking inset box-shadow +
   `-webkit-text-fill-color`) so autofilled fields stay on the dark theme instead of flashing white.
-- **Kept / reused**: the Aurelian Monolith token system (see above, now as Tailwind config + the
-  `components.css` fragment styles); the lightbox pattern; the tab-switcher structure; the dropzone
+- **Kept / reused**: the token-driven system itself (Tailwind config + the `components.css` fragment
+  styles — now the "Sage & Linen" palette, see top of this section) so retheming again only means
+  swapping token values, not markup; the lightbox pattern; the tab-switcher structure; the dropzone
   corner-accent framing and "Initialize Canvas"-style camera icon; the real example showcase (mapped
   onto `static/examples/*.jpg`); the login/signup visual layout (card + decorative blueprint-grid
-  background / split hero panel), restyled to 0px-radius/gold-hairline consistency with the rest of the
-  site and re-wired to real endpoints.
+  background / split hero panel), re-wired to real endpoints.
 - **Standing rule**: no UI element (card, stat, button, badge) may imply data or a capability the
   backend doesn't actually produce. If a future design pass (Stitch or otherwise) suggests something
   new, check `app/schemas.py`'s response models first — if the field isn't there, it doesn't get
@@ -641,6 +683,74 @@ rather than the earlier flat `local.input|output/{project_id}/...` layout with n
   and their storage-key assertions were updated to the `users/{username}/...` shape; also added
   `test_create_project_requires_login` / `test_cannot_view_another_users_project` (and house
   equivalents).
+
+### Google OAuth ("Continue with Google")
+
+Sits **alongside** username/password auth, not a replacement (user's explicit choice) — both work on the
+same `User` table and both end the same way (`request.session["user_id"] = user.id`), so every other
+auth-gated code path (`require_user`, generator gating, per-user S3 namespacing) needed zero changes.
+
+- **Flow, plain `httpx`, no OAuth library**: `app/google_oauth.py` implements the three-request
+  Authorization Code flow directly against Google's own endpoints (`build_authorize_url`,
+  `exchange_code_for_token`, `fetch_userinfo`) — deliberately not `authlib` or similar, since the flow is
+  only three requests and the project already depends on `httpx` for the Gemini/SerpApi providers. Kept in
+  its own module (mirrors `app/providers/serpapi.py`'s shape) specifically so tests can monkeypatch
+  `google_oauth.exchange_code_for_token`/`fetch_userinfo` directly — `app/main.py` calls them as
+  `google_oauth.exchange_code_for_token(...)` (module attribute access), not a `from ... import
+  exchange_code_for_token`, which is what makes that monkeypatching actually take effect.
+- **Endpoints** (`app/main.py`): `GET /api/auth/google/login` — 503s if `GOOGLE_CLIENT_ID`/
+  `GOOGLE_CLIENT_SECRET` aren't set (`google_oauth.is_configured()`), otherwise stashes a random CSRF
+  `state` in the session and redirects to Google's consent screen. `GET /api/auth/google/callback` —
+  validates `state` against the session (mismatch/missing → fail closed, redirect to
+  `/login?error=google_auth_failed`, never a 500), exchanges the code, fetches userinfo, then
+  find-or-creates the `User`: existing `google_sub` → log in directly; no `google_sub` match but the
+  email already has a password account → **link** (set `google_sub` on the existing row, same account,
+  not a duplicate) rather than creating a second account for the same person; no match at all → create a
+  new `User` with a server-side-derived username (see below) and log in. Every failure path (bad state,
+  Google returning `?error=`, the token/userinfo exchange itself failing) redirects to
+  `/login?error=google_auth_failed` — `login.html`'s JS reads that query param and shows it in the same
+  error slot password-login failures use.
+- **`User.google_sub`** (`app/models.py`): nullable, set only for accounts that have ever signed in with
+  Google. **Not** enforced unique at the DB level on existing dev databases — SQLite's `ALTER TABLE ADD
+  COLUMN` (this project's whole migration mechanism, see `app/db.py`) can't add a `UNIQUE` constraint
+  retroactively, so uniqueness here is application-level only (`get_user_by_google_sub` lookup before
+  create) — acceptable for this dev prototype, same standard as the other additive-only migrated columns.
+- **`User.password_hash` stays required, deliberately not made nullable for Google-only accounts** — same
+  underlying SQLite constraint problem (an existing NOT NULL column can't be relaxed via `ALTER TABLE`
+  without a full table rebuild). Instead, `app.auth.unusable_password_hash()` stores a real bcrypt hash of
+  a random value nobody knows, so `POST /api/auth/login` naturally 401s for these accounts (no schema
+  change needed, no special-casing in the login path either).
+- **`app.auth.derive_username_from_email()`**: server-side re-implementation of `signup.html`'s
+  client-side `deriveUsername()` — needed because Google sign-in creates the account entirely
+  server-side, with no signup form (and thus no client-side JS) in between. Unlike the client-side
+  version's single-attempt gamble, this one actually checks the DB and retries with a fresh random suffix
+  (up to 5 times) until it finds a genuinely free username, rather than relying on a 409 retry loop that
+  doesn't exist server-side.
+- **Setup** (real steps, not hypothetical — walk through these to actually enable it): Google Cloud
+  Console → create/select a project → **APIs & Services → OAuth consent screen** (User type External; add
+  your own account under *Test users* while the app is in "Testing" mode, required until Google verifies
+  it) → **APIs & Services → Credentials → Create Credentials → OAuth client ID** (Application type: Web
+  application; **Authorized redirect URI** must exactly match `GOOGLE_REDIRECT_URI` below) → copy the
+  Client ID/Secret into `.env` (never `.env.example`, same convention as every other real credential in
+  this file):
+  ```
+  GOOGLE_CLIENT_ID=...
+  GOOGLE_CLIENT_SECRET=...
+  GOOGLE_REDIRECT_URI=http://127.0.0.1:8000/api/auth/google/callback
+  ```
+  Leaving these blank keeps Google sign-in cleanly disabled (`google_login()` 503s) without touching
+  password auth at all.
+- **Frontend**: `login.html`/`signup.html` each gained an "OR" divider + a "Continue with Google" button
+  (official multi-color "G" mark inlined as SVG, not an icon font) linking straight to
+  `/api/auth/google/login` — no JS involved on the button itself, it's a plain link, since the whole flow
+  is server-side redirects.
+- **Tests**: `tests/test_google_oauth.py` — monkeypatches `google_oauth.exchange_code_for_token`/
+  `fetch_userinfo` (never a real Google network call, same testing convention as every other provider).
+  Covers: 503 when unconfigured, a real `state` round-trip through `/login` → `/callback`, new-account
+  creation, linking to a pre-existing password account by email, a second Google login reusing the
+  already-linked account (not creating a duplicate), and all three failure paths (state mismatch, Google's
+  own `?error=`, the token exchange raising `httpx.HTTPStatusError`) redirecting to
+  `/login?error=google_auth_failed` instead of 500ing.
 
 ## Testing convention
 

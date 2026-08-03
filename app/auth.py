@@ -6,6 +6,7 @@ passlib, the username-as-S3-path-segment constraint).
 """
 
 import re
+import secrets
 
 import bcrypt
 from fastapi import Depends, HTTPException, Request
@@ -35,6 +36,32 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
+def unusable_password_hash() -> str:
+    """A real bcrypt hash of a random value nobody knows - for Google-only
+    accounts (see models.User.password_hash's docstring for why this is a
+    hash of randomness rather than a nullable column). verify_password()
+    against this can never succeed by chance.
+    """
+    return hash_password(secrets.token_urlsafe(32))
+
+
+def derive_username_from_email(email: str, session: Session) -> str:
+    """Auto-derives a username from an email's local part, same charset/shape
+    as signup.html's client-side deriveUsername() (for password signups, where
+    the user typed the email themselves) - reused here because Google sign-in
+    creates the account entirely server-side, with no signup form in between.
+    Retries with a fresh random suffix until the (username, not just email) is
+    actually free, rather than a single fixed-attempt gamble.
+    """
+    base = re.sub(r"[^a-z0-9_]", "_", email.split("@")[0].lower())[:24] or "user"
+    for _ in range(5):
+        candidate = f"{base}_{secrets.token_hex(3)}"
+        if session.exec(select(User).where(User.username == candidate)).first() is None:
+            return candidate
+    # Astronomically unlikely to fall through 5 random suffixes - last resort.
+    return f"{base}_{secrets.token_hex(6)}"
+
+
 def verify_password(password: str, password_hash: str) -> bool:
     try:
         return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
@@ -61,3 +88,7 @@ def get_user_by_username_or_email(session: Session, identifier: str) -> User | N
     return session.exec(
         select(User).where((User.username == identifier) | (User.email == identifier))
     ).first()
+
+
+def get_user_by_google_sub(session: Session, google_sub: str) -> User | None:
+    return session.exec(select(User).where(User.google_sub == google_sub)).first()

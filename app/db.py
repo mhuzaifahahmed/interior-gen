@@ -36,6 +36,9 @@ _NEW_COLUMNS_BY_TABLE = {
         ("blueprint_status", "TEXT NOT NULL DEFAULT 'idle'"),
         ("user_id", "TEXT"),
     ],
+    "user": [
+        ("google_sub", "TEXT"),
+    ],
 }
 
 

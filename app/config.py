@@ -95,6 +95,17 @@ class Settings(BaseSettings):
     # only, never in .env.example (same convention as the API keys above).
     session_secret_key: str = ""
 
+    # Google OAuth ("Continue with Google" on login/signup) - sits alongside
+    # the existing username/password auth, not a replacement for it (user's
+    # explicit choice). Created under Google Cloud Console > APIs & Services >
+    # Credentials > OAuth client ID > Web application; the redirect URI there
+    # must exactly match google_redirect_uri below. See CLAUDE.md's
+    # "Authentication" section for the full setup walkthrough and the
+    # find-or-create-by-email account-linking behavior.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://127.0.0.1:8000/api/auth/google/callback"
+
     @property
     def resolved_session_secret_key(self) -> str:
         # Dev-only fallback so a fresh checkout without .env still boots -

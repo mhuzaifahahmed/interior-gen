@@ -7,40 +7,49 @@
 <style>
   @layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}}
   ::-webkit-scrollbar{display:none;}
+  .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;}
   /* Chrome/Edge force a light autofill background (yellow/white) via an inset
      box-shadow trick that ordinary CSS can't override with background-color
      alone - this neutralizes it so autofilled fields stay on the dark theme. */
   input:-webkit-autofill,
   input:-webkit-autofill:hover,
   input:-webkit-autofill:focus {
-    -webkit-text-fill-color: #e5e2e1;
-    -webkit-box-shadow: 0 0 0px 1000px #131313 inset;
-    box-shadow: 0 0 0px 1000px #131313 inset;
+    -webkit-text-fill-color: #33362e;
+    -webkit-box-shadow: 0 0 0px 1000px #faf6ee inset;
+    box-shadow: 0 0 0px 1000px #faf6ee inset;
     transition: background-color 9999s ease-in-out 0s;
   }
   @keyframes fade-in-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
   .fade-in-up { animation: fade-in-up 700ms ease-out both; }
 </style>
 <script src="https://cdn.tailwindcss.com"></script>
-<script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"inverse-surface":"#e5e2e1","surface-container-high":"#2a2a2a","on-secondary-container":"#b6b5b1","on-secondary":"#30312e","primary-fixed-dim":"#e9c176","surface-container":"#201f1f","tertiary-fixed":"#e5e2e1","inverse-primary":"#775a19","background":"#131313","surface-container-highest":"#353534","primary-container":"#c5a059","surface-variant":"#353534","surface":"#131313","secondary-fixed-dim":"#c8c6c3","on-primary-fixed":"#261900","tertiary-container":"#a7a5a5","on-tertiary-container":"#3b3b3b","primary":"#e9c176","on-background":"#e5e2e1","outline":"#9a8f80","on-primary-fixed-variant":"#5d4201","on-error-container":"#ffdad6","on-primary":"#412d00","surface-tint":"#e9c176","on-primary-container":"#4e3700","error":"#ffb4ab","surface-container-low":"#1c1b1b","secondary-fixed":"#e4e2de","on-secondary-fixed-variant":"#474744","on-tertiary-fixed":"#1c1b1b","surface-container-lowest":"#0e0e0e","on-surface":"#e5e2e1","primary-fixed":"#ffdea5","error-container":"#93000a","secondary":"#c8c6c3","on-tertiary":"#313030","outline-variant":"#4e4639","on-surface-variant":"#d1c5b4","tertiary":"#c8c6c5","surface-bright":"#3a3939","surface-dim":"#131313","inverse-on-surface":"#313030","on-error":"#690005","secondary-container":"#474744","on-tertiary-fixed-variant":"#474746","tertiary-fixed-dim":"#c8c6c5","on-secondary-fixed":"#1b1c1a"},"borderRadius":{"DEFAULT":"0px","lg":"0px","xl":"0px","full":"9999px"},"spacing":{"unit":"8px","margin-mobile":"24px","container-max":"1440px","section-gap":"128px","margin-desktop":"64px","gutter":"32px"},"fontFamily":{"headline-md":["Playfair Display"],"label-caps":["IBM Plex Sans"],"body-md":["IBM Plex Sans"],"display-lg-mobile":["Playfair Display"],"body-lg":["IBM Plex Sans"],"technical-data":["IBM Plex Sans"],"headline-sm":["Playfair Display"],"display-lg":["Playfair Display"]},"fontSize":{"headline-md":["32px",{"lineHeight":"1.3","fontWeight":"600"}],"label-caps":["12px",{"lineHeight":"1.2","letterSpacing":"0.15em","fontWeight":"600"}],"body-md":["16px",{"lineHeight":"1.6","fontWeight":"400"}],"display-lg-mobile":["40px",{"lineHeight":"1.2","letterSpacing":"-0.01em","fontWeight":"700"}],"body-lg":["18px",{"lineHeight":"1.6","fontWeight":"400"}],"technical-data":["14px",{"lineHeight":"1.4","fontWeight":"500"}],"headline-sm":["24px",{"lineHeight":"1.4","fontWeight":"500"}],"display-lg":["64px",{"lineHeight":"1.1","letterSpacing":"-0.02em","fontWeight":"700"}]}}}}</script>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet"/>
+<script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"inverse-surface":"#33362e","surface-container-high":"#e6dcc5","on-secondary-container":"#4a4230","on-secondary":"#ffffff","primary-fixed-dim":"#8fc0aa","surface-container":"#efe7d6","tertiary-fixed":"#dceae2","inverse-primary":"#8fc0aa","background":"#faf6ee","surface-container-highest":"#dccfb0","primary-container":"#d3ebe0","surface-variant":"#efe7d6","surface":"#ffffff","secondary-fixed-dim":"#d8c9a6","on-primary-fixed":"#0b2318","tertiary-container":"#dceae2","on-tertiary-container":"#1f3a31","primary":"#3f7a61","on-background":"#33362e","outline":"#c9bfa6","on-primary-fixed-variant":"#2a5c46","on-error-container":"#5c2119","on-primary":"#ffffff","surface-tint":"#3f7a61","on-primary-container":"#163828","error":"#b3544a","surface-container-low":"#f5efe2","secondary-fixed":"#efe4ce","on-secondary-fixed-variant":"#6b6248","on-tertiary-fixed":"#12271f","surface-container-lowest":"#ffffff","on-surface":"#33362e","primary-fixed":"#d3ebe0","error-container":"#f7deda","secondary":"#b7a88c","on-tertiary":"#17352b","outline-variant":"#e2d9c3","on-surface-variant":"#6e6c5c","tertiary":"#8faf9e","surface-bright":"#ffffff","surface-dim":"#f1eadc","inverse-on-surface":"#f5efe2","on-error":"#ffffff","secondary-container":"#efe4ce","on-tertiary-fixed-variant":"#3d5a4c","tertiary-fixed-dim":"#b7d2c4","on-secondary-fixed":"#2a2515"},"borderRadius":{"DEFAULT":"14px","lg":"18px","xl":"22px","full":"9999px"},"spacing":{"unit":"8px","margin-mobile":"24px","container-max":"1440px","section-gap":"128px","margin-desktop":"64px","gutter":"32px"},"fontFamily":{"headline-md":["Ranade"],"label-caps":["Poppins"],"body-md":["Poppins"],"display-lg-mobile":["Ranade"],"body-lg":["Poppins"],"technical-data":["Poppins"],"headline-sm":["Ranade"],"display-lg":["Ranade"]},"fontSize":{"headline-md":["32px",{"lineHeight":"1.3","fontWeight":"600"}],"label-caps":["12px",{"lineHeight":"1.2","letterSpacing":"0.1em","fontWeight":"600"}],"body-md":["16px",{"lineHeight":"1.6","fontWeight":"400"}],"display-lg-mobile":["38px",{"lineHeight":"1.2","letterSpacing":"-0.01em","fontWeight":"700"}],"body-lg":["18px",{"lineHeight":"1.6","fontWeight":"400"}],"technical-data":["14px",{"lineHeight":"1.4","fontWeight":"500"}],"headline-sm":["24px",{"lineHeight":"1.4","fontWeight":"600"}],"display-lg":["60px",{"lineHeight":"1.12","letterSpacing":"-0.01em","fontWeight":"700"}]}}}}</script>
+<link rel="stylesheet" href="/static/fonts.css"/>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 </head>
 <body class="bg-background font-body-md text-on-surface">
-<main class="min-h-screen flex items-center justify-center p-margin-mobile md:p-margin-desktop">
+
+<header class="fixed top-0 w-full z-50 bg-surface-container/95 backdrop-blur-xl border-b border-outline-variant/70">
+<div class="h-20 max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop flex items-center justify-between">
+<a href="/" class="font-headline-sm text-headline-sm tracking-tight text-on-surface">Interior&#8209;Gen</a>
+<nav class="hidden md:flex items-center gap-margin-mobile">
+<a href="/" class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary hover:underline underline-offset-4 transition-colors pb-1">HOME</a>
+<a href="/" class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary hover:underline underline-offset-4 transition-colors pb-1">ROOM REDESIGN</a>
+<a href="/" class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary hover:underline underline-offset-4 transition-colors pb-1">BUILD A HOUSE</a>
+</nav>
+</div>
+</header>
+
+<main class="pt-20 min-h-[80vh] flex items-center justify-center p-margin-mobile md:p-margin-desktop">
 <div class="grid grid-cols-1 lg:grid-cols-12 min-h-[760px] w-full gap-gutter max-w-[1200px] mx-auto">
 
 <div class="hidden lg:flex lg:col-span-7 relative flex-col justify-between p-margin-desktop overflow-hidden">
 <div class="absolute inset-0 z-0">
 <div class="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent z-10"></div>
-<div class="w-full h-full bg-cover bg-center transition-transform duration-700 hover:scale-105" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuC_2iLThr62lINY4JpgF8DjzNQG0DNU_Pq-G_iOeogcmlMKurhmvlVRychdIvv_ED2K846SxQCqoeUNLE7pNLsoV_LapAA-T6an1xrpLuzsFUrc_n5t3PRGvr9CbDACylpH6y66vQbNE6fRXf94mZr5CGNhW9BegWrPMEvWgGH8YNiK5_U9iTjOsGZklhiMZMfKBdnC_UtBtL_LIOF2dh9qIAdhaX4gKCup4uzhFiphdZfaZ7rDHlNRWg')"></div>
+<div class="w-full h-full bg-cover bg-center transition-transform duration-700 hover:scale-105" style="background-image: url('/static/examples/mid.png')"></div>
 </div>
-<a href="/" class="relative z-20 flex items-center gap-4">
-<div class="w-10 h-10 flex items-center justify-center bg-primary text-on-primary">
-<span class="material-symbols-outlined text-[24px]">architecture</span>
-</div>
-<span class="font-label-caps text-label-caps tracking-[0.2em] text-on-background opacity-80">INTERIOR-GEN</span>
-</a>
+<a href="/" class="relative z-20 flex items-center gap-4"></a>
 <div class="relative z-20 max-w-xl">
 <h2 class="font-display-lg text-display-lg-mobile text-on-background mb-unit">Precision in <br/><span class="italic text-primary">Every Line.</span></h2>
 <p class="font-body-lg text-body-lg text-on-surface-variant max-w-md">Create your account to generate room redesigns and full concept builds, saved to your own project history.</p>
@@ -56,29 +65,46 @@
 
 <form class="space-y-8 mt-10" id="signup-form">
 <div class="relative group">
-<label class="block font-label-caps text-label-caps text-outline mb-2 transition-colors group-focus-within:text-primary">Full Name</label>
-<input class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all" id="full-name" type="text"/>
+<label class="block font-label-caps text-label-caps text-on-surface-variant mb-2 transition-colors group-focus-within:text-primary">Full Name</label>
+<input class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(63,122,97,0.4)] transition-all duration-200" id="full-name" type="text"/>
 </div>
 
 <div class="relative group">
-<label class="block font-label-caps text-label-caps text-outline mb-2 transition-colors group-focus-within:text-primary">Email</label>
-<input class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all" id="email" required type="email"/>
+<label class="block font-label-caps text-label-caps text-on-surface-variant mb-2 transition-colors group-focus-within:text-primary">Email</label>
+<input class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(63,122,97,0.4)] transition-all duration-200" id="email" required type="email"/>
 </div>
 
 <div class="relative group">
-<label class="block font-label-caps text-label-caps text-outline mb-2 transition-colors group-focus-within:text-primary">Password</label>
-<input class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary transition-all" id="password" required type="password"/>
-<p class="font-technical-data text-[10px] uppercase tracking-tighter text-outline mt-2">Minimum 8 characters</p>
+<label class="block font-label-caps text-label-caps text-on-surface-variant mb-2 transition-colors group-focus-within:text-primary">Password</label>
+<input class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(63,122,97,0.4)] transition-all duration-200" id="password" required type="password"/>
+<p class="font-technical-data text-[10px] uppercase tracking-tighter text-on-surface-variant mt-2">Minimum 8 characters</p>
 </div>
 
 <p class="text-sm text-error hidden" id="signup-error"></p>
 
 <div class="pt-4 space-y-6">
-<button class="group relative w-full bg-primary py-5 flex items-center justify-center gap-3 overflow-hidden transition-all active:scale-[0.98]" id="signup-submit" type="submit">
+<button class="group relative w-full bg-primary py-5 flex items-center justify-center gap-3 overflow-hidden shadow-md hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 active:scale-[0.98]" id="signup-submit" type="submit">
 <span class="relative z-10 font-label-caps text-label-caps text-on-primary font-bold" id="signup-submit-label">Create Account</span>
 <span class="material-symbols-outlined relative z-10 text-on-primary transition-transform group-hover:translate-x-1">arrow_forward</span>
 <div class="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
 </button>
+
+<div class="flex items-center gap-4">
+<div class="flex-1 h-px bg-outline-variant"></div>
+<span class="font-label-caps text-label-caps text-on-surface-variant">OR</span>
+<div class="flex-1 h-px bg-outline-variant"></div>
+</div>
+
+<a href="/api/auth/google/login" class="w-full flex items-center justify-center gap-3 py-4 px-8 border border-outline-variant bg-surface text-on-surface font-label-caps text-label-caps hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
+<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+<path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.9c1.7-1.56 2.7-3.86 2.7-6.62z"/>
+<path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.9-2.26c-.81.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.96v2.33A9 9 0 0 0 9 18z"/>
+<path fill="#FBBC05" d="M3.95 10.7A5.4 5.4 0 0 1 3.66 9c0-.59.1-1.17.29-1.7V4.97H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.03l2.99-2.33z"/>
+<path fill="#EA4335" d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.97l2.99 2.33C4.66 5.17 6.65 3.58 9 3.58z"/>
+</svg>
+<span class="font-medium">Continue with Google</span>
+</a>
+
 <p class="font-body-md text-body-md text-on-surface-variant text-center">
 Already have an account? <a class="text-primary hover:underline underline-offset-4 transition-all" href="/login">Log in</a>
 </p>
@@ -88,6 +114,21 @@ Already have an account? <a class="text-primary hover:underline underline-offset
 </div>
 </div>
 </main>
+
+<footer class="bg-surface-container border-t border-outline-variant/70 py-14">
+<div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop flex flex-col md:flex-row justify-between items-center gap-4">
+<div class="flex items-center gap-2 font-headline-sm text-headline-sm text-on-surface-variant">
+Interior&#8209;Gen
+</div>
+<p class="font-body-md text-on-surface-variant text-sm">AI&#8209;generated visualizations for planning purposes.</p>
+<p class="font-label-caps text-label-caps text-on-surface-variant">
+<a href="/terms" class="hover:text-primary hover:underline underline-offset-4 transition-colors">Terms</a>
+<span class="mx-2 opacity-40">&middot;</span>
+<a href="/privacy" class="hover:text-primary hover:underline underline-offset-4 transition-colors">Privacy Policy</a>
+</p>
+</div>
+</footer>
+
 <script>
   const form = document.getElementById("signup-form");
   const errorEl = document.getElementById("signup-error");

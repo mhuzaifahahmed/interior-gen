@@ -7,29 +7,43 @@
 <style>
   @layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}}
   ::-webkit-scrollbar{display:none;}
+  .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;}
   /* Chrome/Edge force a light autofill background (yellow/white) via an inset
      box-shadow trick that ordinary CSS can't override with background-color
      alone - this neutralizes it so autofilled fields stay on the dark theme. */
   input:-webkit-autofill,
   input:-webkit-autofill:hover,
   input:-webkit-autofill:focus {
-    -webkit-text-fill-color: #e5e2e1;
-    -webkit-box-shadow: 0 0 0px 1000px #131313 inset;
-    box-shadow: 0 0 0px 1000px #131313 inset;
+    -webkit-text-fill-color: #33362e;
+    -webkit-box-shadow: 0 0 0px 1000px #faf6ee inset;
+    box-shadow: 0 0 0px 1000px #faf6ee inset;
     transition: background-color 9999s ease-in-out 0s;
   }
 </style>
 <script src="https://cdn.tailwindcss.com"></script>
-<script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"primary-fixed-dim":"#e9c176","on-background":"#e5e2e1","on-primary-container":"#4e3700","on-secondary-fixed-variant":"#474744","secondary":"#c8c6c3","on-error-container":"#ffdad6","on-primary-fixed-variant":"#5d4201","inverse-surface":"#e5e2e1","outline-variant":"#4e4639","on-tertiary-fixed-variant":"#474746","surface-container-lowest":"#0e0e0e","inverse-on-surface":"#313030","tertiary-fixed":"#e5e2e1","surface-bright":"#3a3939","on-tertiary-container":"#3b3b3b","error-container":"#93000a","outline":"#9a8f80","on-secondary":"#30312e","surface-container-low":"#1c1b1b","tertiary-container":"#a7a5a5","on-primary-fixed":"#261900","surface-tint":"#e9c176","secondary-container":"#474744","on-primary":"#412d00","on-secondary-fixed":"#1b1c1a","primary-fixed":"#ffdea5","inverse-primary":"#775a19","secondary-fixed":"#e4e2de","on-surface":"#e5e2e1","on-tertiary-fixed":"#1c1b1b","on-surface-variant":"#d1c5b4","surface-dim":"#131313","on-secondary-container":"#b6b5b1","on-tertiary":"#313030","tertiary-fixed-dim":"#c8c6c5","surface-container":"#201f1f","background":"#131313","on-error":"#690005","primary-container":"#c5a059","error":"#ffb4ab","surface":"#131313","secondary-fixed-dim":"#c8c6c3","tertiary":"#c8c6c5","surface-variant":"#353534","primary":"#e9c176","surface-container-highest":"#353534","surface-container-high":"#2a2a2a"},"borderRadius":{"DEFAULT":"0px","lg":"0px","xl":"0px","full":"9999px"},"spacing":{"unit":"8px","margin-mobile":"24px","container-max":"1440px","section-gap":"128px","margin-desktop":"64px","gutter":"32px"},"fontFamily":{"headline-md":["Playfair Display"],"label-caps":["IBM Plex Sans"],"body-md":["IBM Plex Sans"],"display-lg-mobile":["Playfair Display"],"body-lg":["IBM Plex Sans"],"technical-data":["IBM Plex Sans"],"headline-sm":["Playfair Display"],"display-lg":["Playfair Display"]},"fontSize":{"headline-md":["32px",{"lineHeight":"1.3","fontWeight":"600"}],"label-caps":["12px",{"lineHeight":"1.2","letterSpacing":"0.15em","fontWeight":"600"}],"body-md":["16px",{"lineHeight":"1.6","fontWeight":"400"}],"display-lg-mobile":["40px",{"lineHeight":"1.2","letterSpacing":"-0.01em","fontWeight":"700"}],"body-lg":["18px",{"lineHeight":"1.6","fontWeight":"400"}],"technical-data":["14px",{"lineHeight":"1.4","fontWeight":"500"}],"headline-sm":["24px",{"lineHeight":"1.4","fontWeight":"500"}],"display-lg":["64px",{"lineHeight":"1.1","letterSpacing":"-0.02em","fontWeight":"700"}]}}}}</script>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet"/>
+<script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"primary-fixed-dim":"#8fc0aa","on-background":"#33362e","on-primary-container":"#163828","on-secondary-fixed-variant":"#6b6248","secondary":"#b7a88c","on-error-container":"#5c2119","on-primary-fixed-variant":"#2a5c46","inverse-surface":"#33362e","outline-variant":"#e2d9c3","on-tertiary-fixed-variant":"#3d5a4c","surface-container-lowest":"#ffffff","inverse-on-surface":"#f5efe2","tertiary-fixed":"#dceae2","surface-bright":"#ffffff","on-tertiary-container":"#1f3a31","error-container":"#f7deda","outline":"#c9bfa6","on-secondary":"#ffffff","surface-container-low":"#f5efe2","tertiary-container":"#dceae2","on-primary-fixed":"#0b2318","surface-tint":"#3f7a61","secondary-container":"#efe4ce","on-primary":"#ffffff","on-secondary-fixed":"#2a2515","primary-fixed":"#d3ebe0","inverse-primary":"#8fc0aa","secondary-fixed":"#efe4ce","on-surface":"#33362e","on-tertiary-fixed":"#12271f","on-surface-variant":"#6e6c5c","surface-dim":"#f1eadc","on-secondary-container":"#4a4230","on-tertiary":"#17352b","tertiary-fixed-dim":"#b7d2c4","surface-container":"#efe7d6","background":"#faf6ee","on-error":"#ffffff","primary-container":"#d3ebe0","error":"#b3544a","surface":"#ffffff","secondary-fixed-dim":"#d8c9a6","tertiary":"#8faf9e","surface-variant":"#efe7d6","primary":"#3f7a61","surface-container-highest":"#dccfb0","surface-container-high":"#e6dcc5"},"borderRadius":{"DEFAULT":"14px","lg":"18px","xl":"22px","full":"9999px"},"spacing":{"unit":"8px","margin-mobile":"24px","container-max":"1440px","section-gap":"128px","margin-desktop":"64px","gutter":"32px"},"fontFamily":{"headline-md":["Ranade"],"label-caps":["Poppins"],"body-md":["Poppins"],"display-lg-mobile":["Ranade"],"body-lg":["Poppins"],"technical-data":["Poppins"],"headline-sm":["Ranade"],"display-lg":["Ranade"]},"fontSize":{"headline-md":["32px",{"lineHeight":"1.3","fontWeight":"600"}],"label-caps":["12px",{"lineHeight":"1.2","letterSpacing":"0.1em","fontWeight":"600"}],"body-md":["16px",{"lineHeight":"1.6","fontWeight":"400"}],"display-lg-mobile":["38px",{"lineHeight":"1.2","letterSpacing":"-0.01em","fontWeight":"700"}],"body-lg":["18px",{"lineHeight":"1.6","fontWeight":"400"}],"technical-data":["14px",{"lineHeight":"1.4","fontWeight":"500"}],"headline-sm":["24px",{"lineHeight":"1.4","fontWeight":"600"}],"display-lg":["60px",{"lineHeight":"1.12","letterSpacing":"-0.01em","fontWeight":"700"}]}}}}</script>
+<link rel="stylesheet" href="/static/fonts.css"/>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 </head>
 <body class="bg-background font-body-md text-on-surface">
-<main class="min-h-screen flex items-center justify-center p-margin-mobile md:p-margin-desktop">
+
+<header class="fixed top-0 w-full z-50 bg-surface-container/95 backdrop-blur-xl border-b border-outline-variant/70">
+<div class="h-20 max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop flex items-center justify-between">
+<a href="/" class="font-headline-sm text-headline-sm tracking-tight text-on-surface">Interior&#8209;Gen</a>
+<nav class="hidden md:flex items-center gap-margin-mobile">
+<a href="/" class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary hover:underline underline-offset-4 transition-colors pb-1">HOME</a>
+<a href="/" class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary hover:underline underline-offset-4 transition-colors pb-1">ROOM REDESIGN</a>
+<a href="/" class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary hover:underline underline-offset-4 transition-colors pb-1">BUILD A HOUSE</a>
+</nav>
+</div>
+</header>
+
+<main class="pt-20 min-h-[70vh] flex items-center justify-center p-margin-mobile md:p-margin-desktop">
 <div class="flex flex-col w-full items-center justify-center">
 <div class="fixed inset-0 z-0 opacity-10 pointer-events-none overflow-hidden">
 <svg height="100%" width="100%" xmlns="http://www.w3.org/2000/svg">
-<defs><pattern height="100" id="grid" patternUnits="userSpaceOnUse" width="100"><path d="M 100 0 L 0 0 0 100" fill="none" stroke="#e9c176" stroke-width="0.5"></path></pattern></defs>
+<defs><pattern height="100" id="grid" patternUnits="userSpaceOnUse" width="100"><path d="M 100 0 L 0 0 0 100" fill="none" stroke="#3f7a61" stroke-width="0.5"></path></pattern></defs>
 <rect fill="url(#grid)" height="100%" width="100%"></rect>
 </svg>
 <div class="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-background via-transparent to-background"></div>
@@ -43,33 +57,33 @@
 </div>
 </a>
 <h1 class="font-display-lg text-display-lg-mobile md:text-display-lg text-on-background mb-4">Welcome Back</h1>
-<p class="font-label-caps text-label-caps text-outline uppercase tracking-[0.3em]">Log in to Interior-Gen</p>
+<p class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-[0.3em]">Log in to Interior-Gen</p>
 </div>
 
 <form class="space-y-10" id="login-form">
 <div class="relative group">
-<label class="block font-label-caps text-label-caps text-outline mb-2 uppercase">Username or Email</label>
-<div class="relative flex items-center border-b border-outline-variant group-focus-within:border-primary transition-colors duration-300">
-<span class="material-symbols-outlined text-outline group-focus-within:text-primary transition-colors mr-3 pb-2">mail</span>
+<label class="block font-label-caps text-label-caps text-on-surface-variant mb-2 uppercase">Username or Email</label>
+<div class="relative flex items-center border-b border-outline-variant group-focus-within:border-primary group-focus-within:shadow-[0_4px_14px_-6px_rgba(63,122,97,0.4)] transition-all duration-300">
+<span class="material-symbols-outlined text-on-surface-variant group-focus-within:text-primary transition-colors mr-3 pb-2">mail</span>
 <input class="w-full bg-transparent border-none py-3 font-body-md text-on-background focus:outline-none focus:ring-0" id="identifier" required type="text"/>
 </div>
 </div>
 
 <div class="relative group">
 <div class="flex justify-between items-end mb-2">
-<label class="block font-label-caps text-label-caps text-outline uppercase">Password</label>
+<label class="block font-label-caps text-label-caps text-on-surface-variant uppercase">Password</label>
 </div>
-<div class="relative flex items-center border-b border-outline-variant group-focus-within:border-primary transition-colors duration-300">
-<span class="material-symbols-outlined text-outline group-focus-within:text-primary transition-colors mr-3 pb-2">lock</span>
+<div class="relative flex items-center border-b border-outline-variant group-focus-within:border-primary group-focus-within:shadow-[0_4px_14px_-6px_rgba(63,122,97,0.4)] transition-all duration-300">
+<span class="material-symbols-outlined text-on-surface-variant group-focus-within:text-primary transition-colors mr-3 pb-2">lock</span>
 <input class="w-full bg-transparent border-none py-3 font-body-md text-on-background focus:outline-none focus:ring-0" id="password" required type="password"/>
-<button class="material-symbols-outlined text-outline hover:text-on-background transition-colors pb-2" id="toggle-password" type="button">visibility</button>
+<button class="material-symbols-outlined text-on-surface-variant hover:text-primary hover:scale-110 transition-all duration-200 pb-2" id="toggle-password" type="button">visibility</button>
 </div>
 </div>
 
 <p class="text-sm text-error hidden" id="login-error"></p>
 
 <div class="pt-4">
-<button class="w-full bg-primary py-5 px-8 flex items-center justify-between group overflow-hidden relative transition-all active:scale-[0.98]" id="login-submit" type="submit">
+<button class="w-full bg-primary py-5 px-8 flex items-center justify-between group overflow-hidden relative shadow-md hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 active:scale-[0.98]" id="login-submit" type="submit">
 <span class="font-label-caps text-label-caps text-on-primary relative z-10 uppercase font-bold" id="login-submit-label">Log In</span>
 <span class="material-symbols-outlined text-on-primary relative z-10 group-hover:translate-x-2 transition-transform">arrow_forward</span>
 <div class="absolute inset-0 bg-primary-container translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
@@ -77,25 +91,62 @@
 </div>
 </form>
 
+<div class="flex items-center gap-4 mt-8">
+<div class="flex-1 h-px bg-outline-variant"></div>
+<span class="font-label-caps text-label-caps text-on-surface-variant">OR</span>
+<div class="flex-1 h-px bg-outline-variant"></div>
+</div>
+
+<a href="/api/auth/google/login" class="mt-6 w-full flex items-center justify-center gap-3 py-4 px-8 border border-outline-variant bg-surface text-on-surface font-label-caps text-label-caps hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
+<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+<path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.9c1.7-1.56 2.7-3.86 2.7-6.62z"/>
+<path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.9-2.26c-.81.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.96v2.33A9 9 0 0 0 9 18z"/>
+<path fill="#FBBC05" d="M3.95 10.7A5.4 5.4 0 0 1 3.66 9c0-.59.1-1.17.29-1.7V4.97H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.03l2.99-2.33z"/>
+<path fill="#EA4335" d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.97l2.99 2.33C4.66 5.17 6.65 3.58 9 3.58z"/>
+</svg>
+<span class="font-medium">Continue with Google</span>
+</a>
+
 <div class="mt-16 text-center">
-<p class="font-body-md text-outline">
+<p class="font-body-md text-on-surface-variant">
 New here?
 <a class="text-primary font-label-caps text-label-caps ml-2 hover:underline tracking-widest" href="/signup">Create an account</a>
 </p>
 </div>
 </div>
 
-<div class="fixed bottom-margin-desktop right-margin-desktop hidden lg:flex flex-col items-end opacity-20 pointer-events-none select-none">
-<div class="font-technical-data text-[10px] text-primary tracking-tighter">SESSION_PROTOCOL: SECURE</div>
-<div class="font-technical-data text-[10px] text-primary tracking-tighter">INTERIOR-GEN / AURELIAN_MONOLITH</div>
-</div>
 </div>
 </main>
+
+<footer class="bg-surface-container border-t border-outline-variant/70 py-14 relative z-10">
+<div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop flex flex-col md:flex-row justify-between items-center gap-4">
+<div class="flex items-center gap-2 font-headline-sm text-headline-sm text-on-surface-variant">
+Interior&#8209;Gen
+</div>
+<p class="font-body-md text-on-surface-variant text-sm">AI&#8209;generated visualizations for planning purposes.</p>
+<p class="font-label-caps text-label-caps text-on-surface-variant">
+<a href="/terms" class="hover:text-primary hover:underline underline-offset-4 transition-colors">Terms</a>
+<span class="mx-2 opacity-40">&middot;</span>
+<a href="/privacy" class="hover:text-primary hover:underline underline-offset-4 transition-colors">Privacy Policy</a>
+</p>
+</div>
+</footer>
+
 <script>
   const form = document.getElementById("login-form");
   const errorEl = document.getElementById("login-error");
   const submitBtn = document.getElementById("login-submit");
   const submitLabel = document.getElementById("login-submit-label");
+
+  // google_callback (app/main.py) redirects here with ?error=... on any
+  // failure in the Google OAuth exchange (bad/expired code, state mismatch,
+  // Google itself returning an error) - surface it in the same error slot
+  // password-login failures use, rather than silently landing back on a
+  // blank login page.
+  if (new URLSearchParams(window.location.search).get("error") === "google_auth_failed") {
+    errorEl.textContent = "Google sign-in failed. Please try again.";
+    errorEl.classList.remove("hidden");
+  }
 
   document.getElementById("toggle-password").addEventListener("click", (e) => {
     const input = document.getElementById("password");

@@ -8,10 +8,12 @@
    "Frontend" section for the full reasoning. Everything else in index.html/
    login.html/signup.html is plain Tailwind CDN utilities, not this file.
 
-   Colors below are the literal Aurelian Monolith hex values (see
-   stitch_archivision_ai_studio/aurelian_monolith/DESIGN.md) - hardcoded
-   because this plain CSS file has no access to the Tailwind config object
-   defined inline in each HTML page. */
+   Colors below are the literal "Sage & Linen" theme hex values (soft beige/
+   mint palette, replacing the earlier dark Aurelian Monolith system) -
+   hardcoded because this plain CSS file has no access to the Tailwind config
+   object defined inline in each HTML page. Keep these in sync with the
+   `colors`/`fontFamily` values in index.html/login.html/signup.html's inline
+   tailwind.config scripts if the theme changes again. */
 
 /* Tailwind utility classes (e.g. "flex") are author-origin CSS, so they beat
    the browser UA stylesheet's [hidden]{display:none} rule at equal
@@ -21,23 +23,34 @@
    #materials-modal-overlay) with a Tailwind "flex"/"grid"/"block" class for
    its shown state would render visible even while hidden. This one rule
    makes [hidden] always win, everywhere, without touching app.js or markup. */
+/* Material Symbols is a variable font (weight/fill/grade/optical-size axes) -
+   without pinning them, the same icon (e.g. the "close" X used on
+   remove-photo-btn/lightbox-close/materials-modal-close) can render with a
+   different stroke weight/shape depending on context (noticeably chunkier
+   inside a small hover-scaled circular button), since the browser is free to
+   interpolate the unset axes however it likes. Pinning to a fixed, thin,
+   unfilled outline keeps every icon the same shape everywhere. */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
 [hidden] {
   display: none !important;
 }
 
 :root {
-  --ink: #e5e2e1;
-  --ink-soft: #d1c5b4;
-  --paper: #1c1b1b;
-  --paper-raised: #201f1f;
-  --paper-high: #2a2a2a;
-  --line: rgba(233, 193, 118, 0.16);
-  --accent: #e9c176;
-  --accent-bg: rgba(233, 193, 118, 0.1);
-  --accent-dark: #c5a059;
-  --on-accent: #2b2013;
-  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(233, 193, 118, 0.05);
-  --shadow-lift: 0 24px 56px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(233, 193, 118, 0.08);
+  --ink: #33362e;
+  --ink-soft: #6e6c5c;
+  --paper: #ffffff;
+  --paper-raised: #f5efe2;
+  --paper-high: #efe7d6;
+  --line: rgba(63, 122, 97, 0.18);
+  --accent: #3f7a61;
+  --accent-bg: rgba(63, 122, 97, 0.1);
+  --accent-dark: #2e5c48;
+  --on-accent: #ffffff;
+  --shadow: 0 12px 32px rgba(51, 54, 46, 0.1), 0 2px 8px rgba(51, 54, 46, 0.05);
+  --shadow-lift: 0 24px 56px rgba(51, 54, 46, 0.14), 0 4px 16px rgba(51, 54, 46, 0.08);
 }
 
 @keyframes spin {
@@ -77,11 +90,12 @@
   border-bottom: 2px solid transparent;
   color: var(--ink-soft);
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  transition: color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
 
 .tab-btn:hover {
   color: var(--accent);
+  transform: translateY(-1px);
 }
 
 .tab-btn.is-active {
@@ -335,9 +349,9 @@
 
 .result-card .tier-name {
   margin: 0;
-  font-family: "Playfair Display", serif;
+  font-family: "Ranade", sans-serif;
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--ink);
 }
 
@@ -391,14 +405,15 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  font-family: "IBM Plex Sans", sans-serif;
+  font-family: "Poppins", sans-serif;
   color: var(--accent);
   text-align: center;
-  transition: color 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
 .materials-open-btn:hover {
   color: var(--accent-dark);
+  background: var(--accent-bg);
 }
 
 /* ---- Materials table (inside the materials modal body) ---- */

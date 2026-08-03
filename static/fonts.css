@@ -1,0 +1,35 @@
+/* Self-hosted Ranade (headings) - see CLAUDE.md's "Frontend" section for why:
+   loading Ranade cross-origin via Fontshare's CDN link tag silently failed to
+   register any @font-face in document.fonts (confirmed via document.fonts
+   inspection and network capture - the CSS itself loaded fine, but the
+   browser never issued requests for the referenced font files), so headings
+   fell back to the browser's default serif. Self-hosting from the same
+   origin as everything else in static/ sidesteps whatever cross-origin/
+   redirect quirk caused that. Poppins (body/label text) had no such issue
+   and stays on the Google Fonts CDN. Files in static/fonts/ downloaded once
+   from Fontshare's own CDN (https://api.fontshare.com/v2/css?f[]=ranade@...) -
+   Fontshare's license allows self-hosting. */
+
+@font-face {
+  font-family: "Ranade";
+  src: url("/static/fonts/Ranade-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Ranade";
+  src: url("/static/fonts/Ranade-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Ranade";
+  src: url("/static/fonts/Ranade-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}

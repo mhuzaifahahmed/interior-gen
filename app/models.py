@@ -23,7 +23,20 @@ class User(SQLModel, table=True):
     email: str = Field(unique=True, index=True)
     full_name: Optional[str] = None
     role: Optional[str] = None
+    # Real password for password-based signups. Google-only accounts (created
+    # via /api/auth/google/callback, see app/main.py) get a random, never-
+    # revealed bcrypt hash here instead of a nullable column - simpler than a
+    # schema change (SQLite can't drop a NOT NULL constraint via ALTER TABLE
+    # without a full table rebuild) and has the same effect: password login
+    # naturally fails for these accounts since nobody knows the random value.
     password_hash: str
+    # Google's stable per-account subject ID, set only for accounts that have
+    # ever signed in with Google (find-or-create-by-email in
+    # app/main.py::google_callback links this to a pre-existing password
+    # account on first Google sign-in). Not enforced unique at the DB level on
+    # existing dev databases (see db.py's additive-only migration), only via
+    # application-level lookup before create - fine for this dev prototype.
+    google_sub: Optional[str] = Field(default=None, index=True)
 
 
 class Project(SQLModel, table=True):

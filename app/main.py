@@ -1,18 +1,25 @@
 import json
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, UploadFile, File
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 from starlette.middleware.sessions import SessionMiddleware
 
+from app import google_oauth
 from app.auth import (
+    derive_username_from_email,
     get_current_user,
+    get_user_by_google_sub,
     get_user_by_username_or_email,
     hash_password,
     require_user,
+    unusable_password_hash,
     validate_username,
     verify_password,
 )
@@ -149,6 +156,68 @@ def logout(request: Request):
 @app.get("/api/auth/me", response_model=UserResponse)
 def me(user: User = Depends(require_user)):
     return _user_response(user)
+
+
+@app.get("/api/auth/google/login")
+def google_login(request: Request):
+    """Redirects to Google's consent screen. Sits alongside password auth,
+    not a replacement for it - see CLAUDE.md's "Authentication" section.
+    """
+    if not google_oauth.is_configured():
+        raise HTTPException(503, "Google sign-in is not configured.")
+    state = secrets.token_urlsafe(24)
+    request.session["oauth_state"] = state
+    return RedirectResponse(google_oauth.build_authorize_url(state))
+
+
+@app.get("/api/auth/google/callback")
+def google_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    session: Session = Depends(get_session),
+):
+    # A mismatched/missing state means this request didn't originate from our
+    # own google_login() redirect (CSRF / replay) - fail closed, same as any
+    # other error path below: back to /login with a flag, never a 500.
+    expected_state = request.session.pop("oauth_state", None)
+    if error or not code or not state or state != expected_state:
+        return RedirectResponse("/login?error=google_auth_failed")
+
+    try:
+        access_token = google_oauth.exchange_code_for_token(code)
+        userinfo = google_oauth.fetch_userinfo(access_token)
+    except httpx.HTTPError:
+        return RedirectResponse("/login?error=google_auth_failed")
+
+    google_sub = userinfo.get("sub")
+    email = (userinfo.get("email") or "").strip().lower()
+    if not google_sub or not email:
+        return RedirectResponse("/login?error=google_auth_failed")
+
+    user = get_user_by_google_sub(session, google_sub)
+    if user is None:
+        # Find-or-create by email: a Google sign-in with an email that
+        # already has a password account links to it (sets google_sub)
+        # instead of creating a duplicate account for the same person.
+        user = get_user_by_username_or_email(session, email)
+        if user is not None:
+            user.google_sub = google_sub
+        else:
+            user = User(
+                username=derive_username_from_email(email, session),
+                email=email,
+                full_name=(userinfo.get("name") or "").strip() or None,
+                password_hash=unusable_password_hash(),
+                google_sub=google_sub,
+            )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+    request.session["user_id"] = user.id
+    return RedirectResponse("/")
 
 
 CITY_MAX_CHARS = 80
