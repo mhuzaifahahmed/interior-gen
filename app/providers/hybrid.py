@@ -38,8 +38,14 @@ class HybridProvider(Provider):
         room_description: str | None,
         city: str,
         api_key: str | None = None,
+        room_area_sqft: float | None = None,
     ) -> dict:
-        return self._gemini.generate_materials(tier, tier_spec, room_description, city, api_key)
+        return self._gemini.generate_materials(
+            tier, tier_spec, room_description, city, api_key, room_area_sqft
+        )
+
+    def estimate_room_area(self, image_bytes: bytes) -> float | None:
+        return self._gemini.estimate_room_area(image_bytes)
 
     def analyze_plot(self, image_bytes: bytes, dimensions: dict) -> str | None:
         return self._gemini.analyze_plot(image_bytes, dimensions)

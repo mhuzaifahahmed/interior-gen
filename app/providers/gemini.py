@@ -50,16 +50,28 @@ MATERIALS_GEMINI_RETRY_DELAY_SECONDS = 2
 MATERIALS_PROMPT_TEMPLATE = (
     "You are pricing renovation materials for a {tier_label} interior-renovation concept, "
     "for a buyer located in {city}.\n\n"
+    "{area_block}"
     "Price EXACTLY these items - do not add, skip, merge, or rename any of them:\n\n"
     "{items_block}\n\n"
     "A real web search was run SEPARATELY for each item above, specifically for that item - "
     "its own results are shown right below its name. For each item: if ITS OWN results mention "
-    "a price, use that real price, set is_estimate to false, and set source_url to the EXACT "
-    "link of the result it came from - copy it character-for-character, NEVER invent, guess, or "
-    "modify a URL, and NEVER use a link that was shown under a DIFFERENT item. If that item's "
-    "own results don't mention a usable price, give your own best rough local estimate, set "
-    "is_estimate to true, and set source_url to null - do not omit the item and do not leave its "
-    "price blank either way.\n\n"
+    "a price, use that real price as the STARTING point (see the quantity rule below before "
+    "treating it as the item's final price), set is_estimate to false, and set source_url to the "
+    "EXACT link of the result it came from - copy it character-for-character, NEVER invent, "
+    "guess, or modify a URL, and NEVER use a link that was shown under a DIFFERENT item. If "
+    "that item's own results don't mention a usable price, give your own best rough local "
+    "estimate (still applying the quantity rule below), set is_estimate to true, and set "
+    "source_url to null - do not omit the item and do not leave its price blank either way.\n\n"
+    "IMPORTANT - quantity/multiplication rule: a price found for Flooring, Ceiling treatment, "
+    "or Paint / wall finish is very often quoted as a PER-UNIT rate (e.g. \"$12/sqft\", \"Rs. "
+    "1,100 per square foot\", \"$8 per sq ft\") describing the cost to cover ONE square foot, "
+    "not the cost to do the whole room. Whenever a found (or estimated) price for one of these "
+    "three items is a per-unit rate, you MUST multiply it by the room's floor area (given below, "
+    "or your own reasonable estimate if none is given) to get that item's real total price for "
+    "the whole room - never report a bare per-sqft rate as if it were already the item's total "
+    "cost. Show the calculation in that item's spec field (e.g. \"Ceramic tile, Rs. 1,100/sqft x "
+    "~180 sqft\"). Lighting, Feature wall, and Decor are normally priced per fixture/piece, not "
+    "by area - price those as typically sold, with no area multiplication.\n\n"
     "IMPORTANT - currency: always express every price (and the total) in the LOCAL currency "
     "actually used in {city} (e.g. PKR for Pakistan, INR for India, USD for the United States) - "
     "never a different country's currency, even if a source result quotes one. If a real "
@@ -67,7 +79,8 @@ MATERIALS_PROMPT_TEMPLATE = (
     "best knowledge of exchange rates and state the converted amount - this does NOT make it an "
     "estimate (is_estimate still reflects whether a real reference price was found, not whether a "
     "currency conversion was applied). Also compute a rough total across all items as a plain "
-    "string, in that same local currency.\n\n"
+    "string, in that same local currency - this total must be the sum of each item's ALREADY-"
+    "multiplied price, not a sum of any bare per-unit rates.\n\n"
     'Respond with ONLY raw JSON, no markdown fences, in this exact shape: '
     '{{"items": [{{"name": "...", "spec": "...", "price": "...", "currency": "...", '
     '"source_url": "https://... or null", "is_estimate": false}}], '
@@ -166,6 +179,40 @@ class GeminiProvider(Provider):
         )
         return (response.text or "").strip()
 
+    def estimate_room_area(self, image_bytes: bytes) -> float | None:
+        """Real bug this exists to fix: materials pricing (generate_materials
+        below) had no notion of the room's actual size, so a found per-sqft
+        price (e.g. "PKR 1,100/sqft" for flooring) was passed straight through
+        as if it were already the item's total cost, instead of being
+        multiplied by the room's area - a flooring "total" that never actually
+        accounted for how much flooring the room needs. This gives
+        generate_materials a real (if rough) quantity to multiply by. Kept as
+        its own tiny call rather than folded into describe_room() so a parsing
+        failure here can't also break the room-structure description that
+        feeds the image-generation prompt.
+        """
+        image = Image.open(BytesIO(image_bytes))
+        prompt = (
+            "Look at this room photo and estimate its approximate total floor area in "
+            "square feet, reasoning from visible scale cues (door widths are typically "
+            "~3 feet, standard ceiling height ~8-9 feet, furniture proportions, etc). "
+            "Respond with ONLY a single number (the square footage), no units, no words, "
+            "no explanation - e.g. \"180\"."
+        )
+        try:
+            response = self.client.models.generate_content(
+                model=settings.gemini_text_model,
+                contents=[prompt, image],
+            )
+            match = re.search(r"[\d,]+(?:\.\d+)?", response.text or "")
+            if not match:
+                return None
+            area = float(match.group(0).replace(",", ""))
+            return area if area > 0 else None
+        except Exception:
+            logger.exception("estimate_room_area failed; continuing without it")
+            return None
+
     def analyze_plot(self, image_bytes: bytes, dimensions: dict) -> str | None:
         try:
             image = Image.open(BytesIO(image_bytes))
@@ -221,6 +268,7 @@ class GeminiProvider(Provider):
         room_description: str | None,
         city: str,
         api_key: str | None = None,
+        room_area_sqft: float | None = None,
     ) -> dict:
         line_items = _tier_line_items(tier_spec)
 
@@ -236,9 +284,27 @@ class GeminiProvider(Provider):
                 logger.exception("materials search failed for item %s, tier %s in %s", name, tier, city)
                 item_results[name] = []
 
+        # Real bug this fixes: without a known area, a found per-sqft price
+        # (e.g. "$12/sqft" for flooring) was passed straight through as the
+        # item's "total" price - never actually multiplied by how much floor
+        # the room has. See estimate_room_area()'s docstring for the full story.
+        if room_area_sqft:
+            area_block = (
+                f"This room's estimated floor area is approximately {room_area_sqft:.0f} square "
+                "feet - use this for the quantity/multiplication rule below.\n\n"
+            )
+        else:
+            area_block = (
+                "No floor-area estimate is available for this room - for Flooring, Ceiling "
+                "treatment, and Paint / wall finish, assume a typical room of this type and "
+                "state your assumed square footage explicitly in that item's spec field before "
+                "applying the quantity rule below.\n\n"
+            )
+
         prompt = MATERIALS_PROMPT_TEMPLATE.format(
             tier_label=tier_spec.get("label", tier),
             city=city,
+            area_block=area_block,
             items_block=_format_line_items_with_results(line_items, item_results),
         )
 

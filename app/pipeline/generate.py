@@ -93,6 +93,19 @@ def run_pipeline(
             executor = None
             materials_futures = None
             if city:
+                # Best-effort - see estimate_room_area()'s docstring for why
+                # this exists (without it, a per-sqft price found for e.g.
+                # flooring never actually got multiplied into a real total).
+                # Only called when materials pricing will actually run, since
+                # it's wasted work otherwise.
+                try:
+                    room_area_sqft = provider.estimate_room_area(original_bytes)
+                except Exception:
+                    logger.exception(
+                        "estimate_room_area failed for project %s; continuing without it", project_id
+                    )
+                    room_area_sqft = None
+
                 project.materials_status = "running"
                 session.add(project)
                 session.commit()
@@ -107,6 +120,7 @@ def run_pipeline(
                         room_description,
                         city,
                         materials_keys[tier],
+                        room_area_sqft,
                     )
                     for tier in TIERS
                 }

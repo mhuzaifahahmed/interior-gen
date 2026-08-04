@@ -36,6 +36,11 @@ class ProjectStatusResponse(BaseModel):
     images: dict[str, Optional[str]]
     materials: Optional[dict] = None
     materials_status: str = "idle"
+    # ISO 8601 - added for the history dropdown (GET /api/projects), harmless
+    # extra field on the existing GET /api/projects/{id} response too.
+    created_at: Optional[str] = None
+    city: Optional[str] = None
+    user_style_notes: Optional[str] = None
 
 
 class HouseProjectCreateResponse(BaseModel):
@@ -54,3 +59,6 @@ class HouseProjectStatusResponse(BaseModel):
     # reserved for a future real, paid floor-plan vendor (still inert).
     blueprint_status: str = "idle"
     blueprint_urls: list[str] = []
+    # Same history-dropdown addition as ProjectStatusResponse above.
+    created_at: Optional[str] = None
+    prompt: Optional[str] = None

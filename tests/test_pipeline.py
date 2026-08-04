@@ -22,8 +22,8 @@ class FakeProvider:
         self.image_calls.append(prompt)
         return b"fake-image-bytes"
 
-    def generate_materials(self, tier, tier_spec, room_description, city, api_key=None):
-        self.materials_calls.append((tier, city, api_key))
+    def generate_materials(self, tier, tier_spec, room_description, city, api_key=None, room_area_sqft=None):
+        self.materials_calls.append((tier, city, api_key, room_area_sqft))
         return {
             "items": [
                 {
@@ -38,6 +38,9 @@ class FakeProvider:
             "total": "100",
             "currency": "USD",
         }
+
+    def estimate_room_area(self, image_bytes: bytes) -> float | None:
+        return 180.0
 
 
 class FakeStorage:
@@ -180,9 +183,10 @@ def test_run_pipeline_with_city_runs_materials_for_every_tier(monkeypatch):
     provider = FakeProvider()
     run_pipeline("p5", provider, storage, city="Karachi")
 
-    called_tiers = {tier for tier, _, _ in provider.materials_calls}
+    called_tiers = {tier for tier, _, _, _ in provider.materials_calls}
     assert called_tiers == set(TIERS)
-    assert all(city == "Karachi" for _, city, _ in provider.materials_calls)
+    assert all(city == "Karachi" for _, city, _, _ in provider.materials_calls)
+    assert all(area == 180.0 for _, _, _, area in provider.materials_calls)
 
     with Session(engine) as session:
         project = session.get(Project, "p5")
@@ -215,7 +219,7 @@ def test_run_pipeline_assigns_a_dedicated_key_per_tier_when_configured(monkeypat
     provider = FakeProvider()
     run_pipeline("p6", provider, storage, city="Lahore")
 
-    used_keys = {tier: key for tier, _, key in provider.materials_calls}
+    used_keys = {tier: key for tier, _, key, _ in provider.materials_calls}
     assert used_keys == {"economical": "key-econ", "mid": "key-mid", "premium": "key-premium"}
 
 

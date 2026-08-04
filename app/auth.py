@@ -16,6 +16,19 @@ from app.db import get_session
 from app.models import User
 
 USERNAME_PATTERN = re.compile(r"^[a-z0-9_]{3,32}$")
+# Requires a real domain with a TLD (user@host.tld) - just checking for "@"
+# let obviously malformed addresses like "xyz@gmail" (no TLD at all) through
+# at signup, which then "worked" at login since the identifier lookup just
+# matches whatever got stored.
+EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def validate_email(email: str) -> str:
+    """Raises ValueError with a user-facing message if invalid."""
+    email = email.strip().lower()
+    if not EMAIL_PATTERN.match(email):
+        raise ValueError("A valid email is required.")
+    return email
 
 
 def validate_username(username: str) -> str:

@@ -174,3 +174,42 @@ def test_cannot_view_another_users_house_project(monkeypatch):
         _signup_and_login(client_b)
         res = client_b.get(f"/api/house-projects/{house_project_id}")
         assert res.status_code == 404
+
+
+def test_list_house_projects_returns_own_newest_first(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        first = client.post("/api/house-projects", files=files).json()["house_project_id"]
+        second = client.post("/api/house-projects", files=files).json()["house_project_id"]
+
+        res = client.get("/api/house-projects")
+        assert res.status_code == 200
+        body = res.json()
+        assert [p["house_project_id"] for p in body] == [second, first]
+        assert body[0]["created_at"] is not None
+
+
+def test_list_house_projects_requires_login():
+    with TestClient(app) as client:
+        res = client.get("/api/house-projects")
+        assert res.status_code == 401
+
+
+def test_list_house_projects_excludes_other_users(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client_a:
+        _signup_and_login(client_a)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        client_a.post("/api/house-projects", files=files)
+
+    with TestClient(app) as client_b:
+        _signup_and_login(client_b)
+        res = client_b.get("/api/house-projects")
+        assert res.status_code == 200
+        assert res.json() == []

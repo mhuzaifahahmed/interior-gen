@@ -43,7 +43,7 @@ class FakeProvider:
         Image.new("RGB", (4, 4), color=(200, 200, 200)).save(buf, format="PNG")
         return buf.getvalue()
 
-    def generate_materials(self, tier, tier_spec, room_description, city, api_key=None):
+    def generate_materials(self, tier, tier_spec, room_description, city, api_key=None, room_area_sqft=None):
         self.materials_calls.append((tier, city))
         return {
             "items": [{"name": "Flooring", "spec": "", "price": "$100", "currency": "USD",
@@ -51,6 +51,9 @@ class FakeProvider:
             "total": "$100",
             "currency": "USD",
         }
+
+    def estimate_room_area(self, image_bytes: bytes) -> float | None:
+        return 180.0
 
 
 class FakeStorage:
@@ -197,6 +200,45 @@ def test_cannot_view_another_users_project(monkeypatch):
         _signup_and_login(client_b)
         res = client_b.get(f"/api/projects/{project_id}")
         assert res.status_code == 404
+
+
+def test_list_projects_returns_own_projects_newest_first(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        first = client.post("/api/projects", files=files).json()["project_id"]
+        second = client.post("/api/projects", files=files).json()["project_id"]
+
+        res = client.get("/api/projects")
+        assert res.status_code == 200
+        body = res.json()
+        assert [p["project_id"] for p in body] == [second, first]
+        assert body[0]["created_at"] is not None
+
+
+def test_list_projects_requires_login():
+    with TestClient(app) as client:
+        res = client.get("/api/projects")
+        assert res.status_code == 401
+
+
+def test_list_projects_excludes_other_users(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client_a:
+        _signup_and_login(client_a)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        client_a.post("/api/projects", files=files)
+
+    with TestClient(app) as client_b:
+        _signup_and_login(client_b)
+        res = client_b.get("/api/projects")
+        assert res.status_code == 200
+        assert res.json() == []
 
 
 def test_terms_page_serves():

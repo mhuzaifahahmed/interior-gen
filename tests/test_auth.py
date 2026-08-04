@@ -71,6 +71,14 @@ def test_signup_rejects_short_password():
         assert res.status_code == 400
 
 
+def test_signup_rejects_email_without_tld():
+    # Real bug: "xyz@gmail" (no ".com"/TLD at all) used to pass the old
+    # "@" in email check and create a real account.
+    with TestClient(app) as client:
+        res = client.post("/api/auth/signup", json=_unique_signup_body(email="xyz@gmail"))
+        assert res.status_code == 400
+
+
 def test_login_with_username_and_with_email():
     with TestClient(app) as client:
         body = _unique_signup_body()

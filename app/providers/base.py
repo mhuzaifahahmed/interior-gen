@@ -46,6 +46,7 @@ class Provider(ABC):
         room_description: str | None,
         city: str,
         api_key: str | None = None,
+        room_area_sqft: float | None = None,
     ) -> dict:
         """Return an itemized materials/furniture list with local pricing for one
         tier, localized to `city`. Shape: {"items": [{"name", "spec", "price",
@@ -62,6 +63,24 @@ class Provider(ABC):
         Settings.gemini_materials_api_keys) - implementations that support
         concurrent per-tier calls on separate quotas use this; others may
         ignore it.
+
+        room_area_sqft is the best-effort estimate from estimate_room_area()
+        below - when present, implementations should use it to turn a found
+        PER-UNIT price (e.g. "$12/sqft" for flooring) into a real total for the
+        whole room (price * area), not just copy the per-unit number through as
+        if it were already the item's total cost. None means no estimate was
+        available - implementations should fall back to their prior per-item
+        guessing behavior in that case.
+        """
+        ...
+
+    @abstractmethod
+    def estimate_room_area(self, image_bytes: bytes) -> float | None:
+        """Best-effort rough floor-area estimate (in square feet) for the room
+        in the photo, used so generate_materials() can multiply a found
+        per-square-foot price into a real total instead of leaving it as a
+        bare unit price. Same contract as describe_room/generate_tier_notes -
+        degrade to None on any failure, never raise into the caller.
         """
         ...
 

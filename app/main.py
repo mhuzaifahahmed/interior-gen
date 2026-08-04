@@ -8,7 +8,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from sqlmodel import Session
+from sqlmodel import Session, select
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import google_oauth
@@ -20,6 +20,7 @@ from app.auth import (
     hash_password,
     require_user,
     unusable_password_hash,
+    validate_email,
     validate_username,
     verify_password,
 )
@@ -113,9 +114,10 @@ def signup(body: SignupRequest, request: Request, session: Session = Depends(get
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    email = body.email.strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(400, "A valid email is required.")
+    try:
+        email = validate_email(body.email)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if len(body.password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters.")
 
@@ -269,18 +271,7 @@ async def create_project(
     return ProjectCreateResponse(project_id=project.id)
 
 
-@app.get("/api/projects/{project_id}", response_model=ProjectStatusResponse)
-def get_project(
-    project_id: str, session: Session = Depends(get_session), user: User = Depends(require_user)
-):
-    project = session.get(Project, project_id)
-    # 404 (not 403) for both "doesn't exist" and "not yours" - doesn't let a
-    # caller distinguish "wrong id" from "someone else's real project", so
-    # project ids aren't enumerable across accounts.
-    if project is None or project.user_id != user.id:
-        raise HTTPException(404, "project not found")
-
-    storage = get_storage()
+def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
     images: dict[str, str | None] = {
         "original": storage.url(project.original_key) if project.original_key else None
     }
@@ -298,7 +289,38 @@ def get_project(
         images=images,
         materials=materials,
         materials_status=project.materials_status,
+        created_at=project.created_at.isoformat(),
+        city=project.city,
+        user_style_notes=project.user_style_notes,
     )
+
+
+@app.get("/api/projects/{project_id}", response_model=ProjectStatusResponse)
+def get_project(
+    project_id: str, session: Session = Depends(get_session), user: User = Depends(require_user)
+):
+    project = session.get(Project, project_id)
+    # 404 (not 403) for both "doesn't exist" and "not yours" - doesn't let a
+    # caller distinguish "wrong id" from "someone else's real project", so
+    # project ids aren't enumerable across accounts.
+    if project is None or project.user_id != user.id:
+        raise HTTPException(404, "project not found")
+
+    return _project_to_response(project, get_storage())
+
+
+@app.get("/api/projects", response_model=list[ProjectStatusResponse])
+def list_projects(session: Session = Depends(get_session), user: User = Depends(require_user)):
+    """History dropdown (static/app.js's history modal) - every Room Redesign
+    project this user has ever created, newest first. Same 404-not-403 owner
+    scoping as get_project applies implicitly here since the query is already
+    filtered to user.id - there's no way to see another user's rows at all.
+    """
+    projects = session.exec(
+        select(Project).where(Project.user_id == user.id).order_by(Project.created_at.desc())
+    ).all()
+    storage = get_storage()
+    return [_project_to_response(p, storage) for p in projects]
 
 
 @app.post("/api/house-projects", response_model=HouseProjectCreateResponse)
@@ -356,15 +378,7 @@ async def create_house_project(
     return HouseProjectCreateResponse(house_project_id=house_project.id)
 
 
-@app.get("/api/house-projects/{house_project_id}", response_model=HouseProjectStatusResponse)
-def get_house_project(
-    house_project_id: str, session: Session = Depends(get_session), user: User = Depends(require_user)
-):
-    house_project = session.get(HouseProject, house_project_id)
-    if house_project is None or house_project.user_id != user.id:
-        raise HTTPException(404, "house project not found")
-
-    storage = get_storage()
+def _house_project_to_response(house_project: HouseProject, storage) -> HouseProjectStatusResponse:
     images: dict[str, str | None] = {
         "plot": storage.url(house_project.plot_image_key) if house_project.plot_image_key else None,
         "render": storage.url(house_project.render_key) if house_project.render_key else None,
@@ -383,4 +397,28 @@ def get_house_project(
         floor_plan_status=house_project.floor_plan_status,
         blueprint_status=house_project.blueprint_status,
         blueprint_urls=blueprint_urls,
+        created_at=house_project.created_at.isoformat(),
+        prompt=house_project.prompt,
     )
+
+
+@app.get("/api/house-projects/{house_project_id}", response_model=HouseProjectStatusResponse)
+def get_house_project(
+    house_project_id: str, session: Session = Depends(get_session), user: User = Depends(require_user)
+):
+    house_project = session.get(HouseProject, house_project_id)
+    if house_project is None or house_project.user_id != user.id:
+        raise HTTPException(404, "house project not found")
+
+    return _house_project_to_response(house_project, get_storage())
+
+
+@app.get("/api/house-projects", response_model=list[HouseProjectStatusResponse])
+def list_house_projects(session: Session = Depends(get_session), user: User = Depends(require_user)):
+    """History dropdown - every Build a House project this user has ever
+    created, newest first. Mirrors list_projects() above."""
+    house_projects = session.exec(
+        select(HouseProject).where(HouseProject.user_id == user.id).order_by(HouseProject.created_at.desc())
+    ).all()
+    storage = get_storage()
+    return [_house_project_to_response(hp, storage) for hp in house_projects]

@@ -1,7 +1,16 @@
+import io
+
 from google.genai import errors as genai_errors
+from PIL import Image
 
 import app.providers.gemini as gemini_module
 from app.providers.gemini import GeminiProvider, fallback_materials, parse_materials
+
+
+def _sample_image_bytes() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), color=(100, 150, 200)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def test_parse_materials_valid_json():
@@ -192,6 +201,106 @@ def test_generate_materials_uses_search_results_when_client_succeeds(monkeypatch
     assert result["items"][0]["is_estimate"] is False
     assert result["items"][0]["source_url"] == "https://real.com/paint"
     assert "Paint Shop" in captured["prompt"]  # real search results reached the prompt
+
+
+def test_generate_materials_states_area_in_prompt_when_provided(monkeypatch):
+    # Real bug guard: a found per-sqft price used to pass straight through as
+    # the item's "total" with no multiplication - the fix threads the room's
+    # estimated area into the prompt so Gemini can actually do that math.
+    captured = {}
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Flooring", "price": "$1980"}], "total": "$1980"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            captured["prompt"] = contents[0]
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+
+    provider = GeminiProvider()
+    provider.generate_materials(
+        "economical", {"label": "x", "flooring": "tile"}, None, "Karachi", room_area_sqft=180
+    )
+    assert "180 square feet" in captured["prompt"]
+    assert "multiply" in captured["prompt"].lower()
+
+
+def test_generate_materials_asks_for_an_assumption_when_area_unknown(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Flooring", "price": "$1"}], "total": "$1"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            captured["prompt"] = contents[0]
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+
+    provider = GeminiProvider()
+    provider.generate_materials("economical", {"label": "x", "flooring": "tile"}, None, "Karachi")
+    assert "No floor-area estimate is available" in captured["prompt"]
+
+
+def test_estimate_room_area_parses_numeric_response(monkeypatch):
+    class FakeResponse:
+        text = "180"
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    provider = GeminiProvider()
+    assert provider.estimate_room_area(_sample_image_bytes()) == 180.0
+
+
+def test_estimate_room_area_returns_none_on_unparseable_response(monkeypatch):
+    class FakeResponse:
+        text = "I can't tell from this photo."
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    provider = GeminiProvider()
+    assert provider.estimate_room_area(_sample_image_bytes()) is None
+
+
+def test_estimate_room_area_returns_none_on_exception(monkeypatch):
+    class FakeModels:
+        def generate_content(self, model, contents):
+            raise RuntimeError("network error")
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    provider = GeminiProvider()
+    assert provider.estimate_room_area(_sample_image_bytes()) is None
 
 
 def test_generate_materials_searches_once_per_item_not_once_per_tier(monkeypatch):

@@ -1,3 +1,5 @@
+const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 const uploadView = document.getElementById("upload-view");
 const form = document.getElementById("upload-form");
 const fileInput = document.getElementById("file-input");
@@ -37,6 +39,11 @@ const materialsModalTitle = document.getElementById("materials-modal-title");
 const materialsModalBody = document.getElementById("materials-modal-body");
 const materialsModalClose = document.getElementById("materials-modal-close");
 
+const historyModalOverlay = document.getElementById("history-modal-overlay");
+const historyModalBody = document.getElementById("history-modal-body");
+const historyModalClose = document.getElementById("history-modal-close");
+const historyModalTabs = document.getElementById("history-modal-tabs");
+
 /* ---------- "Build a House" tab DOM refs ---------- */
 
 const tabBtnHome = document.getElementById("tab-btn-home");
@@ -47,6 +54,7 @@ const roomTabPanel = document.getElementById("room-tab-panel");
 const houseTabPanel = document.getElementById("house-tab-panel");
 const homeCtaBtns = document.querySelectorAll(".js-cta-room");
 const homeHeroHouseBtn = document.getElementById("home-hero-house-btn");
+const homeToolsHouseRow = document.getElementById("home-tools-house-row");
 
 /* ---------- Auth ---------- */
 /* Real accounts (app/auth.py) - the room/house generators are gated behind
@@ -75,7 +83,7 @@ async function checkAuthState() {
     const res = await fetch("/api/auth/me");
     if (!res.ok) throw new Error("not logged in");
     const user = await res.json();
-    navUsernameEl.textContent = user.username;
+    navUsernameEl.textContent = user.full_name || user.username;
     navAuthGuest.classList.add("hidden");
     navAuthUser.classList.remove("hidden");
   } catch {
@@ -85,6 +93,42 @@ async function checkAuthState() {
 }
 
 checkAuthState();
+
+/* ---------- User menu dropdown (History) ---------- */
+
+const navUserMenuBtn = document.getElementById("nav-user-menu-btn");
+const navUserMenuChevron = document.getElementById("nav-user-menu-chevron");
+const navUserMenu = document.getElementById("nav-user-menu");
+const navHistoryBtn = document.getElementById("nav-history-btn");
+
+function closeNavUserMenu() {
+  navUserMenu.classList.add("hidden");
+  navUserMenuChevron.style.transform = "rotate(0deg)";
+  navUserMenuBtn.setAttribute("aria-expanded", "false");
+}
+
+navUserMenuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const isOpen = !navUserMenu.classList.contains("hidden");
+  if (isOpen) {
+    closeNavUserMenu();
+  } else {
+    navUserMenu.classList.remove("hidden");
+    navUserMenuChevron.style.transform = "rotate(180deg)";
+    navUserMenuBtn.setAttribute("aria-expanded", "true");
+  }
+});
+
+document.addEventListener("click", (e) => {
+  if (!navUserMenu.classList.contains("hidden") && !navUserMenu.contains(e.target)) {
+    closeNavUserMenu();
+  }
+});
+
+navHistoryBtn.addEventListener("click", () => {
+  closeNavUserMenu();
+  openHistoryModal();
+});
 
 const houseUploadView = document.getElementById("house-upload-view");
 const houseForm = document.getElementById("house-upload-form");
@@ -123,16 +167,95 @@ const houseStartOverBtn = document.getElementById("house-start-over-btn");
    below), so leaving mid-progress on one tab and coming back to it later
    still shows the right thing. */
 
+const TAB_ORDER = ["home", "room", "house"];
+const TAB_PANELS = { home: homeTabPanel, room: roomTabPanel, house: houseTabPanel };
+const TAB_BTNS = { home: tabBtnHome, room: tabBtnRoom, house: tabBtnHouse };
+let currentTab = "home";
+let tabSwitchTl = null;
+
+const tabActivePill = document.getElementById("tab-active-pill");
+
+// Slides the pill behind the active tab's text (left/width, CSS-transitioned
+// via #tab-active-pill's own transition in components.css) instead of each
+// button drawing its own static background - so switching tabs reads as one
+// continuous pill moving across the bar, not an instant swap.
+function moveTabActivePill(tab) {
+  const btn = TAB_BTNS[tab];
+  if (!btn || !tabActivePill) return;
+  tabActivePill.style.left = `${btn.offsetLeft}px`;
+  tabActivePill.style.width = `${btn.offsetWidth}px`;
+}
+
+if (tabActivePill) {
+  // Position immediately (real bug found live: waiting exclusively on
+  // document.fonts.ready left the pill at its default zero width/no-left
+  // state - effectively invisible - for however long that promise took to
+  // settle, which was unreliably slow). Re-position again once webfonts
+  // are ready, in case Fraunces/Poppins swapping in shifted the button's
+  // width from its fallback-font size.
+  moveTabActivePill(currentTab);
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => moveTabActivePill(currentTab));
+  }
+}
+
 function switchTab(tab) {
-  const isHome = tab === "home";
-  const isHouse = tab === "house";
-  const isRoom = !isHome && !isHouse;
-  homeTabPanel.hidden = !isHome;
-  roomTabPanel.hidden = !isRoom;
-  houseTabPanel.hidden = !isHouse;
-  tabBtnHome.classList.toggle("is-active", isHome);
-  tabBtnRoom.classList.toggle("is-active", isRoom);
-  tabBtnHouse.classList.toggle("is-active", isHouse);
+  if (tab === currentTab) return;
+  tabBtnHome.classList.toggle("is-active", tab === "home");
+  tabBtnRoom.classList.toggle("is-active", tab === "room");
+  tabBtnHouse.classList.toggle("is-active", tab === "house");
+  moveTabActivePill(tab);
+
+  const oldTab = currentTab;
+  const oldPanel = TAB_PANELS[oldTab];
+  const newPanel = TAB_PANELS[tab];
+  currentTab = tab;
+
+  if (typeof gsap === "undefined" || prefersReducedMotion) {
+    oldPanel.hidden = true;
+    newPanel.hidden = false;
+    return;
+  }
+
+  if (tabSwitchTl) tabSwitchTl.kill();
+
+  // If a previous switch got interrupted mid-flight (rapid tab clicking),
+  // force the one panel not involved in *this* switch back to a clean
+  // hidden state - only 3 tabs exist, so that's always exactly one panel.
+  TAB_ORDER.forEach((t) => {
+    if (t !== oldTab && t !== tab) {
+      TAB_PANELS[t].hidden = true;
+      gsap.set(TAB_PANELS[t], { clearProps: "all" });
+    }
+  });
+
+  // Sequential slide+fade - old panel slides/fades out while still in normal
+  // flow, THEN (only once fully invisible) the swap + scroll-reset happens,
+  // THEN the new panel slides/fades in from the opposite edge. Never having
+  // both panels in flow/visible at once avoids the earlier position:absolute
+  // overlap approach, which collapsed the page's scrollable height for the
+  // animation's duration and caused a visible scroll-position jump mid-fade.
+  // Direction follows the tabs' left-to-right nav order (Home/Room/House).
+  const dir = TAB_ORDER.indexOf(tab) > TAB_ORDER.indexOf(oldTab) ? 1 : -1;
+  const distance = 28;
+
+  gsap.set(oldPanel, { x: 0, opacity: 1 });
+
+  tabSwitchTl = gsap.timeline({
+    onComplete: () => {
+      tabSwitchTl = null;
+    },
+  });
+  tabSwitchTl
+    .to(oldPanel, { x: -dir * distance, opacity: 0, duration: 0.2, ease: "power1.in" })
+    .call(() => {
+      oldPanel.hidden = true;
+      gsap.set(oldPanel, { clearProps: "all" });
+      newPanel.hidden = false;
+      gsap.set(newPanel, { x: dir * distance, opacity: 0 });
+      window.scrollTo(0, 0);
+    })
+    .to(newPanel, { x: 0, opacity: 1, duration: 0.32, ease: "power2.out" });
 }
 
 tabBtnHome.addEventListener("click", () => switchTab("home"));
@@ -141,6 +264,87 @@ tabBtnHouse.addEventListener("click", () => switchTab("house"));
 
 homeCtaBtns.forEach((btn) => btn.addEventListener("click", () => switchTab("room")));
 homeHeroHouseBtn.addEventListener("click", () => switchTab("house"));
+homeToolsHouseRow.addEventListener("click", () => switchTab("house"));
+
+/* ---------- Pending generation (survive the login redirect) ---------- */
+/* A logged-out visitor can fill out the whole upload form before hitting
+   "Generate" - the 401 from /api/projects or /api/house-projects only
+   happens at submit time. Redirecting straight to /login used to throw
+   away everything they'd just entered (photo included), which after login
+   dumped them back on a blank Home page - confusing and worth fixing.
+   sessionStorage (not localStorage) since this is a one-shot "finish what
+   you were doing" handoff, not something that should linger across
+   unrelated future visits. The photo survives as a base64 data URL (already
+   computed anyway, for the dropzone preview) - reconstructed into a real
+   File via DataTransfer once we're back. */
+
+const PENDING_GENERATION_KEY = "interior-gen:pending-generation";
+
+function savePendingGeneration(tab, fields) {
+  try {
+    sessionStorage.setItem(PENDING_GENERATION_KEY, JSON.stringify({ tab, ...fields }));
+  } catch {
+    // sessionStorage full/unavailable (e.g. private browsing) - not fatal,
+    // the user just re-enters their fields after logging in.
+  }
+}
+
+async function restorePendingGeneration() {
+  const raw = sessionStorage.getItem(PENDING_GENERATION_KEY);
+  if (!raw) return;
+  sessionStorage.removeItem(PENDING_GENERATION_KEY);
+
+  let pending;
+  try {
+    pending = JSON.parse(raw);
+  } catch {
+    return;
+  }
+
+  if (pending.tab !== "room" && pending.tab !== "house") return;
+
+  // Instant switch (no GSAP transition) - this runs at page load, before the
+  // user has seen the Home tab at all, so there's nothing to transition from.
+  homeTabPanel.hidden = true;
+  roomTabPanel.hidden = pending.tab !== "room";
+  houseTabPanel.hidden = pending.tab !== "house";
+  tabBtnHome.classList.remove("is-active");
+  tabBtnRoom.classList.toggle("is-active", pending.tab === "room");
+  tabBtnHouse.classList.toggle("is-active", pending.tab === "house");
+  currentTab = pending.tab;
+
+  if (pending.tab === "room") {
+    stylePromptInput.value = pending.styleNotes || "";
+    cityInput.value = pending.city || "";
+  } else {
+    houseLengthInput.value = pending.length || "";
+    houseWidthInput.value = pending.width || "";
+    houseUnitInput.value = pending.unit || "ft";
+    housePromptInput.value = pending.prompt || "";
+  }
+
+  if (!pending.fileDataUrl) return;
+  try {
+    const blob = await (await fetch(pending.fileDataUrl)).blob();
+    const file = new File([blob], pending.fileName || "photo", {
+      type: pending.fileType || blob.type,
+    });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    if (pending.tab === "room") {
+      fileInput.files = dt.files;
+      setSelectedFile(file);
+    } else {
+      houseFileInput.files = dt.files;
+      setHouseSelectedFile(file);
+    }
+  } catch {
+    // Best-effort - if the data URL can't be turned back into a file, the
+    // text fields are still restored above, which is most of the way there.
+  }
+}
+
+restorePendingGeneration();
 
 const TIERS = [
   { key: "original", label: "Original", desc: "Your uploaded room." },
@@ -159,11 +363,14 @@ const TIERS = [
 // off (describe_room/tier_notes run before the image loop, with only
 // room_description observable) - it shows immediately at submit time and
 // yields the moment anything real shows up.
+// 3 real stages, not 4 - "Finalizing" used to sit after this and never
+// corresponded to any real distinct backend step, so it just sat active
+// (spinning, unchecked) for a while after the real work was already done,
+// reading as "one more thing is still happening" when nothing was.
 const STAGES = [
   { label: "Analyzing your room…" },
   { label: "Generating concepts…" },
   { label: "Preparing your cost estimates…" },
-  { label: "Finalizing your three concepts…" },
 ];
 
 // Order matches TIERS above (Economical, Mid-Range, Premium) - the two were
@@ -180,6 +387,67 @@ const CONCEPT_PREVIEW_TIERS = [
 // materials settling) for this long, fade in a reassurance line rather than
 // leaving a bare spinner with no text.
 const STALL_REASSURANCE_MS = 15000;
+
+/* ---------- Simulated progress-bar fill ---------- */
+/* The bar itself fills continuously rather than sitting still between the
+   stage-stepper's real 25/50/75% checkpoints and jumping ahead each time one
+   lands (which read as "loading point by point"). It's still gated on the
+   real "done" signal - finish() is only ever called from the real completion
+   callback, so the bar can never show 100% before the result actually is.
+   The motion in between is simulated: a smooth decelerating creep up to a
+   soft cap, with one randomized brief pause partway through so it reads as a
+   real process working on something rather than a perfectly linear bar. The
+   stage stepper/labels are untouched by this - they still only ever reflect
+   real signals (deriveStageIndex/deriveHouseStageIndex), only the bar's own
+   fill motion is simulated. */
+function createSimulatedFill(barEl) {
+  const CAP = 92; // never auto-reach 100% - only finish() does that
+  let timer = null;
+  let percent = 0;
+  let stallUntil = null;
+  let stallScheduled = false;
+
+  function start() {
+    percent = 0;
+    stallScheduled = false;
+    stallUntil = null;
+    barEl.style.width = "0%";
+
+    const stallAtPercent = 35 + Math.random() * 30; // somewhere between 35-65%
+    const stallDurationMs = 900 + Math.random() * 1400; // 0.9-2.3s
+
+    clearInterval(timer);
+    timer = setInterval(() => {
+      const now = Date.now();
+      if (stallUntil !== null) {
+        if (now < stallUntil) return;
+        stallUntil = null; // stall over, resume filling
+      }
+      if (!stallScheduled && percent >= stallAtPercent) {
+        stallScheduled = true;
+        stallUntil = now + stallDurationMs;
+        return;
+      }
+      // Ease out as it nears the cap - bigger steps early, tiny creeping
+      // steps near the end, rather than a constant linear rate.
+      const remaining = CAP - percent;
+      const step = Math.max(0.15, remaining * 0.045);
+      percent = Math.min(CAP, percent + step);
+      barEl.style.width = `${percent}%`;
+    }, 150);
+  }
+
+  function finish() {
+    clearInterval(timer);
+    timer = null;
+    barEl.style.width = "100%";
+  }
+
+  return { start, finish };
+}
+
+const roomProgressFill = createSimulatedFill(progressBarFill);
+const houseProgressFill = createSimulatedFill(houseProgressBarFill);
 
 let selectedFile = null;
 let currentStageIndex = -1;
@@ -285,6 +553,13 @@ form.addEventListener("submit", async (e) => {
   try {
     const res = await fetch("/api/projects", { method: "POST", body: formData });
     if (res.status === 401) {
+      savePendingGeneration("room", {
+        fileName: selectedFile.name,
+        fileType: selectedFile.type,
+        fileDataUrl: previewImg.src,
+        styleNotes: stylePromptInput.value,
+        city: cityInput.value,
+      });
       window.location.href = "/login";
       return;
     }
@@ -317,10 +592,17 @@ function renderStageStepper() {
   ).join("");
 }
 
-function setStepperState(activeIndex, allDone) {
+// lastStageDone lets the final stage ("Preparing your cost estimates") show
+// as checked the moment materials_status genuinely settles (done/skipped),
+// even on a poll where the overall project isn't marked "done" quite yet -
+// otherwise that last checkmark sat unchecked/spinning for a few extra
+// seconds after the real work behind it had already finished.
+function setStepperState(activeIndex, allDone, lastStageDone = false) {
+  const lastIndex = STAGES.length - 1;
   progressStepperEl.querySelectorAll(".stage-item").forEach((el, i) => {
-    el.classList.toggle("is-done", allDone || i < activeIndex);
-    el.classList.toggle("is-active", !allDone && i === activeIndex);
+    const done = allDone || i < activeIndex || (i === lastIndex && lastStageDone);
+    el.classList.toggle("is-done", done);
+    el.classList.toggle("is-active", !done && i === activeIndex);
   });
 }
 
@@ -368,18 +650,15 @@ function updateSubLabel(text) {
   stallTimer = setTimeout(() => updateSubLabel("Still working — almost there…"), STALL_REASSURANCE_MS);
 }
 
-/* Derives which of the 4 stages we're in from REAL data already present on
-   every poll response (app/main.py's get_project) - not a timer. Each tier's
-   image key is committed to the DB (and so returned here) the moment that
-   tier finishes generating, well before the overall project is "done". */
+/* Derives which of the 3 real stages we're in from REAL data already present
+   on every poll response (app/main.py's get_project) - not a timer. Each
+   tier's image key is committed to the DB (and so returned here) the moment
+   that tier finishes generating, well before the overall project is "done". */
 function deriveStageIndex(data) {
   const tierUrls = CONCEPT_PREVIEW_TIERS.map((t) => data.images && data.images[t.key]);
   const allImagesDone = tierUrls.every(Boolean);
   const anyImageDone = tierUrls.some(Boolean);
-  const materialsSettled = data.materials_status === "done" || data.materials_status === "skipped";
 
-  if (data.status === "done") return STAGES.length - 1;
-  if (allImagesDone && materialsSettled) return 3; // Finalizing
   if (allImagesDone) return 2; // Preparing your cost estimates
   if (anyImageDone || data.room_description) return 1; // Generating concepts
   return 0; // Analyzing your room
@@ -394,6 +673,7 @@ function applyPollUpdate(data) {
     }
   }
 
+  const materialsSettled = data.materials_status === "done" || data.materials_status === "skipped";
   if (data.materials_status === "running") {
     materialsWereRunning = true;
   } else if (materialsWereRunning && data.materials_status === "done") {
@@ -404,10 +684,12 @@ function applyPollUpdate(data) {
   const derived = deriveStageIndex(data);
   if (derived > currentStageIndex) {
     currentStageIndex = derived;
-    setStageLabel(Math.min(currentStageIndex, STAGES.length - 1));
-    setStepperState(currentStageIndex, false);
-    progressBarFill.style.width = `${currentStageIndex * 25}%`;
+    setStageLabel(currentStageIndex);
   }
+  // Runs every poll (not just on a stage advance) so materialsSettled can
+  // retroactively check off the last stage as soon as it's real, without
+  // waiting for the next stage index bump (there isn't one - it's the last).
+  setStepperState(currentStageIndex, false, materialsSettled);
 }
 
 function startProgressMessages() {
@@ -417,7 +699,7 @@ function startProgressMessages() {
   materialsWereRunning = false;
   currentStageIndex = 0;
 
-  progressBarFill.style.width = "0%";
+  roomProgressFill.start();
   setStepperState(0, false);
   progressMessageEl.textContent = STAGES[0].label;
   progressSubtitleEl.textContent = "";
@@ -442,7 +724,7 @@ function finishProgress(data, onDone) {
     if (url) revealConceptTier(tier.key, url);
   }
   setStepperState(STAGES.length, true);
-  progressBarFill.style.width = "100%";
+  roomProgressFill.finish();
   stopProgressMessages();
 
   // Brief pause so the bar's jump to 100% and the final checkmarks are
@@ -556,6 +838,146 @@ function closeMaterialsModal() {
   materialsModalOverlay.hidden = true;
 }
 
+/* ---------- History modal ---------- */
+/* Lists every past Room Redesign / Build a House project for the logged-in
+   user (GET /api/projects, GET /api/house-projects - see app/main.py's
+   list_projects/list_house_projects). Fetched fresh each time the modal
+   opens rather than cached, so a generation finished since the last open
+   still shows up. Reuses openLightbox/openMaterialsModal - a past project's
+   images/materials are the exact same shape a live result's are. */
+
+let historyActiveTab = "room";
+let historyRoomProjects = [];
+let historyHouseProjects = [];
+
+function formatHistoryDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function renderHistoryThumb(url, label) {
+  return `
+    <button type="button" class="history-thumb-btn w-16 h-16 rounded-lg overflow-hidden border border-outline-variant shrink-0" data-url="${url}" data-label="${escapeHtml(label)}">
+      <img class="w-full h-full object-cover" src="${url}" alt="${escapeHtml(label)}" loading="lazy"/>
+    </button>
+  `;
+}
+
+function renderHistoryRoomCard(project, index) {
+  const thumbs = TIERS.filter((t) => project.images[t.key])
+    .map((t) => renderHistoryThumb(project.images[t.key], t.label))
+    .join("");
+
+  const materialsButtons = TIERS.filter((t) => t.key !== "original")
+    .filter(
+      (t) =>
+        project.materials &&
+        project.materials[t.key] &&
+        Array.isArray(project.materials[t.key].items) &&
+        project.materials[t.key].items.length
+    )
+    .map(
+      (t) => `
+      <button type="button" class="history-materials-btn font-label-caps text-[11px] tracking-widest uppercase text-primary hover:underline" data-project-index="${index}" data-tier-key="${t.key}" data-tier-label="${escapeHtml(t.label)}">
+        ${escapeHtml(t.label)} cost
+      </button>`
+    )
+    .join("");
+
+  return `
+    <div class="flex flex-col gap-3 py-5 border-b border-outline-variant/70">
+      <div class="flex items-center justify-between gap-4 flex-wrap">
+        <p class="font-label-caps text-[11px] tracking-widest uppercase text-on-surface-variant">${formatHistoryDate(project.created_at)}${project.city ? " &middot; " + escapeHtml(project.city) : ""}</p>
+        ${project.status !== "done" ? `<span class="font-label-caps text-[11px] tracking-widest uppercase text-on-surface-variant">${escapeHtml(project.status)}</span>` : ""}
+      </div>
+      ${project.room_description ? `<p class="font-body-md text-on-surface-variant text-sm italic">&quot;${escapeHtml(project.room_description)}&quot;</p>` : ""}
+      <div class="flex gap-2 flex-wrap">${thumbs}</div>
+      ${materialsButtons ? `<div class="flex gap-4 flex-wrap mt-1">${materialsButtons}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderHistoryHouseCard(project) {
+  const thumbs = [];
+  if (project.images.plot) thumbs.push([project.images.plot, "Plot"]);
+  if (project.images.render) thumbs.push([project.images.render, "Render"]);
+  (project.blueprint_urls || []).forEach((url, i) => thumbs.push([url, `Floor ${i + 1}`]));
+
+  const thumbsHtml = thumbs.map(([url, label]) => renderHistoryThumb(url, label)).join("");
+
+  return `
+    <div class="flex flex-col gap-3 py-5 border-b border-outline-variant/70">
+      <div class="flex items-center justify-between gap-4 flex-wrap">
+        <p class="font-label-caps text-[11px] tracking-widest uppercase text-on-surface-variant">${formatHistoryDate(project.created_at)}</p>
+        ${project.status !== "done" ? `<span class="font-label-caps text-[11px] tracking-widest uppercase text-on-surface-variant">${escapeHtml(project.status)}</span>` : ""}
+      </div>
+      ${project.plot_description ? `<p class="font-body-md text-on-surface-variant text-sm italic">&quot;${escapeHtml(project.plot_description)}&quot;</p>` : ""}
+      ${project.prompt ? `<p class="font-body-md text-on-surface-variant text-sm">${escapeHtml(project.prompt)}</p>` : ""}
+      <div class="flex gap-2 flex-wrap">${thumbsHtml}</div>
+    </div>
+  `;
+}
+
+function renderHistoryTabContent() {
+  if (historyActiveTab === "room") {
+    historyModalBody.innerHTML = historyRoomProjects.length
+      ? historyRoomProjects.map((p, i) => renderHistoryRoomCard(p, i)).join("")
+      : '<p class="font-body-md text-on-surface-variant text-sm">No room redesigns yet.</p>';
+  } else {
+    historyModalBody.innerHTML = historyHouseProjects.length
+      ? historyHouseProjects.map((p) => renderHistoryHouseCard(p)).join("")
+      : '<p class="font-body-md text-on-surface-variant text-sm">No house concepts yet.</p>';
+  }
+
+  historyModalBody.querySelectorAll(".history-thumb-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openLightbox(btn.dataset.url, btn.dataset.label));
+  });
+  historyModalBody.querySelectorAll(".history-materials-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const project = historyRoomProjects[Number(btn.dataset.projectIndex)];
+      openMaterialsModal(btn.dataset.tierLabel, project.materials[btn.dataset.tierKey]);
+    });
+  });
+}
+
+async function openHistoryModal() {
+  historyModalOverlay.hidden = false;
+  historyModalBody.innerHTML = '<p class="font-body-md text-on-surface-variant text-sm">Loading…</p>';
+
+  try {
+    const [roomRes, houseRes] = await Promise.all([fetch("/api/projects"), fetch("/api/house-projects")]);
+    historyRoomProjects = roomRes.ok ? await roomRes.json() : [];
+    historyHouseProjects = houseRes.ok ? await houseRes.json() : [];
+  } catch {
+    historyModalBody.innerHTML =
+      '<p class="font-body-md text-error text-sm">Couldn\'t load your history right now.</p>';
+    return;
+  }
+
+  renderHistoryTabContent();
+}
+
+function closeHistoryModal() {
+  historyModalOverlay.hidden = true;
+}
+
+historyModalTabs.querySelectorAll(".history-tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    historyActiveTab = btn.dataset.historyTab;
+    historyModalTabs
+      .querySelectorAll(".history-tab-btn")
+      .forEach((b) => b.classList.toggle("is-active", b === btn));
+    renderHistoryTabContent();
+  });
+});
+
+historyModalClose.addEventListener("click", closeHistoryModal);
+historyModalOverlay.addEventListener("click", (e) => {
+  if (e.target === historyModalOverlay) closeHistoryModal();
+});
+
 function renderResults(data) {
   roomDescriptionEl.textContent = data.room_description ? `"${data.room_description}"` : "";
   resultsGrid.innerHTML = "";
@@ -610,6 +1032,14 @@ lightbox.addEventListener("click", (e) => {
   if (e.target === lightbox) lightbox.hidden = true;
 });
 
+// "A Real Example" figures (Home landing page) - clickable straight to the
+// same lightbox the generator results use, since they're real output images.
+document.querySelectorAll(".js-example-figure").forEach((fig) => {
+  fig.addEventListener("click", () => {
+    openLightbox(fig.dataset.lightboxUrl, fig.dataset.lightboxLabel);
+  });
+});
+
 materialsModalClose.addEventListener("click", closeMaterialsModal);
 materialsModalOverlay.addEventListener("click", (e) => {
   if (e.target === materialsModalOverlay) closeMaterialsModal();
@@ -619,6 +1049,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   lightbox.hidden = true;
   closeMaterialsModal();
+  closeHistoryModal();
 });
 
 /* ---------- Error / retry ---------- */
@@ -745,6 +1176,15 @@ houseForm.addEventListener("submit", async (e) => {
   try {
     const res = await fetch("/api/house-projects", { method: "POST", body: formData });
     if (res.status === 401) {
+      savePendingGeneration("house", {
+        fileName: houseSelectedFile.name,
+        fileType: houseSelectedFile.type,
+        fileDataUrl: housePreviewImg.src,
+        length: houseLengthInput.value,
+        width: houseWidthInput.value,
+        unit: houseUnitInput.value,
+        prompt: housePromptInput.value,
+      });
       window.location.href = "/login";
       return;
     }
@@ -767,11 +1207,14 @@ houseForm.addEventListener("submit", async (e) => {
    floor-plan VENDOR slot (app/providers/idealhouse.py) has nothing to
    preview mid-flight, so it isn't its own stage. */
 
+// 3 real stages, not 4 - "Finalizing" used to sit after "Generating your
+// concept render" and never corresponded to a real distinct backend step
+// (same fix as the room flow's stepper above), so it just sat spinning after
+// the render already existed.
 const HOUSE_STAGES = [
   { label: "Analyzing your plot…" },
   { label: "Drawing your floor plan…" },
   { label: "Generating your concept render…" },
-  { label: "Finalizing…" },
 ];
 
 let houseCurrentStageIndex = -1;
@@ -787,10 +1230,16 @@ function renderHouseStageStepper() {
   ).join("");
 }
 
-function setHouseStepperState(activeIndex, allDone) {
+// renderDone lets the final stage ("Generating your concept render") show as
+// checked the moment the render image genuinely exists, even on a poll where
+// the overall project isn't marked "done" quite yet - see setStepperState's
+// identical lastStageDone param in the room flow above for the full reasoning.
+function setHouseStepperState(activeIndex, allDone, renderDone = false) {
+  const lastIndex = HOUSE_STAGES.length - 1;
   houseProgressStepperEl.querySelectorAll(".stage-item").forEach((el, i) => {
-    el.classList.toggle("is-done", allDone || i < activeIndex);
-    el.classList.toggle("is-active", !allDone && i === activeIndex);
+    const done = allDone || i < activeIndex || (i === lastIndex && renderDone);
+    el.classList.toggle("is-done", done);
+    el.classList.toggle("is-active", !done && i === activeIndex);
   });
 }
 
@@ -802,7 +1251,7 @@ function setHouseStageLabel(index) {
   }, 220);
 }
 
-/* Derives which of the 4 stages we're in from REAL data on every poll
+/* Derives which of the 3 real stages we're in from REAL data on every poll
    response (app/main.py's get_house_project), not a timer - plot_description,
    blueprint_status, and images.render are all committed to the DB (and so
    returned here) as soon as each step actually finishes, well before the
@@ -811,8 +1260,7 @@ function setHouseStageLabel(index) {
    unrelated to floor_plan_status, which stays reserved for a still-inert
    future paid vendor. */
 function deriveHouseStageIndex(data) {
-  if (data.status === "done" || (data.images && data.images.render)) return HOUSE_STAGES.length - 1;
-  if (data.blueprint_status !== "idle") return 2;
+  if (data.blueprint_status !== "idle") return 2; // Generating your concept render
   if (data.plot_description || data.floor_plan_status !== "idle") return 1;
   return 0;
 }
@@ -821,17 +1269,17 @@ function applyHousePollUpdate(data) {
   const derived = deriveHouseStageIndex(data);
   if (derived > houseCurrentStageIndex) {
     houseCurrentStageIndex = derived;
-    setHouseStageLabel(Math.min(houseCurrentStageIndex, HOUSE_STAGES.length - 1));
-    setHouseStepperState(houseCurrentStageIndex, false);
-    houseProgressBarFill.style.width = `${(houseCurrentStageIndex / HOUSE_STAGES.length) * 100}%`;
+    setHouseStageLabel(houseCurrentStageIndex);
   }
+  const renderDone = Boolean(data.images && data.images.render);
+  setHouseStepperState(houseCurrentStageIndex, false, renderDone);
 }
 
 function startHouseProgress() {
   renderHouseStageStepper();
   houseCurrentStageIndex = 0;
 
-  houseProgressBarFill.style.width = "0%";
+  houseProgressFill.start();
   setHouseStepperState(0, false);
   houseProgressMessageEl.textContent = HOUSE_STAGES[0].label;
   houseProgressSubtitleEl.textContent = "";
@@ -843,7 +1291,7 @@ function stopHouseProgress() {
 
 function finishHouseProgress(onDone) {
   setHouseStepperState(HOUSE_STAGES.length, true);
-  houseProgressBarFill.style.width = "100%";
+  houseProgressFill.finish();
   stopHouseProgress();
   setTimeout(onDone, 350);
 }
@@ -1023,4 +1471,111 @@ if (revealTargets.length) {
   } else {
     revealTargets.forEach((el) => el.classList.add("is-revealed"));
   }
+}
+
+/* ---------- "Real Example" authenticity toast (Home landing page only) ---------- */
+/* Fires once, the first time #examples (the Original/Economical/Mid/Premium
+   grid) scrolls into view, to make sure a first-time visitor actually clicks
+   that those images are real generated output, not stock photography. Shown
+   at most once ever per browser (localStorage, not sessionStorage - this
+   isn't a per-visit thing, it's a "you've already been told this" thing) so
+   returning visitors never see it again. */
+
+const REAL_EXAMPLE_TOAST_KEY = "interior-gen:seen-real-example-toast";
+const REAL_EXAMPLE_TOAST_AUTOHIDE_MS = 9000;
+
+const realExampleToast = document.getElementById("real-example-toast");
+const realExampleToastClose = document.getElementById("real-example-toast-close");
+const examplesSection = document.getElementById("examples");
+
+function hideRealExampleToast() {
+  if (!realExampleToast || realExampleToast.hidden) return;
+  if (typeof gsap !== "undefined" && !prefersReducedMotion) {
+    gsap.to(realExampleToast, {
+      y: 16,
+      opacity: 0,
+      duration: 0.25,
+      ease: "power1.in",
+      onComplete: () => {
+        realExampleToast.hidden = true;
+        gsap.set(realExampleToast, { clearProps: "all" });
+      },
+    });
+  } else {
+    realExampleToast.hidden = true;
+  }
+}
+
+if (realExampleToast && examplesSection && !localStorage.getItem(REAL_EXAMPLE_TOAST_KEY)) {
+  realExampleToastClose?.addEventListener("click", hideRealExampleToast);
+
+  if ("IntersectionObserver" in window) {
+    const toastObserver = new IntersectionObserver(
+      (entries, observer) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          localStorage.setItem(REAL_EXAMPLE_TOAST_KEY, "1");
+          realExampleToast.hidden = false;
+          if (typeof gsap !== "undefined" && !prefersReducedMotion) {
+            gsap.from(realExampleToast, { y: 24, opacity: 0, duration: 0.5, ease: "power2.out" });
+          }
+          setTimeout(hideRealExampleToast, REAL_EXAMPLE_TOAST_AUTOHIDE_MS);
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.4 }
+    );
+    toastObserver.observe(examplesSection);
+  }
+}
+
+/* ---------- GSAP hero + stagger reveals (Home landing page only) ---------- */
+/* See .claude/skills/gsap-transitions/SKILL.md. Migrated section-by-section -
+   the plain [data-reveal] IntersectionObserver above still drives the
+   simpler single-block fades (About, cost-estimate highlight, closing CTA);
+   these two spots get real GSAP sequencing/stagger instead, on top of the
+   sections that had their [data-reveal] removed when they were migrated. */
+
+if (typeof gsap !== "undefined" && !prefersReducedMotion) {
+  gsap.registerPlugin(ScrollTrigger);
+
+  const heroCopy = document.getElementById("hero-copy");
+  if (heroCopy) {
+    const eyebrow = heroCopy.querySelector(".hero-eyebrow");
+    const heading = heroCopy.querySelector("h1");
+    const subtext = heroCopy.querySelector("p");
+    const ctaItems = gsap.utils.toArray(heroCopy.querySelectorAll(".hero-cta-row > *"));
+    // .set() the starting state then .to() the end state, rather than
+    // .from() - a raw .from() on a staggered array target inside a
+    // timeline with an overlapping "-=" position reliably got stuck at
+    // its start values in this GSAP version (verified live: the timeline
+    // reported progress() === 1 while the DOM never got the final
+    // opacity/transform). .set()+.to() does not have that failure mode.
+    gsap.set([eyebrow, subtext], { y: 16, opacity: 0 });
+    gsap.set(heading, { y: 24, opacity: 0 });
+    gsap.set(ctaItems, { y: 14, opacity: 0 });
+    gsap
+      .timeline({ defaults: { ease: "power3.out" } })
+      .to(eyebrow, { y: 0, opacity: 1, duration: 0.5 })
+      .to(heading, { y: 0, opacity: 1, duration: 0.7 }, "-=0.25")
+      .to(subtext, { y: 0, opacity: 1, duration: 0.6 }, "-=0.35")
+      .to(ctaItems, { y: 0, opacity: 1, duration: 0.5, stagger: 0.1 }, "-=0.3");
+  }
+
+  document.querySelectorAll("[data-gsap-stagger]").forEach((container) => {
+    const items = gsap.utils.toArray(container.children);
+    gsap.set(items, { y: 24, opacity: 0 });
+    gsap.to(items, {
+      y: 0,
+      opacity: 1,
+      duration: 0.5,
+      ease: "power2.out",
+      stagger: 0.06,
+      scrollTrigger: {
+        trigger: container,
+        start: "top 85%",
+        toggleActions: "restart reverse restart reverse",
+      },
+    });
+  });
 }
