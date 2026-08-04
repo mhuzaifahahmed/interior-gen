@@ -67,9 +67,21 @@ const homeToolsHouseRow = document.getElementById("home-tools-house-row");
 const navAuthGuest = document.getElementById("nav-auth-guest");
 const navAuthUser = document.getElementById("nav-auth-user");
 const navUsernameEl = document.getElementById("nav-username");
+const navUserAvatarEl = document.getElementById("nav-user-avatar");
+const navMenuNameEl = document.getElementById("nav-menu-name");
+const navMenuEmailEl = document.getElementById("nav-menu-email");
 const navLoginBtn = document.getElementById("nav-login-btn");
 const navSignupBtn = document.getElementById("nav-signup-btn");
 const navLogoutBtn = document.getElementById("nav-logout-btn");
+
+// Two-letter monogram for the avatar chip - initials of the first two words of
+// the display name, or the first two characters if it's a single word.
+function initialsFrom(name) {
+  const words = (name || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+}
 
 navLoginBtn.addEventListener("click", () => (window.location.href = "/login"));
 navSignupBtn.addEventListener("click", () => (window.location.href = "/signup"));
@@ -83,7 +95,11 @@ async function checkAuthState() {
     const res = await fetch("/api/auth/me");
     if (!res.ok) throw new Error("not logged in");
     const user = await res.json();
-    navUsernameEl.textContent = user.full_name || user.username;
+    const displayName = user.full_name || user.username;
+    navUsernameEl.textContent = displayName;
+    navUserAvatarEl.textContent = initialsFrom(displayName);
+    navMenuNameEl.textContent = displayName;
+    navMenuEmailEl.textContent = user.email || "";
     navAuthGuest.classList.add("hidden");
     navAuthUser.classList.remove("hidden");
   } catch {

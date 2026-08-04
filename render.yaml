@@ -1,0 +1,92 @@
+# Render Blueprint for Interior-Gen (FastAPI backend).
+#
+# HOW TO DEPLOY:
+#   1. Push this file to GitHub (it's safe to commit - it contains NO secrets;
+#      every real key below is `sync: false`, meaning YOU paste it into the
+#      Render dashboard, it is never stored in git).
+#   2. On https://render.com  ->  New  ->  Blueprint  ->  connect this repo.
+#   3. Render reads this file and creates the web service. It will prompt you
+#      for every `sync: false` value - paste them from your local .env.
+#   4. First deploy gives you a URL like https://interior-gen.onrender.com
+#      Set GOOGLE_REDIRECT_URI to  <that-url>/api/auth/google/callback  and add
+#      the exact same URL under your Google Cloud OAuth client's "Authorized
+#      redirect URIs" (or leave the two GOOGLE_* keys blank to disable Google
+#      sign-in - username/password login still works).
+#
+# NOTES:
+#   - STORAGE_BACKEND=s3, so generated images live in your S3 bucket and survive
+#     restarts. Good.
+#   - The SQLite DB (accounts/projects) sits on Render's ephemeral disk on the
+#     free plan, so it RESETS on every redeploy. Fine for a live demo. To make it
+#     persistent you'd attach a paid disk and point DATABASE_URL at it, or move to
+#     a managed Postgres.
+#   - Free instances sleep after ~15 min idle; the first request after that is
+#     slow (cold start) then normal. Load the page a minute before demoing.
+
+services:
+  - type: web
+    name: interior-gen
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      # --- Runtime / non-secret config (safe to hardcode here) ---
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: GEMINI_TEXT_MODEL
+        value: gemini-3.5-flash
+      - key: OPENAI_IMAGE_MODEL
+        value: gpt-image-1
+      - key: OPENAI_IMAGE_QUALITY
+        value: low
+      - key: OPENAI_IMAGE_INPUT_FIDELITY
+        value: low
+      - key: OPENAI_HOUSE_INPUT_FIDELITY
+        value: high
+      - key: S3_REGION
+        value: auto
+
+      # --- Secret: signs the login-session cookie. Render generates a strong
+      #     random value for you; no need to paste anything. ---
+      - key: SESSION_SECRET_KEY
+        generateValue: true
+
+      # --- Secrets: paste these into the Render dashboard from your local .env.
+      #     They are NEVER committed to git (that's what sync: false means). ---
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MATERIALS_API_KEY_ECONOMICAL
+        sync: false
+      - key: GEMINI_MATERIALS_API_KEY_MID
+        sync: false
+      - key: GEMINI_MATERIALS_API_KEY_PREMIUM
+        sync: false
+      - key: SERPAPI_API_KEY
+        sync: false
+
+      # --- S3 storage (AWS bucket in your .env). Leave S3_ENDPOINT_URL blank for
+      #     real AWS S3; set it only for R2/other S3-compatible hosts. ---
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_ENDPOINT_URL
+        sync: false
+
+      # --- Google OAuth (optional). Leave CLIENT_ID/SECRET blank to disable
+      #     "Continue with Google" - password login is unaffected. If you use it,
+      #     set GOOGLE_REDIRECT_URI to  https://<your-app>.onrender.com/api/auth/google/callback
+      #     AFTER the first deploy gives you the URL. ---
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false

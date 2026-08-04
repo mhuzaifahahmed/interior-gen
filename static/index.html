@@ -32,20 +32,28 @@
 <button type="button" class="font-label-caps text-label-caps text-on-night-variant hover:text-on-night transition-colors" id="nav-login-btn">LOG IN</button>
 <button type="button" class="font-label-caps text-label-caps bg-white text-night rounded-full px-4 py-2 hover:bg-white/85 hover:shadow-md transition-all duration-200" id="nav-signup-btn">SIGN UP</button>
 </div>
-<div class="hidden items-center gap-4" id="nav-auth-user">
+<div class="hidden items-center" id="nav-auth-user">
 <div class="relative">
-<button type="button" class="flex items-center gap-1 font-label-caps text-label-caps text-on-night-variant hover:text-on-night transition-colors pr-4 border-r border-night-border" id="nav-user-menu-btn" aria-haspopup="true" aria-expanded="false">
-<span id="nav-username"></span>
-<span class="material-symbols-outlined text-[18px] transition-transform duration-200" id="nav-user-menu-chevron">expand_more</span>
+<button type="button" class="flex items-center gap-2 rounded-full py-1 pl-1 pr-3 border border-night-border hover:bg-white/5 transition-colors" id="nav-user-menu-btn" aria-haspopup="true" aria-expanded="false">
+<span class="w-8 h-8 rounded-full bg-white/10 border border-night-border flex items-center justify-center font-label-caps text-[11px] leading-none text-on-night shrink-0" id="nav-user-avatar"></span>
+<span class="font-label-caps text-label-caps text-on-night-variant max-w-[140px] truncate" id="nav-username"></span>
+<span class="material-symbols-outlined text-[18px] text-on-night-variant transition-transform duration-200" id="nav-user-menu-chevron">expand_more</span>
 </button>
-<div class="hidden absolute right-4 top-full mt-3 w-48 rounded-xl bg-night border border-night-border shadow-[0_12px_32px_rgba(28,24,21,0.35)] overflow-hidden z-50" id="nav-user-menu">
+<div class="hidden absolute right-0 top-full mt-3 w-60 rounded-xl bg-night border border-night-border shadow-[0_12px_32px_rgba(28,24,21,0.35)] overflow-hidden z-50" id="nav-user-menu">
+<div class="px-4 py-3 border-b border-night-border">
+<p class="font-label-caps text-label-caps text-on-night truncate" id="nav-menu-name"></p>
+<p class="font-body-md text-xs text-on-night-variant truncate mt-0.5" id="nav-menu-email"></p>
+</div>
 <button type="button" class="w-full text-left px-4 py-3 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors flex items-center gap-2" id="nav-history-btn">
 <span class="material-symbols-outlined text-[18px]">history</span>
 HISTORY
 </button>
+<button type="button" class="w-full text-left px-4 py-3 border-t border-night-border font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors flex items-center gap-2" id="nav-logout-btn">
+<span class="material-symbols-outlined text-[18px]">logout</span>
+LOG OUT
+</button>
 </div>
 </div>
-<button type="button" class="font-label-caps text-label-caps text-on-night-variant hover:text-on-night transition-colors" id="nav-logout-btn">LOG OUT</button>
 </div>
 </div>
 </div>
