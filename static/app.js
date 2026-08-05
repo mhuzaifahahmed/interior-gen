@@ -117,10 +117,52 @@ const navUserMenuChevron = document.getElementById("nav-user-menu-chevron");
 const navUserMenu = document.getElementById("nav-user-menu");
 const navHistoryBtn = document.getElementById("nav-history-btn");
 
+// Smooth morph open/close (per the gsap-transitions skill) instead of an
+// instant hidden-class toggle - the menu scales+fades in from its top-right
+// anchor (matching its `right-0` positioning) while its 3 children (identity
+// header, History, Log out) cascade in with a short stagger. Per the skill's
+// documented gotcha, staggered tweens inside a timeline use gsap.set() + .to()
+// rather than .from() (which was observed to silently stick at start values
+// when combined with stagger + an overlapping timeline position).
+let navUserMenuTl = null;
+
+function openNavUserMenu() {
+  navUserMenuBtn.setAttribute("aria-expanded", "true");
+  navUserMenuChevron.style.transform = "rotate(180deg)";
+  navUserMenu.classList.remove("hidden");
+
+  if (typeof gsap === "undefined" || prefersReducedMotion) {
+    return;
+  }
+
+  if (navUserMenuTl) navUserMenuTl.kill();
+  const items = Array.from(navUserMenu.children);
+  gsap.set(navUserMenu, { transformOrigin: "top right", scale: 0.85, opacity: 0, y: -8 });
+  gsap.set(items, { opacity: 0, y: -6 });
+
+  navUserMenuTl = gsap.timeline();
+  navUserMenuTl
+    .to(navUserMenu, { scale: 1, opacity: 1, y: 0, duration: 0.32, ease: "back.out(1.7)" })
+    .to(items, { opacity: 1, y: 0, duration: 0.22, ease: "power2.out", stagger: 0.05 }, "-=0.18");
+}
+
 function closeNavUserMenu() {
-  navUserMenu.classList.add("hidden");
-  navUserMenuChevron.style.transform = "rotate(0deg)";
   navUserMenuBtn.setAttribute("aria-expanded", "false");
+  navUserMenuChevron.style.transform = "rotate(0deg)";
+
+  if (typeof gsap === "undefined" || prefersReducedMotion) {
+    navUserMenu.classList.add("hidden");
+    return;
+  }
+
+  if (navUserMenuTl) navUserMenuTl.kill();
+  navUserMenuTl = gsap.timeline({
+    onComplete: () => {
+      navUserMenu.classList.add("hidden");
+      gsap.set(navUserMenu, { clearProps: "transform,opacity" });
+    },
+  });
+  navUserMenuTl.to(navUserMenu, { scale: 0.9, opacity: 0, y: -6, duration: 0.16, ease: "power1.in" });
 }
 
 navUserMenuBtn.addEventListener("click", (e) => {
@@ -129,9 +171,7 @@ navUserMenuBtn.addEventListener("click", (e) => {
   if (isOpen) {
     closeNavUserMenu();
   } else {
-    navUserMenu.classList.remove("hidden");
-    navUserMenuChevron.style.transform = "rotate(180deg)";
-    navUserMenuBtn.setAttribute("aria-expanded", "true");
+    openNavUserMenu();
   }
 });
 
