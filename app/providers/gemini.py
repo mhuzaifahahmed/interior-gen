@@ -10,7 +10,7 @@ from google.genai import errors as genai_errors
 from PIL import Image
 
 from app.config import settings
-from app.providers import serpapi
+from app.providers import analysis_cache, serpapi
 from app.providers.base import Provider
 
 logger = logging.getLogger(__name__)
@@ -172,6 +172,17 @@ class GeminiProvider(Provider):
         raise RuntimeError("Gemini response contained no image data")
 
     def describe_room(self, image_bytes: bytes) -> str:
+        # Cached on a hash of the exact uploaded bytes - a retry/re-generate
+        # on the same photo (network hiccup, user clicking Generate again
+        # without re-uploading) skips a real Gemini call entirely and returns
+        # the same real analysis instead of paying for and waiting on an
+        # identical one. Different photos never collide (sha256), so this
+        # never serves a wrong room's description.
+        cached = analysis_cache.get("describe_room", image_bytes)
+        if cached is not analysis_cache.MISS:
+            logger.info("describe_room cache hit")
+            return cached
+
         image = Image.open(BytesIO(image_bytes))
         prompt = (
             "In two short sentences, describe this room for an AI image-editing model. "
@@ -188,7 +199,9 @@ class GeminiProvider(Provider):
             model=settings.gemini_text_model,
             contents=[prompt, image],
         )
-        return (response.text or "").strip()
+        result = (response.text or "").strip()
+        analysis_cache.set("describe_room", image_bytes, result)
+        return result
 
     def estimate_room_area(self, image_bytes: bytes) -> float | None:
         """Real bug this exists to fix: materials pricing (generate_materials
@@ -202,6 +215,11 @@ class GeminiProvider(Provider):
         failure here can't also break the room-structure description that
         feeds the image-generation prompt.
         """
+        cached = analysis_cache.get("estimate_room_area", image_bytes)
+        if cached is not analysis_cache.MISS:
+            logger.info("estimate_room_area cache hit")
+            return cached
+
         image = Image.open(BytesIO(image_bytes))
         prompt = (
             "Look at this room photo and estimate its approximate total floor area in "
@@ -216,13 +234,17 @@ class GeminiProvider(Provider):
                 contents=[prompt, image],
             )
             match = re.search(r"[\d,]+(?:\.\d+)?", response.text or "")
-            if not match:
-                return None
-            area = float(match.group(0).replace(",", ""))
-            return area if area > 0 else None
+            area = float(match.group(0).replace(",", "")) if match else None
+            result = area if area and area > 0 else None
         except Exception:
+            # Deliberately NOT cached - a transient failure (network blip,
+            # 503) shouldn't be remembered forever for this image. Only a
+            # genuine successful analysis is worth skipping next time.
             logger.exception("estimate_room_area failed; continuing without it")
             return None
+
+        analysis_cache.set("estimate_room_area", image_bytes, result)
+        return result
 
     def analyze_plot(self, image_bytes: bytes, dimensions: dict) -> str | None:
         try:
@@ -265,12 +287,19 @@ class GeminiProvider(Provider):
         return self.generate_image(image_bytes, prompt)
 
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
+        cached = analysis_cache.get("generate_tier_notes", image_bytes)
+        if cached is not analysis_cache.MISS:
+            logger.info("generate_tier_notes cache hit")
+            return cached
+
         image = Image.open(BytesIO(image_bytes))
         response = self.client.models.generate_content(
             model=settings.gemini_text_model,
             contents=[TIER_NOTES_PROMPT, image],
         )
-        return parse_tier_notes(response.text or "")
+        result = parse_tier_notes(response.text or "")
+        analysis_cache.set("generate_tier_notes", image_bytes, result)
+        return result
 
     def generate_materials(
         self,

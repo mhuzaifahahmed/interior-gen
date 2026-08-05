@@ -1,4 +1,5 @@
 import json
+import time
 
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -91,6 +92,80 @@ def test_run_pipeline_success(monkeypatch):
 
     economical_prompt = next(p for p in provider.image_calls if "budget renovation" in p)
     assert "repaint over visible stains" in economical_prompt
+
+
+def test_run_pipeline_generates_tier_images_concurrently(monkeypatch):
+    # Regression guard: the 3 tiers' generate_image calls used to run in a
+    # plain sequential loop, so total wait time was ~3x a single call's -
+    # the single biggest lever on perceived generation speed. Proves they
+    # now genuinely overlap (wall-clock time well under the sum of all 3
+    # simulated call durations), not just that the end result still works.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["p3/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="p3", status="queued", original_key="p3/original.png")
+        session.add(project)
+        session.commit()
+
+    class SlowProvider(FakeProvider):
+        def generate_image(self, image_bytes, prompt, tier=None):
+            time.sleep(0.3)
+            return super().generate_image(image_bytes, prompt, tier)
+
+    start = time.monotonic()
+    run_pipeline("p3", SlowProvider(), storage)
+    elapsed = time.monotonic() - start
+
+    # Sequential would take >= 0.9s (3 x 0.3s); concurrent should land close
+    # to a single call's duration. 0.7s leaves generous margin for CI jitter
+    # while still failing hard if it silently regresses to sequential.
+    assert elapsed < 0.7, f"expected concurrent image generation, took {elapsed:.2f}s"
+
+    with Session(engine) as session:
+        project = session.get(Project, "p3")
+        assert project.status == "done"
+        for tier in TIERS:
+            assert getattr(project, f"{tier}_key") == f"local.output/p3/{tier}.png"
+
+
+def test_run_pipeline_stores_each_tiers_own_bytes_even_when_finishing_out_of_order(monkeypatch):
+    # Regression guard for the concurrent generate_image + overlapped
+    # storage.put rewrite (as_completed(), not a fixed-order loop): proves
+    # tier identity is never lost/mixed up when tiers finish in a different
+    # order than TIERS lists them - premium finishes fastest here, economical
+    # slowest, the opposite of iteration order.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["p4/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="p4", status="queued", original_key="p4/original.png")
+        session.add(project)
+        session.commit()
+
+    DELAYS = {"economical": 0.15, "mid": 0.08, "premium": 0.0}
+
+    class ReverseOrderProvider(FakeProvider):
+        def generate_image(self, image_bytes, prompt, tier=None):
+            time.sleep(DELAYS[tier])
+            self.image_calls.append(prompt)
+            return f"bytes-for-{tier}".encode()
+
+    run_pipeline("p4", ReverseOrderProvider(), storage)
+
+    with Session(engine) as session:
+        project = session.get(Project, "p4")
+        assert project.status == "done"
+        for tier in TIERS:
+            key = getattr(project, f"{tier}_key")
+            assert key == f"local.output/p4/{tier}.png"
+            assert storage.get(key) == f"bytes-for-{tier}".encode()
 
 
 def test_run_pipeline_passes_user_style_notes_to_every_tier(monkeypatch):

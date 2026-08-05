@@ -550,3 +550,94 @@ def test_generate_materials_uses_fallback_model_after_primary_exhausts_retries(m
     assert calls[-1] == gemini_module.MATERIALS_GEMINI_FALLBACK_MODEL
     assert result["items"][0]["name"] == "Flooring"
     assert result["items"][0]["is_estimate"] is False
+
+
+def test_describe_room_second_call_on_identical_bytes_is_a_cache_hit(monkeypatch):
+    call_count = {"n": 0}
+
+    class FakeResponse:
+        text = "A cozy bedroom with one window."
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            call_count["n"] += 1
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    provider = GeminiProvider()
+    image_bytes = _sample_image_bytes()
+
+    first = provider.describe_room(image_bytes)
+    second = provider.describe_room(image_bytes)
+
+    assert first == second == "A cozy bedroom with one window."
+    assert call_count["n"] == 1  # second call served from cache, no real Gemini call
+
+
+def test_describe_room_different_photos_never_share_a_cache_entry(monkeypatch):
+    call_count = {"n": 0}
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            call_count["n"] += 1
+
+            class R:
+                text = f"description #{call_count['n']}"
+
+            return R()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    provider = GeminiProvider()
+    photo_a = _sample_image_bytes()
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), color=(1, 2, 3)).save(buf, format="PNG")
+    photo_b = buf.getvalue()
+
+    result_a = provider.describe_room(photo_a)
+    result_b = provider.describe_room(photo_b)
+
+    assert result_a != result_b
+    assert call_count["n"] == 2  # each distinct photo triggers its own real call
+
+
+def test_estimate_room_area_failure_is_not_cached_and_retries_next_call(monkeypatch):
+    # Regression guard: a transient failure must not be remembered forever
+    # for this image - only a genuine successful analysis is worth caching.
+    call_count = {"n": 0}
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("transient network error")
+
+            class R:
+                text = "200"
+
+            return R()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    provider = GeminiProvider()
+    image_bytes = _sample_image_bytes()
+
+    first = provider.estimate_room_area(image_bytes)
+    second = provider.estimate_room_area(image_bytes)
+
+    assert first is None  # the failed attempt
+    assert second == 200.0  # NOT served from a cached failure - retried for real
+    assert call_count["n"] == 2
