@@ -7,7 +7,7 @@ from sqlmodel import Session
 from app.config import settings
 from app.db import engine
 from app.models import Project
-from app.pipeline.prompts import PROMPT_VERSION, TIER_SPECS, build_prompt
+from app.pipeline.prompts import PROMPT_VERSION, build_prompt, build_tier_spec
 from app.pipeline.timing import PipelineTimer
 from app.providers.base import Provider
 from app.providers.gemini import fallback_materials
@@ -32,7 +32,9 @@ def run_pipeline(
     project_id: str,
     provider: Provider,
     storage: Storage,
-    user_style_notes: str | None = None,
+    interior_style: str,
+    color_palette: str,
+    additional_instructions: str | None = None,
     city: str | None = None,
     username: str | None = None,
 ) -> None:
@@ -40,9 +42,12 @@ def run_pipeline(
     background task; opens its own DB session since the request-scoped one
     will already be closed by the time this executes.
 
-    user_style_notes is the optional free-text style prompt the user typed in
-    (static/index.html's style-prompt input) - passed through to every tier's
-    build_prompt() call, see prompts.py for exactly how it's incorporated.
+    interior_style/color_palette are the two REQUIRED user selections (see
+    static/index.html's "Style Parameters" panel and app/pipeline/prompts.py's
+    STYLE_OPTIONS/COLOR_PALETTES) - passed through to every tier's build_prompt()
+    call and to build_tier_spec() for materials pricing. additional_instructions
+    is the optional free-text refinement (static/index.html's "Additional
+    Instructions" textarea) - see prompts.py for exactly how it's incorporated.
 
     username namespaces every generated-image storage key under
     users/{username}/output/... (see app/main.py's create_project) - required
@@ -96,6 +101,8 @@ def run_pipeline(
                 logger.exception("generate_tier_notes failed for project %s; continuing without it", project_id)
                 tier_notes = {}
 
+            tier_specs = {tier: build_tier_spec(tier, interior_style, color_palette) for tier in TIERS}
+
             executor = None
             materials_futures = None
             if city:
@@ -123,7 +130,7 @@ def run_pipeline(
                     tier: executor.submit(
                         provider.generate_materials,
                         tier,
-                        TIER_SPECS[tier],
+                        tier_specs[tier],
                         room_description,
                         city,
                         materials_keys[tier],
@@ -159,7 +166,14 @@ def run_pipeline(
             # main thread - SQLModel sessions aren't safe to share across
             # threads, same discipline the materials futures already follow.
             tier_prompts = {
-                tier: build_prompt(tier, room_description, tier_notes.get(tier), user_style_notes)
+                tier: build_prompt(
+                    tier,
+                    interior_style,
+                    color_palette,
+                    room_description,
+                    tier_notes.get(tier),
+                    additional_instructions,
+                )
                 for tier in TIERS
             }
             with timer.stage("generate_images+storage_upload(all tiers)"):
@@ -204,7 +218,7 @@ def run_pipeline(
                             logger.exception(
                                 "materials lookup timed out/failed for tier %s, project %s", tier, project_id
                             )
-                            materials[tier] = fallback_materials(TIER_SPECS[tier], city)
+                            materials[tier] = fallback_materials(tier_specs[tier], city)
                 executor.shutdown(wait=False)
 
                 project.materials_json = json.dumps(materials)
@@ -216,9 +230,11 @@ def run_pipeline(
             project.meta_json = json.dumps(
                 {
                     "prompt_version": PROMPT_VERSION,
-                    "tier_specs": list(TIER_SPECS.keys()),
+                    "tier_specs": list(TIERS),
                     "tier_notes": tier_notes,
-                    "user_style_notes": user_style_notes,
+                    "interior_style": interior_style,
+                    "color_palette": color_palette,
+                    "additional_instructions": additional_instructions,
                 }
             )
             session.add(project)

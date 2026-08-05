@@ -30,7 +30,7 @@ from app.models import HouseProject, Project, User
 from app.pipeline.generate import TIERS, run_pipeline
 from app.pipeline.generate_house import run_house_pipeline
 from app.pipeline.house_prompts import USER_PROMPT_MAX_CHARS
-from app.pipeline.prompts import USER_NOTES_MAX_CHARS
+from app.pipeline.prompts import ADDITIONAL_INSTRUCTIONS_MAX_CHARS, COLOR_PALETTES, STYLE_OPTIONS
 from app.providers import get_provider
 from app.schemas import (
     HouseProjectCreateResponse,
@@ -229,7 +229,9 @@ CITY_MAX_CHARS = 80
 async def create_project(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    style_notes: str = Form(""),
+    interior_style: str = Form(""),
+    color_palette: str = Form(""),
+    additional_instructions: str = Form(""),
     city: str = Form(""),
     session: Session = Depends(get_session),
     user: User = Depends(require_user),
@@ -241,9 +243,19 @@ async def create_project(
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, "file too large (max 15MB)")
 
+    # Interior Style + Color Palette are REQUIRED selections (the frontend's
+    # Generate button is disabled until both are picked) - re-validated here
+    # since a client could call the API directly bypassing that gating. Returned
+    # as a 400, not FastAPI's default 422, matching this endpoint's other manual
+    # validation below.
+    if interior_style not in STYLE_OPTIONS:
+        raise HTTPException(400, "interior_style must be one of the supported styles")
+    if color_palette not in COLOR_PALETTES:
+        raise HTTPException(400, "color_palette must be one of the supported palettes")
+
     # Defensive re-truncation (also enforced in build_prompt()) - the frontend's
-    # <input maxlength> is trivially bypassable by anyone calling the API directly.
-    style_notes = style_notes.strip()[:USER_NOTES_MAX_CHARS] or None
+    # <textarea maxlength> is trivially bypassable by anyone calling the API directly.
+    additional_instructions = additional_instructions.strip()[:ADDITIONAL_INSTRUCTIONS_MAX_CHARS] or None
     # Empty city is a valid, deliberate choice (images-only path, confirmed via a
     # dialog on the frontend) - not an error, just no materials/pricing lookup.
     city = city.strip()[:CITY_MAX_CHARS] or None
@@ -251,7 +263,13 @@ async def create_project(
     storage = get_storage()
     provider = get_provider()
 
-    project = Project(status="queued", user_style_notes=style_notes, user_id=user.id)
+    project = Project(
+        status="queued",
+        interior_style=interior_style,
+        color_palette=color_palette,
+        additional_instructions=additional_instructions,
+        user_id=user.id,
+    )
     session.add(project)
     session.commit()
     session.refresh(project)
@@ -266,7 +284,17 @@ async def create_project(
     session.add(project)
     session.commit()
 
-    background_tasks.add_task(run_pipeline, project.id, provider, storage, style_notes, city, user.username)
+    background_tasks.add_task(
+        run_pipeline,
+        project.id,
+        provider,
+        storage,
+        interior_style,
+        color_palette,
+        additional_instructions,
+        city,
+        user.username,
+    )
 
     return ProjectCreateResponse(project_id=project.id)
 
@@ -291,7 +319,9 @@ def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
         materials_status=project.materials_status,
         created_at=project.created_at.isoformat(),
         city=project.city,
-        user_style_notes=project.user_style_notes,
+        interior_style=project.interior_style,
+        color_palette=project.color_palette,
+        additional_instructions=project.additional_instructions,
     )
 
 

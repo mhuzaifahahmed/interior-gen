@@ -77,7 +77,7 @@ def test_run_pipeline_success(monkeypatch):
         session.commit()
 
     provider = FakeProvider()
-    run_pipeline("p1", provider, storage)
+    run_pipeline("p1", provider, storage, "Modern", "Neutral")
 
     with Session(engine) as session:
         project = session.get(Project, "p1")
@@ -117,7 +117,7 @@ def test_run_pipeline_generates_tier_images_concurrently(monkeypatch):
             return super().generate_image(image_bytes, prompt, tier)
 
     start = time.monotonic()
-    run_pipeline("p3", SlowProvider(), storage)
+    run_pipeline("p3", SlowProvider(), storage, "Modern", "Neutral")
     elapsed = time.monotonic() - start
 
     # Sequential would take >= 0.9s (3 x 0.3s); concurrent should land close
@@ -157,7 +157,7 @@ def test_run_pipeline_stores_each_tiers_own_bytes_even_when_finishing_out_of_ord
             self.image_calls.append(prompt)
             return f"bytes-for-{tier}".encode()
 
-    run_pipeline("p4", ReverseOrderProvider(), storage)
+    run_pipeline("p4", ReverseOrderProvider(), storage, "Modern", "Neutral")
 
     with Session(engine) as session:
         project = session.get(Project, "p4")
@@ -168,7 +168,7 @@ def test_run_pipeline_stores_each_tiers_own_bytes_even_when_finishing_out_of_ord
             assert storage.get(key) == f"bytes-for-{tier}".encode()
 
 
-def test_run_pipeline_passes_user_style_notes_to_every_tier(monkeypatch):
+def test_run_pipeline_passes_interior_style_and_palette_to_every_tier(monkeypatch):
     engine = make_test_engine()
     monkeypatch.setattr(generate_module, "engine", engine)
 
@@ -181,16 +181,43 @@ def test_run_pipeline_passes_user_style_notes_to_every_tier(monkeypatch):
         session.commit()
 
     provider = FakeProvider()
-    run_pipeline("p3", provider, storage, user_style_notes="modern, blue accents")
+    run_pipeline("p3", provider, storage, "Japandi", "Sage")
 
     assert len(provider.image_calls) == 3
     for prompt in provider.image_calls:
-        assert "modern, blue accents" in prompt
+        assert "Japandi" in prompt
+        assert "sage green" in prompt
 
     with Session(engine) as session:
         project = session.get(Project, "p3")
         meta = json.loads(project.meta_json)
-        assert meta["user_style_notes"] == "modern, blue accents"
+        assert meta["interior_style"] == "Japandi"
+        assert meta["color_palette"] == "Sage"
+
+
+def test_run_pipeline_passes_additional_instructions_to_every_tier(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["p3b/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="p3b", status="queued", original_key="p3b/original.png")
+        session.add(project)
+        session.commit()
+
+    provider = FakeProvider()
+    run_pipeline("p3b", provider, storage, "Modern", "Neutral", additional_instructions="more indoor plants")
+
+    assert len(provider.image_calls) == 3
+    for prompt in provider.image_calls:
+        assert "more indoor plants" in prompt
+
+    with Session(engine) as session:
+        project = session.get(Project, "p3b")
+        meta = json.loads(project.meta_json)
+        assert meta["additional_instructions"] == "more indoor plants"
 
 
 def test_run_pipeline_marks_failed_on_provider_error(monkeypatch):
@@ -209,7 +236,7 @@ def test_run_pipeline_marks_failed_on_provider_error(monkeypatch):
         def generate_image(self, image_bytes, prompt, tier=None):
             raise RuntimeError("quota exceeded")
 
-    run_pipeline("p2", FailingProvider(), storage)
+    run_pipeline("p2", FailingProvider(), storage, "Modern", "Neutral")
 
     with Session(engine) as session:
         project = session.get(Project, "p2")
@@ -232,7 +259,7 @@ def test_run_pipeline_without_city_skips_materials(monkeypatch):
         session.commit()
 
     provider = FakeProvider()
-    run_pipeline("p4", provider, storage)  # city defaults to None
+    run_pipeline("p4", provider, storage, "Modern", "Neutral")  # city defaults to None
 
     assert provider.materials_calls == []
 
@@ -256,7 +283,7 @@ def test_run_pipeline_with_city_runs_materials_for_every_tier(monkeypatch):
         session.commit()
 
     provider = FakeProvider()
-    run_pipeline("p5", provider, storage, city="Karachi")
+    run_pipeline("p5", provider, storage, "Modern", "Neutral", city="Karachi")
 
     called_tiers = {tier for tier, _, _, _ in provider.materials_calls}
     assert called_tiers == set(TIERS)
@@ -292,7 +319,7 @@ def test_run_pipeline_assigns_a_dedicated_key_per_tier_when_configured(monkeypat
         session.commit()
 
     provider = FakeProvider()
-    run_pipeline("p6", provider, storage, city="Lahore")
+    run_pipeline("p6", provider, storage, "Modern", "Neutral", city="Lahore")
 
     used_keys = {tier: key for tier, _, key, _ in provider.materials_calls}
     assert used_keys == {"economical": "key-econ", "mid": "key-mid", "premium": "key-premium"}
@@ -318,7 +345,7 @@ def test_run_pipeline_falls_back_when_materials_future_raises(monkeypatch):
         def generate_materials(self, tier, tier_spec, room_description, city, api_key=None):
             raise RuntimeError("grounding service unavailable")
 
-    run_pipeline("p7", ExplodingProvider(), storage, city="Karachi")
+    run_pipeline("p7", ExplodingProvider(), storage, "Modern", "Neutral", city="Karachi")
 
     with Session(engine) as session:
         project = session.get(Project, "p7")

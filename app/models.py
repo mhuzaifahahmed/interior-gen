@@ -53,6 +53,19 @@ class Project(SQLModel, table=True):
 
     original_key: Optional[str] = None
     room_description: Optional[str] = None
+
+    # Interior Style + Color Palette: the two REQUIRED user selections (see
+    # app/pipeline/prompts.py's STYLE_OPTIONS/COLOR_PALETTES) that replaced the
+    # old free-text style-prompt input. additional_instructions is the optional
+    # free-text refinement that remains (static/index.html's "Additional
+    # Instructions" textarea) - kept as its own column (not reusing the old
+    # user_style_notes column) since its meaning changed from "the whole style"
+    # to "an optional refinement on top of an explicit style"; the old column is
+    # left in place unused rather than dropped (SQLite can't drop columns via the
+    # additive-only ALTER TABLE migration this project uses - see app/db.py).
+    interior_style: Optional[str] = None
+    color_palette: Optional[str] = None
+    additional_instructions: Optional[str] = None
     user_style_notes: Optional[str] = None
 
     economical_key: Optional[str] = None

@@ -29,6 +29,9 @@ _NEW_COLUMNS_BY_TABLE = {
         ("materials_json", "TEXT"),
         ("materials_status", "TEXT NOT NULL DEFAULT 'idle'"),
         ("user_id", "TEXT"),
+        ("interior_style", "TEXT"),
+        ("color_palette", "TEXT"),
+        ("additional_instructions", "TEXT"),
     ],
     "houseproject": [
         ("room_layout_json", "TEXT"),

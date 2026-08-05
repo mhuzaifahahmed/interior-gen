@@ -12,94 +12,151 @@ an *edit instruction for the input photo* - a real 3-tier generation came back w
 Premium/Mid as entirely different rooms (generic luxury interiors), only Economical
 (weakest vocabulary) loosely resembling the input.
 
-DESIGN-DIVERSITY SYSTEM (v10): a hierarchical concept model, not flat attribute
-randomization. The earlier version (v9) only random.choice()'d small attributes
-(paint color, flooring material, decor phrase) independently of each other within a
-single fixed tier "look" - so every economical generation was still fundamentally
-the same beige-paint-plus-ceramic-tile room with a different adjective, and GPT-Image
-made minor edits instead of a genuinely different design. v10 first picks a whole
-DesignConcept at random (e.g. "Japandi" vs "Transitional" vs "Warm Minimalism" for
-mid), each with its own real furniture/material/lighting/decor vocabulary, and only
-THEN randomizes within that concept's own boundaries. This is "random within
-boundaries": the concept pool + each concept's option lists are the boundaries (real
-renovation cost-ladder constraints per tier - see TIER_LIGHTING_TEMP/TIER_CEILING/
-TIER_FLOORING/NEGATIVE_ADDITIONS below - are unchanged from before and still keep
-economical away from marble/brass regardless of which concept is picked), and the
-random concept + sub-choice selection is what actually varies per generation.
+DESIGN-DIVERSITY SYSTEM (v11): "random within boundaries", driven by explicit user
+choices instead of an internally-randomized design concept. v10 picked a whole
+DesignConcept at random per generation (e.g. "Japandi" vs "Transitional") - that
+produced real variety, but the user never actually chose the look they'd get, which
+made results unpredictable and made the same room's "Mid" tier look like a
+completely different style on every regeneration. v11 replaces the random concept
+pick with two REQUIRED user choices - Interior Style and Color Palette (see
+STYLE_OPTIONS/COLOR_PALETTES below) - so the *style* is deterministic and
+user-controlled, while *within* that style, individual furniture pieces, fixtures,
+textiles, and decor are still randomized every generation (see STYLE_ELEMENT_POOLS)
+so two generations of the same room/style/palette are never identical. This is the
+literal "random within boundaries" contract: the boundaries are the selected Style,
+the selected Palette, and the selected Budget Tier's cost ceiling (TIER_FLOORING/
+TIER_LIGHTING_TEMP/TIER_CEILING/NEGATIVE_ADDITIONS, unchanged in spirit from pre-v11)
+- randomness never crosses any of those three boundaries.
 
-TIER_SPECS (below DESIGN_CONCEPTS) is kept as a STABLE, non-randomized summary dict
-purely for app/providers/gemini.py's materials/pricing feature (generate_materials,
-fallback_materials, _tier_line_items) - it is NOT used by build_prompt() and never
-appears in an image-generation prompt. Materials pricing wants a consistent,
-representative item description per tier for search terms, not per-generation
-jitter, and gemini.py's consumers already expect plain strings (not lists) per
-field - keeping this dict small and stable avoids re-plumbing that feature (out of
-scope for this change) while still being a real, accurate description of that tier.
+PROMPT PRIORITY (nothing lower may override anything higher):
+  1. Preserve Room Geometry  - structural lock, always first, non-negotiable.
+  2. Interior Style          - STYLE_PROFILES[style], the design's core identity.
+  3. Budget Tier             - material/finish quality ceiling (unchanged tier logic).
+  4. Color Palette           - COLOR_PROFILE[palette], colors/finishes only.
+  5. Additional Instructions - optional user free text, a refinement, never a
+                                style replacement (style wins on conflict).
+  6. Controlled Randomness   - per-generation furniture/decor/fixture variety,
+                                drawn only from the selected style's own pools.
+
+STYLE_PROFILES intentionally carry NO color words - colors live only in
+COLOR_PROFILE, so a given style always reads the same regardless of which palette
+is layered on top of it, and a given palette always means the same colors
+regardless of which style it's paired with. This mirrors why TIER_FLOORING/
+TIER_LIGHTING_TEMP/NEGATIVE_ADDITIONS stayed tier-level rather than per-style: the
+combinatorial grid (9 styles x 8 palettes x 3 tiers = 216 combinations) only stays
+maintainable if each axis only ever encodes its own concern.
 """
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-PROMPT_VERSION = "v10"
-
-
-# ---------------------------------------------------------------------------
-# Reusable per-concept structures (the "Optional" refactor requested: clean,
-# typed building blocks instead of ad-hoc nested dicts).
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class FurnitureProfile:
-    styles: list[str]  # e.g. "a low-profile oak-framed sofa with tapered wood legs"
-    layouts: list[str]  # arrangement/circulation logic, not individual pieces
-
-
-@dataclass(frozen=True)
-class MaterialProfile:
-    primary: list[str]  # dominant furniture/surface materials, e.g. "walnut"
-    accents: list[str]  # hardware/trim accent materials, e.g. "brushed brass"
-
-
-@dataclass(frozen=True)
-class LightingProfile:
-    fixtures: list[str]  # fixture TYPE/style; color temperature stays tier-level
-
-
-@dataclass(frozen=True)
-class DecorProfile:
-    textiles: list[str]  # rugs, curtains, cushions, fabrics
-    accessories: list[str]  # wall art, mirrors, plants, ceramics, objects
-
-
-@dataclass(frozen=True)
-class DesignConcept:
-    name: str
-    tier: str
-    furniture: FurnitureProfile
-    materials: MaterialProfile
-    lighting: LightingProfile
-    decor: DecorProfile
-    color_philosophy: list[str]
-    textures: list[str]
-    # Feature walls: empty for every economical concept, on purpose - "no accent
-    # wall, no wall mouldings" is a real cost-ladder rule (see NEGATIVE_ADDITIONS),
-    # not a missing field.
-    feature_wall: list[str] = field(default_factory=list)
+PROMPT_VERSION = "v11.1"
 
 
 # ---------------------------------------------------------------------------
-# Tier-level constants: the real renovation cost-impact methodology (material
-# quality ladder + lighting-temperature ladder) this project has always used.
-# Unchanged in spirit from the pre-v10 TIER_SPECS - these are the "boundaries"
-# every concept in a tier must stay inside, regardless of which concept or
-# sub-choice random.choice() lands on.
+# Interior Style + Color Palette - the two REQUIRED user-facing selections
+# (static/index.html's "Style Parameters" panel). Order in these lists is the
+# order options appear in the frontend dropdowns.
+# ---------------------------------------------------------------------------
+
+STYLE_OPTIONS: list[str] = [
+    "Modern",
+    "Minimalist",
+    "Scandinavian",
+    "Japandi",
+    "Industrial",
+    "Mediterranean",
+    "Spanish",
+    "Traditional",
+    "Luxury",
+]
+
+COLOR_PALETTES: list[str] = [
+    "Neutral",
+    "Earthy",
+    "Warm",
+    "Cool",
+    "Monochrome",
+    "Terracotta",
+    "Sage",
+    "Black & White",
+]
+
+# Lightweight anchors, NOT a teaching pass - gpt-image-1 already understands what
+# "Japandi" or "Industrial" mean. These just pin the model toward this project's
+# preferred interpretation of each style (form/line/layout language only). Colors
+# are deliberately absent - they belong exclusively to COLOR_PROFILE below.
+STYLE_PROFILES: dict[str, str] = {
+    "Modern": (
+        "Clean lines, sleek furniture, uncluttered spaces, refined finishes, "
+        "simple forms, contemporary materials."
+    ),
+    "Minimalist": (
+        "Minimal furniture, open spaces, restrained decoration, functional design, "
+        "clean geometry, subtle textures."
+    ),
+    "Scandinavian": (
+        "Light wood finishes, functional furniture, cozy textiles, natural "
+        "materials, soft lighting, comfortable interiors."
+    ),
+    "Japandi": (
+        "Natural wood, handcrafted ceramics, linen fabrics, organic textures, "
+        "minimalist furniture, soft indirect lighting."
+    ),
+    "Industrial": (
+        "Concrete finishes, exposed metal, brick textures, matte black fixtures, "
+        "open shelving, raw materials."
+    ),
+    "Mediterranean": (
+        "Natural stone, textured plaster, rustic wood, handcrafted details, "
+        "elegant arches, timeless craftsmanship."
+    ),
+    "Spanish": (
+        "Decorative tiles, rustic wood, textured plaster, handcrafted details, "
+        "arches, traditional craftsmanship."
+    ),
+    "Traditional": (
+        "Classic furniture, detailed woodwork, timeless finishes, layered decor, "
+        "elegant craftsmanship."
+    ),
+    "Luxury": (
+        "Premium materials, elegant furniture, refined detailing, designer "
+        "lighting, marble accents, sophisticated finishes."
+    ),
+}
+
+# Color direction only - never furniture, never room type, never quality level.
+# Applied to walls, upholstery, curtains, rugs, accessories, accent colors,
+# flooring tones (when appropriate), and decorative objects (see build_prompt()'s
+# Color Palette section) - never the selected Style itself.
+COLOR_PROFILE: dict[str, str] = {
+    "Neutral": "warm whites, soft beige, ivory, light greige, and muted taupe",
+    "Earthy": "clay, terracotta, olive green, warm brown, sand, stone, and natural wood tones",
+    "Warm": "cream, caramel, warm oak, honey, soft bronze, and golden beige",
+    "Cool": "cool gray, charcoal, slate, muted blue, and soft graphite",
+    "Monochrome": "white, gray, charcoal, and black with subtle tonal variation",
+    "Terracotta": "terracotta, burnt clay, warm rust, muted orange accents, and earthy browns",
+    "Sage": "sage green, muted olive, warm gray, soft cream, and natural stone",
+    "Black & White": "black and white with crisp contrast and restrained accents",
+}
+
+
+# ---------------------------------------------------------------------------
+# Budget Tier - unchanged cost-ladder logic from the pre-v11 system (this is
+# the "Do not change the existing tier logic" requirement). Controls material/
+# furniture/finish quality and decorative richness, independent of Style/Palette.
 # ---------------------------------------------------------------------------
 
 TIER_LABELS = {
     "economical": "budget renovation",
     "mid": "mid-level renovation",
     "premium": "premium luxury renovation",
+}
+
+TIER_MATERIAL_QUALITY = {
+    "economical": "affordable, durable materials with simple, honest finishes - no premium or luxury materials",
+    "mid": "good-quality materials with refined, well-made finishes",
+    "premium": "premium, high-end materials with luxurious, meticulously detailed finishes",
 }
 
 TIER_LIGHTING_TEMP = {
@@ -120,22 +177,41 @@ TIER_DENSITY = {
     "premium": "furniture arranged in curated symmetrical conversation zones, restrained, not overfilled",
 }
 
-# Restated AFTER the concept's material/lighting/decor instructions (see
-# build_prompt()'s step 4b) - real, live-observed failure: vivid tier
-# vocabulary (marble, brass, "designer ceiling") pulled gpt-image-1 toward a
-# hallucinated generic luxury room even with the structural lock present
-# earlier in the prompt. Empty for economical, which never reworks the
-# ceiling plane and has shown no such drift.
+# Whether this tier can afford a decorative feature/accent wall at all - a real
+# cost-ladder rule, not a style choice: economical never gets one regardless of
+# which Style is selected.
+TIER_FEATURE_WALL_AVAILABLE = {
+    "economical": False,
+    "mid": True,
+    "premium": True,
+}
+
+# Restated AFTER ALL vivid design vocabulary - specifically after the Controlled
+# Randomness furnishing sentences at the very end of build_prompt(), not earlier
+# in the Budget Tier section - real, live-observed failure (both pre-v11, where
+# this originally lived in the pipeline, and again after the v11 rewrite
+# temporarily regressed the ordering): vivid style/tier/furniture vocabulary
+# (marble, brass, "designer ceiling", a whole furnished-room description) pulled
+# gpt-image-1 toward a hallucinated generic room even with the structural lock
+# present earlier in the prompt - a deep/vast room (e.g. a large industrial hall)
+# came back shallow and ordinary-sized once furnished with everyday living-room
+# items. Originally only mid/premium got this (reasoned as "only tiers that rework
+# the ceiling plane need it"), but that reasoning didn't hold - a real generation
+# showed the SAME depth collapse on economical too, so every tier now gets a
+# reminder; economical's is phrased around depth/proportions generically instead
+# of reusing the ceiling-focused mid/premium wording verbatim.
 TIER_STRUCTURE_REMINDER = {
-    "economical": "",
+    "economical": (
+        "still the exact same original room - the same depth, scale, and proportions, "
+        "not a smaller, shallower, or more compact version of the space"
+    ),
     "mid": "still the same original room shape and window, do not enlarge or change the space",
     "premium": "still the same original room shape and window, do not enlarge or change the space",
 }
 
-# Flooring stays tier-level (cost-ladder driven), not concept-level: a
-# "Contemporary" and "Cozy Minimal" economical room realistically use
-# similarly cheap flooring regardless of aesthetic - the material COST scales
-# with tier, not with style concept.
+# Flooring stays tier-level (cost-ladder driven), not style-level: any style at
+# the economical tier realistically uses similarly cheap flooring - the material
+# COST scales with tier, not with aesthetic.
 TIER_FLOORING = {
     "economical": [
         "ordinary matte ceramic tile flooring",
@@ -161,10 +237,12 @@ TIER_FLOORING = {
 # Tier-specific exclusions, rendered as a positive-prompt "Do not include: ..."
 # sentence in build_prompt() - instruction-following models are built to follow
 # exclusions stated directly in the instruction (unlike diffusion models, which
-# need a separate negative-prompt channel; this codebase no longer has one).
-# Unchanged from pre-v10: this is what actually enforces the cost ceiling
-# (no chandelier/marble/gold-trim for economical or mid) regardless of which
-# concept gets randomly picked.
+# need a separate negative-prompt channel; this codebase no longer has one). This
+# is what actually enforces the cost ceiling even when a user pairs an expensive-
+# reading Style (e.g. "Luxury") with the economical tier - Style still governs
+# FORM/LAYOUT language, but the tier's "Do not include" sentence is placed right
+# after the Style section specifically to override any conflicting material
+# vocabulary before the rest of the prompt continues.
 NEGATIVE_ADDITIONS: dict[str, str] = {
     "economical": "chandelier, crystal chandelier, pendant light, gold trim, marble, luxury, ornate, wainscoting",
     "mid": "chandelier, crystal chandelier, gold trim, marble, ornate luxury details",
@@ -173,531 +251,151 @@ NEGATIVE_ADDITIONS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# DESIGN_CONCEPTS - the actual diversity engine. Each tier's concepts stay
-# inside that tier's cost ceiling (economical concepts never mention marble/
-# brass/velvet; premium concepts freely do) while giving GPT-Image a genuinely
-# different furniture/material/lighting/decor vocabulary to work from each
-# generation, not just a different adjective on the same room.
+# Controlled Randomness - per-style option pools for the things this project's
+# spec explicitly calls out as safe to randomize (furniture pieces, tables,
+# chairs, rugs, artwork, mirrors, plants, lighting fixtures, fabrics, decorative
+# accessories). Deliberately colorless (color comes only from COLOR_PROFILE) and
+# deliberately silent on quality/material grade (that comes only from
+# TIER_MATERIAL_QUALITY/TIER_FLOORING) - each pool entry is pure FORM/TYPE
+# vocabulary for its style, so randomizing within a pool can never accidentally
+# cross the Style or Budget Tier boundary.
 # ---------------------------------------------------------------------------
 
-DESIGN_CONCEPTS: dict[str, list[DesignConcept]] = {
-    "economical": [
-        DesignConcept(
-            name="Budget Scandinavian",
-            tier="economical",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a simple light-oak-veneer sofa",
-                    "a boxy light-wood-frame armchair",
-                    "minimalist flat-pack-style shelving",
-                    "a low-profile bed frame with light wood legs",
-                ],
-                layouts=[
-                    "furniture kept minimal and pushed toward the walls to maximize open floor space",
-                    "a single clear seating or resting zone, left uncluttered",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["light pine", "birch veneer", "painted MDF"],
-                accents=["matte black metal legs", "brushed aluminum hardware"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a simple paper lantern shade", "a basic flush-mount ceiling light", "plain white track lighting"]
-            ),
-            decor=DecorProfile(
-                textiles=["plain cotton curtains", "a simple flatweave rug", "basic linen-blend cushions"],
-                accessories=["one or two potted plants", "a small round mirror", "simple framed prints"],
-            ),
-            color_philosophy=[
-                "a soft neutral Scandinavian palette of white, light grey and warm wood",
-                "a muted pastel accent against white walls",
-            ],
-            textures=["matte painted walls", "light wood grain", "plain woven cotton"],
-        ),
-        DesignConcept(
-            name="Cozy Minimal",
-            tier="economical",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a rounded-edge sofa in soft light fabric",
-                    "a single accent chair in a soft neutral fabric",
-                    "a simple low coffee table in light wood",
-                ],
-                layouts=[
-                    "furniture arranged for one relaxed, comfortable focal seating area",
-                    "an open, breathable layout with negative space left intentionally empty",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["light ash", "painted MDF", "natural cotton"],
-                accents=["matte black metal", "simple woven rattan"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a single warm-toned floor lamp", "a plain dome pendant", "simple recessed downlights"]
-            ),
-            decor=DecorProfile(
-                textiles=["a chunky knit throw", "plain woven curtains", "a soft low-pile rug"],
-                accessories=["a stack of books as a side-table accent", "one large leafy plant", "a small ceramic vase"],
-            ),
-            color_philosophy=[
-                "a warm neutral palette of oatmeal, sand and soft white",
-                "a quiet monochrome palette with one soft accent tone",
-            ],
-            textures=["soft matte plaster walls", "natural woven fiber", "brushed cotton"],
-        ),
-        DesignConcept(
-            name="Contemporary",
-            tier="economical",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a clean-lined fabric sofa",
-                    "a simple geometric accent chair",
-                    "a slim modern console",
-                ],
-                layouts=[
-                    "furniture arranged in a clear, functional layout facing the room's natural focal point",
-                    "an efficient layout that keeps walkways open",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["painted MDF", "laminate", "powder-coated metal"],
-                accents=["matte black hardware", "brushed steel legs"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a simple modern pendant", "a clean-lined flush ceiling light", "a slim floor lamp"]
-            ),
-            decor=DecorProfile(
-                textiles=["solid-color curtains", "a simple geometric-pattern rug", "plain cushions in a single accent color"],
-                accessories=["a single piece of abstract wall art", "a small mirror with a thin metal frame", "one or two plants in simple pots"],
-            ),
-            color_philosophy=[
-                "a crisp neutral palette with one confident accent color",
-                "cool contemporary greys and whites",
-            ],
-            textures=["smooth matte paint", "light laminate grain", "plain woven fabric"],
-        ),
-        DesignConcept(
-            name="Urban Apartment",
-            tier="economical",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a compact modular sofa",
-                    "a slim-profile dining or work table",
-                    "an industrial-look open shelving unit",
-                ],
-                layouts=[
-                    "space-efficient furniture arrangement suited to a compact urban space",
-                    "multi-purpose furniture placement that keeps the room feeling open",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["painted MDF", "laminate wood-look", "matte-finish laminate"],
-                accents=["matte black pipe-style shelving", "simple exposed metal legs"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a simple Edison-style bulb fixture", "plain track lighting", "a basic drum-shade pendant"]
-            ),
-            decor=DecorProfile(
-                textiles=["a simple woven rug", "plain linen-blend curtains", "solid-color cushions"],
-                accessories=["a small gallery of simple framed prints", "one statement plant", "a compact round mirror"],
-            ),
-            color_philosophy=[
-                "an urban neutral palette of warm grey, charcoal accents and white",
-                "a raw, understated palette with one bold accent",
-            ],
-            textures=["matte painted plaster", "smooth laminate", "plain cotton weave"],
-        ),
-    ],
-    "mid": [
-        DesignConcept(
-            name="Japandi",
-            tier="mid",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a low-profile oak-framed sofa with tapered wood legs",
-                    "a curved bouclé accent chair",
-                    "a minimalist ash coffee table",
-                    "a platform-style bed frame in natural wood",
-                ],
-                layouts=[
-                    "furniture kept low-profile and slightly separated from the walls for an airy, open feel",
-                    "an asymmetrical but balanced layout with one clear negative-space zone",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["oak", "ash", "light walnut"],
-                accents=["matte black steel", "natural rattan"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a paper pendant lantern", "a slim linear recessed light", "a simple ceramic table lamp"]
-            ),
-            decor=DecorProfile(
-                textiles=["linen curtains", "a jute or wool-blend rug", "cotton-linen cushions"],
-                accessories=["ceramic vases in muted tones", "a single dried-branch arrangement", "a small handmade pottery bowl"],
-            ),
-            color_philosophy=[
-                "muted earth tones with soft black accents",
-                "a warm neutral palette of clay, sand and charcoal",
-            ],
-            textures=["natural linen weave", "raw oak grain", "matte ceramic finish"],
-            feature_wall=["a warm wood slat feature wall"],
-        ),
-        DesignConcept(
-            name="Organic Modern",
-            tier="mid",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a curved bouclé sofa",
-                    "a live-edge wood side table",
-                    "a rounded rattan accent chair",
-                ],
-                layouts=[
-                    "furniture arranged in soft, curved groupings rather than rigid lines",
-                    "a layout that follows the room's natural light rather than the walls",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["walnut", "light oak", "natural rattan"],
-                accents=["brushed bronze", "matte terracotta"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a sculptural ceramic table lamp", "a woven rattan pendant", "warm recessed cove lighting"]
-            ),
-            decor=DecorProfile(
-                textiles=["a chunky wool rug", "linen curtains in a warm tone", "a bouclé-and-linen cushion mix"],
-                accessories=["organic-shaped ceramic vessels", "a large sculptural plant", "an abstract textured wall hanging"],
-            ),
-            color_philosophy=[
-                "a warm organic palette of terracotta, sand and sage",
-                "earthy neutral tones with a soft green accent",
-            ],
-            textures=["raw plaster wall finish", "natural rattan weave", "soft bouclé fabric"],
-            feature_wall=["a warm textured lime-wash feature wall"],
-        ),
-        DesignConcept(
-            name="Transitional",
-            tier="mid",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a tailored fabric sofa with a classic silhouette",
-                    "a mix of one traditional wood armchair and one modern accent chair",
-                    "a refined wood coffee table",
-                ],
-                layouts=[
-                    "a balanced, symmetrical furniture arrangement anchored by a rug",
-                    "furniture arranged in a traditional conversation grouping",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["oak", "walnut", "painted wood millwork"],
-                accents=["brushed nickel", "matte brass-toned hardware"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a classic drum-shade pendant", "warm recessed cove lighting", "a pair of fabric-shade table lamps"]
-            ),
-            decor=DecorProfile(
-                textiles=["tailored linen curtains", "a patterned wool-blend rug", "a mix of solid and subtly patterned cushions"],
-                accessories=["a curated pair of framed art prints", "a classic ceramic table lamp", "a round wall mirror in a wood frame"],
-            ),
-            color_philosophy=[
-                "a warm transitional palette of taupe, cream and soft navy",
-                "a timeless neutral palette with one classic accent color",
-            ],
-            textures=["smooth painted millwork", "soft wool weave", "brushed wood grain"],
-            feature_wall=["wall mouldings with a soft painted panel accent"],
-        ),
-        DesignConcept(
-            name="Warm Minimalism",
-            tier="mid",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a low-profile linen sofa",
-                    "a single sculptural wood accent chair",
-                    "a simple rounded-edge coffee table",
-                ],
-                layouts=[
-                    "furniture kept to the essentials, with generous open floor space left visible",
-                    "one clear, calm focal seating arrangement",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["light oak", "ash", "painted wood panel"],
-                accents=["matte black metal", "warm brushed bronze"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a single sculptural floor lamp", "warm recessed cove lighting", "a simple ceramic pendant"]
-            ),
-            decor=DecorProfile(
-                textiles=["natural linen curtains", "a soft wool-blend rug in a neutral tone", "plain linen cushions"],
-                accessories=["one sculptural ceramic object", "a single large plant", "a thin-framed round mirror"],
-            ),
-            color_philosophy=[
-                "a warm minimal palette of ivory, warm taupe and soft charcoal",
-                "a quiet tonal palette with barely-there contrast",
-            ],
-            textures=["soft matte plaster", "natural linen weave", "warm wood grain"],
-            feature_wall=["a subtly textured painted panel wall"],
-        ),
-        DesignConcept(
-            name="Scandinavian",
-            tier="mid",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a light-wood-framed sofa with soft grey upholstery",
-                    "a simple wishbone-style accent chair",
-                    "a round light-oak coffee table",
-                ],
-                layouts=[
-                    "an airy, functional layout with furniture kept light and open",
-                    "furniture arranged to maximize natural light across the room",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["light oak", "birch", "painted wood"],
-                accents=["matte black metal legs", "natural wool"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a simple globe pendant", "warm recessed cove lighting", "a slim floor lamp with a linen shade"]
-            ),
-            decor=DecorProfile(
-                textiles=["sheer linen curtains", "a soft wool rug in a light neutral tone", "a mix of textured cushions"],
-                accessories=["a few well-placed plants", "simple framed graphic art", "a round mirror in a light wood frame"],
-            ),
-            color_philosophy=[
-                "a classic Scandinavian palette of white, light wood and soft grey",
-                "a soft Nordic palette with a single muted accent color",
-            ],
-            textures=["matte painted walls", "light wood grain", "soft wool weave"],
-            feature_wall=["wall mouldings painted a soft muted tone"],
-        ),
-    ],
-    "premium": [
-        DesignConcept(
-            name="Luxury Hotel",
-            tier="premium",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a tailored velvet sofa with brass-capped legs",
-                    "a pair of curved lounge chairs in rich fabric",
-                    "a polished stone-top coffee table",
-                ],
-                layouts=[
-                    "furniture arranged in a curated symmetrical lounge-style grouping",
-                    "a hospitality-inspired layout with a clear central conversation zone",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["Calacatta marble", "dark walnut", "polished travertine"],
-                accents=["brushed brass", "polished chrome"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a sculptural crystal chandelier", "warm layered recessed and cove lighting", "a pair of brass table lamps"]
-            ),
-            decor=DecorProfile(
-                textiles=["deep emerald velvet cushions", "a hand-knotted wool rug", "heavy silk-blend curtains"],
-                accessories=["a curated sculptural art piece", "a large gilt-framed mirror", "a fresh floral arrangement"],
-            ),
-            color_philosophy=[
-                "a rich jewel-toned palette against warm neutral walls",
-                "a deep charcoal and gold-accented palette",
-            ],
-            textures=["polished marble veining", "a brushed brass finish", "plush velvet weave"],
-            feature_wall=["a marble and dark wood panel wall with brass inlay"],
-        ),
-        DesignConcept(
-            name="Modern Luxury",
-            tier="premium",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a sleek low-profile leather sofa",
-                    "a sculptural modern accent chair",
-                    "a polished stone waterfall-edge coffee table",
-                ],
-                layouts=[
-                    "furniture arranged in clean, confident lines with generous negative space",
-                    "a curated minimal layout that lets each piece stand out",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["polished marble", "dark smoked oak", "brushed concrete-look stone"],
-                accents=["matte black brass", "polished chrome"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a sculptural geometric chandelier", "warm layered recessed lighting", "a minimalist brass floor lamp"]
-            ),
-            decor=DecorProfile(
-                textiles=["a plush high-pile rug", "sheer floor-to-ceiling curtains", "a leather-and-bouclé cushion mix"],
-                accessories=["a single large-scale abstract artwork", "a sculptural floor vase", "a sleek round mirror"],
-            ),
-            color_philosophy=[
-                "a monochrome palette with a single bold accent",
-                "a cool luxury palette of charcoal, white and brushed metal",
-            ],
-            textures=["a polished marble surface", "smoked wood grain", "a brushed metal finish"],
-            feature_wall=["a polished stone feature wall with integrated lighting"],
-        ),
-        DesignConcept(
-            name="Boutique Hotel",
-            tier="premium",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a curved velvet banquette-style sofa",
-                    "an eclectic mix of one statement chair and one classic armchair",
-                    "a brass-and-stone side table",
-                ],
-                layouts=[
-                    "an intimate, layered furniture arrangement with distinct cozy zones",
-                    "a boutique-style layout mixing lounge and display areas",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["dark walnut", "veined marble", "warm brass"],
-                accents=["aged brass", "smoked glass"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a statement rattan or brass pendant", "warm layered cove and accent lighting", "a pair of eclectic table lamps"]
-            ),
-            decor=DecorProfile(
-                textiles=["a richly patterned wool rug", "heavy jewel-toned curtains", "a velvet-and-linen cushion mix"],
-                accessories=["curated vintage-inspired decor objects", "a gallery wall of framed art", "a large statement mirror"],
-            ),
-            color_philosophy=[
-                "a moody jewel-toned palette with warm brass accents",
-                "a rich layered palette of burgundy, forest green and gold",
-            ],
-            textures=["a veined marble surface", "aged brass patina", "plush velvet weave"],
-            feature_wall=["a richly textured accent wall with brass detailing"],
-        ),
-        DesignConcept(
-            name="Quiet Luxury",
-            tier="premium",
-            furniture=FurnitureProfile(
-                styles=[
-                    "an understated linen-upholstered sofa with subtle tailoring",
-                    "a single refined wood accent chair",
-                    "a honed-stone coffee table",
-                ],
-                layouts=[
-                    "furniture arranged with restrained, deliberate spacing",
-                    "a calm, curated layout with no piece competing for attention",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["honed marble", "light walnut", "natural travertine"],
-                accents=["brushed brass", "matte bronze"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a minimal sculptural chandelier", "soft layered recessed and cove lighting", "a single elegant floor lamp"]
-            ),
-            decor=DecorProfile(
-                textiles=["a subtle high-quality wool rug", "natural linen curtains", "understated cashmere-blend cushions"],
-                accessories=["one refined sculptural object", "a single large plant", "a thin-framed mirror in brushed brass"],
-            ),
-            color_philosophy=[
-                "a muted quiet-luxury palette of warm stone, cream and soft taupe",
-                "an understated tonal palette with almost no contrast",
-            ],
-            textures=["honed matte stone", "natural linen weave", "a brushed brass finish"],
-            feature_wall=["a subtly textured stone-clad feature wall"],
-        ),
-        DesignConcept(
-            name="Designer Penthouse",
-            tier="premium",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a sculptural Italian-style leather sofa",
-                    "a designer accent chair with a sculptural frame",
-                    "a sculptural marble-and-metal coffee table",
-                ],
-                layouts=[
-                    "a bold, gallery-like furniture arrangement with dramatic negative space",
-                    "furniture arranged to frame a single dramatic focal point",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["book-matched marble", "dark smoked walnut", "polished terrazzo"],
-                accents=["polished brass", "black chrome"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a dramatic sculptural chandelier", "architectural cove and accent lighting", "a designer floor lamp with a sculptural silhouette"]
-            ),
-            decor=DecorProfile(
-                textiles=["a bold abstract-pattern rug", "floor-to-ceiling sheer drapery", "a sculptural leather-and-silk cushion mix"],
-                accessories=["a large-scale statement art piece", "a sculptural floor sculpture", "an oversized designer mirror"],
-            ),
-            color_philosophy=[
-                "a bold high-contrast palette of black, cream and brushed metal",
-                "a dramatic monochrome palette with one striking accent",
-            ],
-            textures=["book-matched marble veining", "a polished terrazzo surface", "smoked wood grain"],
-            feature_wall=["a dramatic book-matched marble feature wall"],
-        ),
-        DesignConcept(
-            name="Modern Classic",
-            tier="premium",
-            furniture=FurnitureProfile(
-                styles=[
-                    "a tailored roll-arm sofa in a refined fabric",
-                    "a pair of classic wingback-inspired accent chairs",
-                    "a polished wood coffee table with brass detailing",
-                ],
-                layouts=[
-                    "a balanced, formal furniture arrangement anchored by a rug",
-                    "furniture arranged in a timeless symmetrical grouping",
-                ],
-            ),
-            materials=MaterialProfile(
-                primary=["dark walnut", "polished marble", "painted wood millwork"],
-                accents=["polished brass", "brushed bronze"],
-            ),
-            lighting=LightingProfile(
-                fixtures=["a classic crystal or brass chandelier", "warm layered recessed and cove lighting", "a pair of elegant brass table lamps"]
-            ),
-            decor=DecorProfile(
-                textiles=["a fine wool-silk blend rug", "tailored silk-blend curtains", "a velvet-and-linen cushion mix"],
-                accessories=["a curated pair of classic framed artworks", "an elegant brass table lamp", "a gilt-framed mirror"],
-            ),
-            color_philosophy=[
-                "a timeless palette of cream, navy and warm gold accents",
-                "a classic neutral palette with rich brass warmth",
-            ],
-            textures=["a polished marble surface", "a brushed brass finish", "fine wool-silk weave"],
-            feature_wall=["wall mouldings paired with a marble or wood panel inset"],
-        ),
-    ],
+
+@dataclass(frozen=True)
+class StyleElementPool:
+    seating: list[str]  # sofas / lounge seating
+    coffee_tables: list[str]
+    dining_tables: list[str]
+    chairs: list[str]  # accent/dining chairs
+    rugs: list[str]
+    artwork: list[str]
+    mirrors: list[str]
+    plants: list[str]
+    lighting: list[str]  # fixture TYPE; color temperature stays tier-level
+    fabrics: list[str]  # upholstery/textile material variations
+    accessories: list[str]  # decorative objects
+
+
+STYLE_ELEMENT_POOLS: dict[str, StyleElementPool] = {
+    "Modern": StyleElementPool(
+        seating=["a low-profile sofa with tapered metal legs", "a streamlined sectional with clean, straight lines"],
+        coffee_tables=["a sculptural glass-and-metal coffee table", "a low rectangular coffee table with a lacquered top"],
+        dining_tables=["a streamlined dining table with a lacquered finish", "a rectangular dining table with slim metal legs"],
+        chairs=["slim-armed accent chairs with a molded shell design", "dining chairs with a simple cantilevered frame"],
+        rugs=["a low-pile rug with a subtle geometric weave", "a flatweave rug with clean linear patterning"],
+        artwork=["a large abstract canvas in a slim frame", "a set of minimalist line-art prints"],
+        mirrors=["a frameless floating mirror", "a slim metal-framed rectangular mirror"],
+        plants=["a single sculptural potted plant in a cylindrical planter", "a small cluster of potted succulents"],
+        lighting=["a sleek linear pendant fixture", "recessed track lighting with slim fixtures", "a minimalist sculptural floor lamp"],
+        fabrics=["a smooth performance-weave upholstery", "a matte bouclé upholstery"],
+        accessories=["a set of sculptural ceramic objects", "a minimalist geometric vase"],
+    ),
+    "Minimalist": StyleElementPool(
+        seating=["a low, armless sofa in a single solid form", "a compact sofa with no visible ornamentation"],
+        coffee_tables=["a simple slab-style coffee table", "a low cube-shaped side table"],
+        dining_tables=["an unadorned rectangular dining table", "a simple round dining table on a single pedestal"],
+        chairs=["backless stools in a single material", "simple armless dining chairs with no pattern"],
+        rugs=["a plain low-pile rug in a single tone", "a simple flatweave rug with no pattern"],
+        artwork=["a single small framed print", "one understated abstract piece"],
+        mirrors=["a simple unframed mirror", "a thin rectangular mirror with no ornamentation"],
+        plants=["one small potted plant in a plain ceramic pot", "a single minimal cactus in a simple planter"],
+        lighting=["a single unobtrusive pendant", "a plain flush-mount ceiling light", "a slim architectural floor lamp"],
+        fabrics=["a plain matte cotton upholstery", "a smooth solid-weave fabric"],
+        accessories=["a single ceramic bowl", "one small sculptural object, kept minimal"],
+    ),
+    "Scandinavian": StyleElementPool(
+        seating=["a light-wood-framed sofa with soft upholstery", "a simple sofa with slim tapered wooden legs"],
+        coffee_tables=["a round light-oak coffee table", "a simple pale-wood coffee table with turned legs"],
+        dining_tables=["a pale birch dining table", "a simple light-wood dining table with rounded edges"],
+        chairs=["a simple wishbone-style dining chair set", "light-wood chairs with a woven cord seat"],
+        rugs=["a soft wool rug with a light woven texture", "a simple flatweave rug in a natural fiber"],
+        artwork=["a set of simple framed graphic prints", "a single botanical print in a light wood frame"],
+        mirrors=["a round mirror in a light wood frame", "an oval mirror with a slim pale frame"],
+        plants=["a few well-placed potted plants in simple ceramic pots", "a tall leafy plant in a woven basket planter"],
+        lighting=["a simple globe pendant", "a slim floor lamp with a fabric shade", "a woven paper lantern fixture"],
+        fabrics=["a soft brushed wool upholstery", "a natural linen-cotton blend"],
+        accessories=["a collection of simple handmade ceramics", "a woven basket used as a decorative accent"],
+    ),
+    "Japandi": StyleElementPool(
+        seating=["a low-profile oak-framed sofa with tapered wood legs", "a curved bouclé accent sofa"],
+        coffee_tables=["a minimalist ash coffee table", "a low rounded-edge wood coffee table"],
+        dining_tables=["a platform-style dining table in natural wood", "a simple oak dining table with rounded corners"],
+        chairs=["a curved bouclé accent chair", "simple wood-framed dining chairs with a woven seat"],
+        rugs=["a jute or wool-blend rug with a natural weave", "a low-pile rug in a raw fiber texture"],
+        artwork=["a single dried-branch arrangement as a wall accent", "a minimalist ink-wash style print"],
+        mirrors=["a round mirror in a thin natural wood frame", "a simple unlacquered wood-framed mirror"],
+        plants=["a single sculptural plant in a handmade ceramic planter", "a small bonsai-style potted plant"],
+        lighting=["a paper pendant lantern", "a slim linear recessed light", "a simple ceramic table lamp"],
+        fabrics=["a raw linen upholstery", "a nubby natural-fiber weave"],
+        accessories=["handmade pottery bowls in muted tones", "a small collection of natural stone objects"],
+    ),
+    "Industrial": StyleElementPool(
+        seating=["a low leather sofa with exposed metal framing", "a boxy sofa with visible rivet detailing"],
+        coffee_tables=["a reclaimed-wood-and-metal coffee table", "a low coffee table on a raw steel-pipe frame"],
+        dining_tables=["a metal-framed dining table with a raw wood top", "a dining table with a concrete-look top and metal legs"],
+        chairs=["metal-framed stools with a worn leather seat", "dining chairs with a bent-metal frame"],
+        rugs=["a flatweave rug in a raw natural fiber", "a low-pile rug with a distressed pattern"],
+        artwork=["a large-scale black-and-white photograph", "a metal-framed graphic print"],
+        mirrors=["a round mirror in a matte black metal frame", "a mirror with an exposed rivet-style frame"],
+        plants=["a tall plant in a raw metal planter", "a potted plant in a concrete-look pot"],
+        lighting=["an Edison-style bulb pendant", "a matte black pipe-frame floor lamp", "a caged wall sconce"],
+        fabrics=["a worn-look leather upholstery", "a heavy canvas weave"],
+        accessories=["reclaimed wood decorative crates", "a set of matte metal decorative objects"],
+    ),
+    "Mediterranean": StyleElementPool(
+        seating=["a rustic wood-framed sofa with woven detailing", "a low sofa with a linen-blend upholstery over a carved wood frame"],
+        coffee_tables=["a hand-carved wood coffee table", "a low coffee table with a mosaic-tiled top"],
+        dining_tables=["a rustic wood dining table with turned legs", "a dining table with a hand-finished wood top"],
+        chairs=["wrought-iron-framed dining chairs with woven seats", "rustic wood dining chairs with a rush-woven seat"],
+        rugs=["a hand-woven textured rug", "a flatweave rug with a traditional motif"],
+        artwork=["a hand-painted ceramic wall plate display", "a framed botanical or coastal-inspired print"],
+        mirrors=["a mirror with an arched wrought-iron frame", "a mirror framed in hand-carved wood"],
+        plants=["a potted olive- or citrus-style plant in a terracotta pot", "trailing greenery in a glazed ceramic planter"],
+        lighting=["a wrought-iron lantern-style pendant", "a hand-blown glass table lamp", "a wall sconce with a wrought-iron frame"],
+        fabrics=["a woven natural-fiber upholstery", "a textured linen blend with hand-loomed detailing"],
+        accessories=["hand-painted decorative tile accents", "a collection of glazed ceramic vessels"],
+    ),
+    "Spanish": StyleElementPool(
+        seating=["a rustic wood-framed sofa with turned wood legs", "a low sofa with leather-and-linen upholstery"],
+        coffee_tables=["a hand-carved wood coffee table", "a low coffee table with a wrought-iron base"],
+        dining_tables=["a rustic wood dining table with wrought-iron accents", "a dark-wood dining table with hand-carved legs"],
+        chairs=["high-back wood dining chairs with leather seats", "dining chairs with a hand-carved wood frame"],
+        rugs=["a hand-woven rug with a traditional pattern", "a textured flatweave rug"],
+        artwork=["a decorative tile mosaic wall accent", "a framed piece with a traditional motif"],
+        mirrors=["a mirror framed in hand-carved dark wood", "a mirror with an ornate wrought-iron surround"],
+        plants=["a potted plant in a hand-painted terracotta pot", "trailing greenery in a glazed talavera-style planter"],
+        lighting=["a wrought-iron chandelier-style pendant", "a hand-forged wall sconce", "a ceramic table lamp with a hand-painted base"],
+        fabrics=["a textured woven upholstery", "a heavy embroidered fabric accent"],
+        accessories=["hand-painted decorative tiles as accents", "a collection of glazed terracotta pottery"],
+    ),
+    "Traditional": StyleElementPool(
+        seating=["a tailored roll-arm sofa with a classic silhouette", "a skirted sofa with a formal, tailored shape"],
+        coffee_tables=["a carved wood coffee table", "a coffee table with turned legs and a wood-veneer top"],
+        dining_tables=["a formal wood dining table with detailed legs", "a dining table with a traditional pedestal base"],
+        chairs=["a set of classic wingback-inspired dining chairs", "dining chairs with a carved wood frame and upholstered seat"],
+        rugs=["a patterned wool-blend rug", "a rug with a classic border motif"],
+        artwork=["a curated pair of classic framed artworks", "a formal gallery-style art arrangement"],
+        mirrors=["a mirror in a detailed carved wood frame", "an oval mirror with a classic moulded frame"],
+        plants=["a formal potted plant in a classic urn-style planter", "a well-manicured potted arrangement"],
+        lighting=["a classic drum-shade pendant", "a pair of fabric-shade table lamps", "a traditional multi-arm ceiling fixture"],
+        fabrics=["a fine tailored upholstery fabric", "a subtly patterned woven fabric"],
+        accessories=["a curated collection of classic decorative objects", "a formal display of framed keepsakes"],
+    ),
+    "Luxury": StyleElementPool(
+        seating=["a tailored velvet sofa with sculptural legs", "a low sofa upholstered in a rich fabric with a sculptural frame"],
+        coffee_tables=["a polished stone-top coffee table", "a coffee table with a sculptural metal base and glass top"],
+        dining_tables=["a designer dining table with a sculptural base", "a dining table with a polished stone top"],
+        chairs=["a set of upholstered dining chairs with metal detailing", "dining chairs with a sculptural frame and plush upholstery"],
+        rugs=["a hand-knotted wool rug", "a plush high-pile designer rug"],
+        artwork=["a curated large-scale statement art piece", "a gallery-quality framed artwork"],
+        mirrors=["a large gilt-framed mirror", "a sculptural designer mirror"],
+        plants=["a large statement plant in a designer planter", "a curated fresh floral arrangement"],
+        lighting=["a sculptural crystal chandelier", "a pair of designer table lamps", "layered architectural cove lighting"],
+        fabrics=["a plush velvet upholstery", "a fine silk-blend fabric"],
+        accessories=["a curated sculptural art object", "a collection of designer decorative accessories"],
+    ),
 }
-
-
-def _representative_tier_specs() -> dict[str, dict[str, str]]:
-    """A STABLE (non-randomized) per-tier summary for app/providers/gemini.py's
-    materials/pricing feature only - see the module docstring's TIER_SPECS
-    paragraph. Derives from each tier's first DesignConcept so there's one
-    source of truth for real material/style vocabulary instead of a second
-    hand-maintained copy that could drift out of sync with DESIGN_CONCEPTS.
-    """
-    result: dict[str, dict[str, str]] = {}
-    for tier, concepts in DESIGN_CONCEPTS.items():
-        concept = concepts[0]
-        materials_text = f"{concept.materials.primary[0]} with {concept.materials.accents[0]} accents"
-        result[tier] = {
-            "label": TIER_LABELS[tier],
-            "lighting_temp": TIER_LIGHTING_TEMP[tier],
-            "ceiling": TIER_CEILING[tier],
-            "feature_wall": concept.feature_wall[0] if concept.feature_wall else "",
-            "materials": materials_text,
-            "density": TIER_DENSITY[tier],
-            "structure_reminder": TIER_STRUCTURE_REMINDER[tier],
-            "paint": concept.color_philosophy[0],
-            "flooring": TIER_FLOORING[tier][0],
-            "palette": concept.color_philosophy[0],
-            "decor": concept.decor.accessories[0],
-        }
-    return result
-
-
-# Consumed only by app/providers/gemini.py's materials pipeline - see module
-# docstring. NOT used by build_prompt() below.
-TIER_SPECS: dict[str, dict[str, str]] = _representative_tier_specs()
 
 
 # An imperative structural-lock instruction - the single most important sentence
@@ -725,16 +423,17 @@ ROOM_TYPE_COMMON_SENSE = (
     "room or space this is."
 )
 
-# Nudges toward real variety across repeated generations of the same room. Can't
-# literally know what a previous generation looked like (no new pipeline/DB state -
-# out of scope for this change), so this leans on the model's own creative judgement
-# plus the fact that DESIGN_CONCEPTS' random concept + sub-choice selection already
-# makes structurally different output likely on its own.
+# Nudges toward real variety across repeated generations of the same room/style.
+# Can't literally know what a previous generation looked like (no new pipeline/DB
+# state - out of scope for this change), so this leans on the model's own creative
+# judgement plus the fact that the Controlled Randomness section already makes a
+# structurally different result likely on its own.
 DIVERSITY_INSTRUCTION = (
-    "Design this as a completely fresh interior concept - avoid a generic or "
-    "predictable look, and avoid repeating the same furniture style or arrangement "
-    "you might use for a typical version of this room. Make deliberate, specific "
-    "design choices, as a real interior designer would for a one-of-a-kind project."
+    "Design this as a completely fresh interior concept within the given style - "
+    "avoid a generic or predictable look, and avoid repeating the same furniture "
+    "arrangement you might use for a typical version of this room. Make deliberate, "
+    "specific design choices, as a real interior designer would for a one-of-a-kind "
+    "project."
 )
 
 _DAMAGE_REPAIR_INSTRUCTION = (
@@ -744,117 +443,186 @@ _DAMAGE_REPAIR_INSTRUCTION = (
 )
 
 
-USER_NOTES_MAX_CHARS = 150
+ADDITIONAL_INSTRUCTIONS_MAX_CHARS = 150
+# Kept as an alias - app/main.py and existing callers import this name.
+USER_NOTES_MAX_CHARS = ADDITIONAL_INSTRUCTIONS_MAX_CHARS
 
 
 def build_prompt(
     tier: str,
+    style: str,
+    palette: str,
     room_description: str | None = None,
     tier_note: str | None = None,
-    user_notes: str | None = None,
+    additional_instructions: str | None = None,
 ) -> str:
-    """Compose a natural-language EDIT instruction for the given tier.
+    """Compose a natural-language EDIT instruction for the given tier/style/palette.
 
-    Hierarchical "random within boundaries" design selection (v10): first picks
-    one DesignConcept at random from DESIGN_CONCEPTS[tier] (e.g. "Japandi" vs
-    "Transitional" for mid), then randomizes furniture style/layout, materials,
-    lighting fixture, textiles, accessories, color philosophy, and texture WITHIN
-    that concept's own option lists - see DESIGN_CONCEPTS' module-docstring
-    explanation of why this replaced flat independent attribute randomization.
-    Flooring and lighting color-temperature stay tier-level (TIER_FLOORING/
-    TIER_LIGHTING_TEMP) since they follow the real cost ladder, not aesthetic
-    concept.
+    "Random within boundaries": style and palette are REQUIRED, explicit user
+    choices (not randomized) - they're the design's fixed identity for this
+    generation. Only the individual furniture pieces/fixtures/textiles/decor
+    (STYLE_ELEMENT_POOLS[style]) are randomized per call, via random.choice() on
+    each category, so two generations of the same room/style/palette/tier still
+    produce genuinely different (but always on-style) results. Flooring and
+    lighting color-temperature stay tier-level (TIER_FLOORING/TIER_LIGHTING_TEMP)
+    since they follow the real cost ladder, not aesthetic style.
 
-    Sentence order:
-      1. Edit framing - this is a photo edit, not a fresh generation. Names the
-         chosen concept so the model commits to one coherent creative direction.
-      2. PRESERVE_STRUCTURE - the structural lock, always present, non-negotiable.
-      2b. ROOM_TYPE_COMMON_SENSE - always present.
-      3. room_description / tier_note / user_notes, if given (each optional).
-      4. Concept-driven design instructions: furniture, layout, materials,
-         flooring, lighting, ceiling, feature wall (if the tier allows one),
-         color philosophy, texture, density, decor - in the same impact-per-
-         dollar order the cost methodology uses (paint/color -> flooring ->
-         lighting -> ceiling -> feature wall -> materials -> density -> decor).
-      4b. TIER_STRUCTURE_REMINDER, if the tier has one (mid, premium) - restated
-         AFTER the material/lighting instructions rather than only up in step 2,
-         specifically to counteract vivid concept vocabulary (marble/brass/
-         velvet/etc.) that's strong enough to pull the model toward a
-         hallucinated generic room.
-      5. DIVERSITY_INSTRUCTION - nudges toward a genuinely distinct result.
-      6. Positive damage-repair instruction.
-      7. Tier exclusions as a direct "Do not include" command (from
-         NEGATIVE_ADDITIONS), only for tiers that have one (budget/mid; premium
-         has none) - this is what actually enforces the cost ceiling regardless
-         of which concept got randomly picked.
+    Sentence order follows the PROMPT PRIORITY documented in this module's
+    docstring: Geometry -> Style -> Tier -> Palette -> Additional Instructions ->
+    Controlled Randomness. Nothing lower in that order may override anything
+    higher - concretely, the Tier section's "Do not include" exclusion sentence is
+    placed immediately after the Style section so it can override any conflicting
+    material vocabulary a "premium-reading" style (e.g. Luxury) might introduce
+    before the economical/mid cost ceiling is stated.
 
     tier_note is a short, room-specific instruction from Provider.generate_tier_notes()
-    (e.g. "repaint over visible water stains on the ceiling"). user_notes is optional
-    free text the user typed in (static/index.html's style-prompt input) - capped at
-    USER_NOTES_MAX_CHARS and re-truncated here defensively (also enforced in
-    app/main.py) since a client could call the API directly with arbitrary length text.
+    (e.g. "repaint over visible water stains on the ceiling"). additional_instructions
+    is optional free text the user typed in (static/index.html's "Additional
+    Instructions" textarea) - capped at ADDITIONAL_INSTRUCTIONS_MAX_CHARS and
+    re-truncated here defensively (also enforced in app/main.py) since a client
+    could call the API directly with arbitrary length text. It is framed as a
+    refinement of the chosen style, not a replacement - if it conflicts with the
+    style, the style wins (see the sentence wording below).
     """
-    if tier not in DESIGN_CONCEPTS:
+    if tier not in TIER_LABELS:
         raise ValueError(f"unknown tier: {tier}")
+    if style not in STYLE_PROFILES:
+        raise ValueError(f"unknown style: {style}")
+    if palette not in COLOR_PROFILE:
+        raise ValueError(f"unknown palette: {palette}")
 
-    concept = random.choice(DESIGN_CONCEPTS[tier])
     label = TIER_LABELS[tier]
+    pool = STYLE_ELEMENT_POOLS[style]
 
+    # ---- 1. Preserve Room Geometry ----
     sentences = [
         f"Edit this photograph of a real room into a completely reimagined {label}, "
-        f"designed in a {concept.name} interior design style - as if a professional "
+        f"designed in a {style} interior design style - as if a professional "
         "interior designer redesigned this exact space from scratch. The output must "
         "be the same physical room, clearly recognizable.",
         PRESERVE_STRUCTURE,
         ROOM_TYPE_COMMON_SENSE,
-        "Creatively redesign the interior: vary the furniture, furniture layout, "
-        "lighting, rugs, curtains, wall art, mirrors, plants, decor, textures, "
-        "fabrics, colors, accessories, feature walls, and ceiling details freely, "
-        "while keeping the room's geometry, walls, doors, windows, and camera angle "
-        "exactly as they are.",
     ]
     if room_description:
         sentences.append(room_description)
-    if tier_note:
-        sentences.append(tier_note)
-    if user_notes:
-        sentences.append(user_notes.strip()[:USER_NOTES_MAX_CHARS])
 
-    furniture_style = random.choice(concept.furniture.styles)
-    layout = random.choice(concept.furniture.layouts)
-    primary_material = random.choice(concept.materials.primary)
-    accent_material = random.choice(concept.materials.accents)
-    fixture = random.choice(concept.lighting.fixtures)
-    textile = random.choice(concept.decor.textiles)
-    accessory = random.choice(concept.decor.accessories)
-    color = random.choice(concept.color_philosophy)
-    texture = random.choice(concept.textures)
+    # ---- 2. Interior Style ----
+    sentences.append(f"Design direction for the {style} style: {STYLE_PROFILES[style]}")
+    sentences.append(
+        "Creatively redesign the interior: vary the furniture, furniture layout, "
+        "lighting, rugs, curtains, wall art, mirrors, plants, decor, textures, "
+        "fabrics, and accessories freely within this style, while keeping the "
+        "room's geometry, walls, doors, windows, and camera angle exactly as they are."
+    )
+
+    # ---- 3. Budget Tier ----
     flooring = random.choice(TIER_FLOORING[tier])
-
-    sentences += [
-        f"Furnish the room with {furniture_style}, arranged with {layout}.",
-        f"Use {primary_material} and {accent_material} as the primary materials throughout.",
-        f"Install {flooring}.",
-        f"Light the room with {fixture}, in {TIER_LIGHTING_TEMP[tier]}.",
-        f"For the ceiling, use {TIER_CEILING[tier]}.",
-    ]
-    if concept.feature_wall:
-        sentences.append(f"For the feature wall, use {random.choice(concept.feature_wall)}.")
-    sentences += [
-        f"The overall color philosophy should be {color}, with {texture} as a defining texture.",
-        f"Furniture density: {TIER_DENSITY[tier]}.",
-        f"Add this decor: {textile} and {accessory}.",
-    ]
-
-    structure_reminder = TIER_STRUCTURE_REMINDER[tier]
-    if structure_reminder:
-        sentences.append(f"Even with these design choices, this is {structure_reminder}.")
-
-    sentences.append(DIVERSITY_INSTRUCTION)
-    sentences.append(_DAMAGE_REPAIR_INSTRUCTION)
-
+    sentences.append(
+        f"Materials and finishes should reflect a {label}: {TIER_MATERIAL_QUALITY[tier]}."
+    )
+    sentences.append(f"Install {flooring}.")
+    sentences.append(f"Use {TIER_LIGHTING_TEMP[tier]} throughout the space.")
+    sentences.append(f"For the ceiling, use {TIER_CEILING[tier]}.")
+    if TIER_FEATURE_WALL_AVAILABLE[tier]:
+        sentences.append(f"Include a feature wall styled to match the {style} design direction.")
+    sentences.append(f"Furniture density: {TIER_DENSITY[tier]}.")
     exclusions = NEGATIVE_ADDITIONS[tier]
     if exclusions:
         sentences.append(f"Do not include: {exclusions}.")
 
+    # ---- 4. Color Palette ----
+    sentences.append(
+        f"Color palette: use {COLOR_PROFILE[palette]} across the walls, furniture "
+        "upholstery, curtains, rugs, accessories, accent colors, and flooring tones "
+        "where appropriate, without changing the selected style above."
+    )
+
+    if tier_note:
+        sentences.append(tier_note)
+
+    # ---- 5. Additional Instructions (optional refinement, style always wins) ----
+    if additional_instructions:
+        cleaned = additional_instructions.strip()[:ADDITIONAL_INSTRUCTIONS_MAX_CHARS]
+        if cleaned:
+            sentences.append(
+                f"Additional refinement from the user (apply it only in a way that stays "
+                f"true to the {style} style above; if it ever conflicts with the style, "
+                f"the style wins and the instruction should be adapted, not followed "
+                f"literally): {cleaned}"
+            )
+
+    # ---- 6. Controlled Randomness ----
+    seating = random.choice(pool.seating)
+    coffee_table = random.choice(pool.coffee_tables)
+    dining_table = random.choice(pool.dining_tables)
+    chair = random.choice(pool.chairs)
+    rug = random.choice(pool.rugs)
+    artwork = random.choice(pool.artwork)
+    mirror = random.choice(pool.mirrors)
+    plant = random.choice(pool.plants)
+    fixture = random.choice(pool.lighting)
+    fabric = random.choice(pool.fabrics)
+    accessory = random.choice(pool.accessories)
+
+    sentences.append(
+        f"Furnish the room with {seating} and {coffee_table}, plus, if the space calls "
+        f"for it, {dining_table} with {chair}."
+    )
+    sentences.append(
+        f"Light the room with {fixture}, and add {rug} on the floor, {artwork} as wall "
+        f"decor, {mirror}, {plant}, and {accessory} as decorative accents."
+    )
+    sentences.append(f"Use {fabric} for upholstery and soft furnishings.")
+
+    # Restated here, AFTER every piece of vivid style/material/furniture
+    # vocabulary in the prompt (not earlier, in the Budget Tier section) - see
+    # TIER_STRUCTURE_REMINDER's module-level comment for the real drift failure
+    # this ordering fixes.
+    sentences.append(f"Even with all of these design choices, this is {TIER_STRUCTURE_REMINDER[tier]}.")
+
+    sentences.append(DIVERSITY_INSTRUCTION)
+    sentences.append(_DAMAGE_REPAIR_INSTRUCTION)
+
     return " ".join(sentences)
+
+
+def build_tier_spec(tier: str, style: str, palette: str) -> dict[str, str]:
+    """A STABLE (non-randomized) per-(tier, style, palette) summary consumed only
+    by app/providers/gemini.py's materials/pricing feature (generate_materials,
+    fallback_materials, _tier_line_items) - NOT used by build_prompt() and never
+    appears in an image-generation prompt. Materials pricing wants a consistent,
+    representative item description for SerpApi search terms, not per-call
+    jitter, so this deliberately picks the FIRST option from each relevant pool
+    rather than random.choice() - unlike build_prompt(), which is intentionally
+    randomized every call.
+
+    Because style/palette are now real per-project user choices (not an
+    internally-randomized concept), this also makes materials pricing more
+    accurate than the pre-v11 system: the priced items now reflect the design
+    the user actually asked for and will actually see rendered.
+    """
+    if tier not in TIER_LABELS:
+        raise ValueError(f"unknown tier: {tier}")
+    if style not in STYLE_PROFILES:
+        raise ValueError(f"unknown style: {style}")
+    if palette not in COLOR_PROFILE:
+        raise ValueError(f"unknown palette: {palette}")
+
+    pool = STYLE_ELEMENT_POOLS[style]
+    palette_text = COLOR_PROFILE[palette]
+
+    return {
+        "label": f"{TIER_LABELS[tier]}, {style} style",
+        "lighting_temp": TIER_LIGHTING_TEMP[tier],
+        "ceiling": TIER_CEILING[tier],
+        "feature_wall": (
+            f"a {style} feature wall in {palette_text}" if TIER_FEATURE_WALL_AVAILABLE[tier] else ""
+        ),
+        "materials": f"{TIER_MATERIAL_QUALITY[tier]}, {style} style",
+        "density": TIER_DENSITY[tier],
+        "structure_reminder": TIER_STRUCTURE_REMINDER[tier],
+        "paint": palette_text,
+        "flooring": TIER_FLOORING[tier][0],
+        "palette": palette_text,
+        "decor": pool.accessories[0],
+    }

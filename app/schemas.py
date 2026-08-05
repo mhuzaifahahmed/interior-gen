@@ -40,7 +40,9 @@ class ProjectStatusResponse(BaseModel):
     # extra field on the existing GET /api/projects/{id} response too.
     created_at: Optional[str] = None
     city: Optional[str] = None
-    user_style_notes: Optional[str] = None
+    interior_style: Optional[str] = None
+    color_palette: Optional[str] = None
+    additional_instructions: Optional[str] = None
 
 
 class HouseProjectCreateResponse(BaseModel):

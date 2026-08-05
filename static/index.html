@@ -352,8 +352,49 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 </header>
 <div class="flex flex-col gap-8">
 <div>
-<label for="style-prompt" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Style notes (optional)</label>
-<input type="text" id="style-prompt" name="style_notes" maxlength="150" placeholder="e.g. modern, cozy, bold, minimalist…" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200"/>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Interior style <span class="text-primary">*</span></label>
+<div class="relative">
+<button type="button" id="interior-style-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-2 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="interior-style-btn-label" class="text-on-surface-variant">Select a style…</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="interior-style-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30 max-h-64 overflow-y-auto" id="interior-style-menu" role="listbox">
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Modern" role="option">Modern</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Minimalist" role="option">Minimalist</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Scandinavian" role="option">Scandinavian</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Japandi" role="option">Japandi</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Industrial" role="option">Industrial</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Mediterranean" role="option">Mediterranean</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Spanish" role="option">Spanish</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Traditional" role="option">Traditional</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Luxury" role="option">Luxury</button>
+</div>
+</div>
+<input type="hidden" id="interior-style-select" name="interior_style" value=""/>
+</div>
+<div>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Color palette <span class="text-primary">*</span></label>
+<div class="relative">
+<button type="button" id="color-palette-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-2 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="color-palette-btn-label" class="text-on-surface-variant">Select a palette…</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="color-palette-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30 max-h-64 overflow-y-auto" id="color-palette-menu" role="listbox">
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Neutral" role="option">Neutral</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Earthy" role="option">Earthy</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Warm" role="option">Warm</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Cool" role="option">Cool</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Monochrome" role="option">Monochrome</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Terracotta" role="option">Terracotta</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Sage" role="option">Sage</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Black & White" role="option">Black &amp; White</button>
+</div>
+</div>
+<input type="hidden" id="color-palette-select" name="color_palette" value=""/>
+</div>
+<div>
+<label for="additional-instructions" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Additional instructions (optional)</label>
+<textarea id="additional-instructions" name="additional_instructions" maxlength="150" rows="2" placeholder="e.g. blue sofa, more indoor plants, reading corner…" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface resize-none focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200"></textarea>
 </div>
 <div>
 <label for="city-input" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Your city (for local material pricing)</label>
@@ -518,7 +559,7 @@ Interior&#8209;Gen
 </div>
 </footer>
 
-<div class="lightbox fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-8" id="lightbox" hidden>
+<div class="lightbox fixed inset-0 z-[65] bg-black/95 flex flex-col items-center justify-center p-8" id="lightbox" hidden>
 <button type="button" class="absolute top-6 right-6 bg-white/10 hover:bg-primary hover:text-on-primary hover:scale-110 hover:shadow-lg text-white w-10 h-10 rounded-full flex items-center justify-center text-xl transition-all duration-200" id="lightbox-close" aria-label="Close">&times;</button>
 <img id="lightbox-img" alt="" class="max-w-[90vw] max-h-[78vh] object-contain"/>
 <p class="text-on-surface-variant mt-4 font-headline-sm" id="lightbox-caption"></p>
@@ -532,7 +573,7 @@ Interior&#8209;Gen
 </div>
 </div>
 
-<div class="materials-modal-overlay fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-6" id="history-modal-overlay" hidden>
+<div class="materials-modal-overlay fixed inset-0 z-[55] bg-black/70 flex items-center justify-center p-6" id="history-modal-overlay" hidden>
 <div class="materials-modal relative w-full max-w-3xl max-h-[85vh] overflow-y-auto bg-surface-container p-8 border border-outline-variant shadow-2xl">
 <button type="button" class="absolute top-4 right-4 bg-surface-container-high hover:bg-primary hover:text-on-primary hover:scale-110 hover:shadow-md text-on-surface w-9 h-9 rounded-full flex items-center justify-center text-xl transition-all duration-200" id="history-modal-close" aria-label="Close">&times;</button>
 <h3 class="font-headline-sm text-headline-sm text-on-surface mb-2 pr-10">Your Generation History</h3>

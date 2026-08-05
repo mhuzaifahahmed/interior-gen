@@ -84,6 +84,12 @@ def _sample_image_bytes() -> bytes:
     return buf.getvalue()
 
 
+# Interior Style + Color Palette are REQUIRED form fields (see app/main.py's
+# create_project) - every test that hits POST /api/projects needs valid values
+# for both, same as it already needs a logged-in session.
+_REQUIRED_STYLE_FIELDS = {"interior_style": "Modern", "color_palette": "Neutral"}
+
+
 def test_full_upload_and_poll_flow(monkeypatch):
     monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
     monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
@@ -91,7 +97,7 @@ def test_full_upload_and_poll_flow(monkeypatch):
     with TestClient(app) as client:
         username = _signup_and_login(client)
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-        create_res = client.post("/api/projects", files=files)
+        create_res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
         assert create_res.status_code == 200
         project_id = create_res.json()["project_id"]
 
@@ -117,7 +123,7 @@ def test_full_upload_and_poll_flow(monkeypatch):
         assert body["materials"] is None
 
 
-def test_style_notes_reach_the_generated_prompts(monkeypatch):
+def test_interior_style_and_palette_reach_the_generated_prompts(monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(main_module, "get_provider", lambda: provider)
     monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
@@ -126,17 +132,89 @@ def test_style_notes_reach_the_generated_prompts(monkeypatch):
         _signup_and_login(client)
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
         create_res = client.post(
-            "/api/projects", files=files, data={"style_notes": "modern, blue accents"}
+            "/api/projects",
+            files=files,
+            data={"interior_style": "Japandi", "color_palette": "Sage"},
         )
         assert create_res.status_code == 200
         project_id = create_res.json()["project_id"]
 
         status_res = client.get(f"/api/projects/{project_id}")
-        assert status_res.json()["status"] == "done"
+        body = status_res.json()
+        assert body["status"] == "done"
+        assert body["interior_style"] == "Japandi"
+        assert body["color_palette"] == "Sage"
 
     assert len(provider.image_prompts) == 3
     for prompt in provider.image_prompts:
-        assert "modern, blue accents" in prompt
+        assert "Japandi" in prompt
+        assert "sage green" in prompt
+
+
+def test_additional_instructions_reach_the_generated_prompts(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/projects",
+            files=files,
+            data={**_REQUIRED_STYLE_FIELDS, "additional_instructions": "blue sofa"},
+        )
+        assert create_res.status_code == 200
+        project_id = create_res.json()["project_id"]
+
+        status_res = client.get(f"/api/projects/{project_id}")
+        body = status_res.json()
+        assert body["status"] == "done"
+        assert body["additional_instructions"] == "blue sofa"
+
+    assert len(provider.image_prompts) == 3
+    for prompt in provider.image_prompts:
+        assert "blue sofa" in prompt
+
+
+def test_missing_interior_style_is_rejected():
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        res = client.post("/api/projects", files=files, data={"color_palette": "Neutral"})
+        assert res.status_code == 400
+
+
+def test_missing_color_palette_is_rejected():
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        res = client.post("/api/projects", files=files, data={"interior_style": "Modern"})
+        assert res.status_code == 400
+
+
+def test_invalid_interior_style_is_rejected():
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        res = client.post(
+            "/api/projects",
+            files=files,
+            data={"interior_style": "Not A Real Style", "color_palette": "Neutral"},
+        )
+        assert res.status_code == 400
+
+
+def test_invalid_color_palette_is_rejected():
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        res = client.post(
+            "/api/projects",
+            files=files,
+            data={"interior_style": "Modern", "color_palette": "Not A Real Palette"},
+        )
+        assert res.status_code == 400
 
 
 def test_city_triggers_materials_for_every_tier(monkeypatch):
@@ -147,7 +225,9 @@ def test_city_triggers_materials_for_every_tier(monkeypatch):
     with TestClient(app) as client:
         _signup_and_login(client)
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-        create_res = client.post("/api/projects", files=files, data={"city": "Karachi"})
+        create_res = client.post(
+            "/api/projects", files=files, data={**_REQUIRED_STYLE_FIELDS, "city": "Karachi"}
+        )
         assert create_res.status_code == 200
         project_id = create_res.json()["project_id"]
 
@@ -168,14 +248,14 @@ def test_rejects_unsupported_file_type():
     with TestClient(app) as client:
         _signup_and_login(client)
         files = {"file": ("doc.pdf", b"not-an-image", "application/pdf")}
-        res = client.post("/api/projects", files=files)
+        res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
         assert res.status_code == 400
 
 
 def test_create_project_requires_login():
     with TestClient(app) as client:
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-        res = client.post("/api/projects", files=files)
+        res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
         assert res.status_code == 401
 
 
@@ -193,7 +273,7 @@ def test_cannot_view_another_users_project(monkeypatch):
     with TestClient(app) as client_a:
         _signup_and_login(client_a)
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-        create_res = client_a.post("/api/projects", files=files)
+        create_res = client_a.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
         project_id = create_res.json()["project_id"]
 
     with TestClient(app) as client_b:
@@ -209,8 +289,8 @@ def test_list_projects_returns_own_projects_newest_first(monkeypatch):
     with TestClient(app) as client:
         _signup_and_login(client)
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-        first = client.post("/api/projects", files=files).json()["project_id"]
-        second = client.post("/api/projects", files=files).json()["project_id"]
+        first = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS).json()["project_id"]
+        second = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS).json()["project_id"]
 
         res = client.get("/api/projects")
         assert res.status_code == 200
@@ -232,7 +312,7 @@ def test_list_projects_excludes_other_users(monkeypatch):
     with TestClient(app) as client_a:
         _signup_and_login(client_a)
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-        client_a.post("/api/projects", files=files)
+        client_a.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
 
     with TestClient(app) as client_b:
         _signup_and_login(client_b)

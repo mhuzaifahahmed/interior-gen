@@ -10,7 +10,9 @@ const previewImg = document.getElementById("preview-img");
 const previewFilename = document.getElementById("preview-filename");
 const generateBtn = document.getElementById("generate-btn");
 const removePhotoBtn = document.getElementById("remove-photo-btn");
-const stylePromptInput = document.getElementById("style-prompt");
+const interiorStyleSelect = document.getElementById("interior-style-select");
+const colorPaletteSelect = document.getElementById("color-palette-select");
+const additionalInstructionsInput = document.getElementById("additional-instructions");
 const cityInput = document.getElementById("city-input");
 
 const progressCard = document.getElementById("progress-card");
@@ -184,6 +186,114 @@ document.addEventListener("click", (e) => {
 navHistoryBtn.addEventListener("click", () => {
   closeNavUserMenu();
   openHistoryModal();
+});
+
+/* ---------- Interior Style / Color Palette dropdowns (Room Redesign form) ---------- */
+/* Native <select> elements can't be animated - their popup renders outside the
+   DOM, out of CSS/JS reach - so these are custom button+listbox dropdowns
+   reusing the exact same "morph" open/close recipe as #nav-user-menu above
+   (per CLAUDE.md's dropdown convention: every dropdown on this site uses this
+   same animation for visual consistency). A hidden <input> (interior-style-
+   select/color-palette-select - same ids the rest of app.js already reads
+   .value from and listens for "change" on) carries the actual form value, so
+   nothing else in the submit/validation/pending-generation code needs to know
+   these aren't real <select> elements. */
+
+function setupMorphDropdown({ btnId, chevronId, menuId, hiddenInputId, placeholder }) {
+  const btn = document.getElementById(btnId);
+  const chevron = document.getElementById(chevronId);
+  const menu = document.getElementById(menuId);
+  const labelEl = document.getElementById(`${btnId}-label`);
+  const hiddenInput = document.getElementById(hiddenInputId);
+  let tl = null;
+
+  function isOpen() {
+    return !menu.classList.contains("hidden");
+  }
+
+  function open() {
+    if (isOpen()) return;
+    btn.setAttribute("aria-expanded", "true");
+    chevron.style.transform = "rotate(180deg)";
+    menu.classList.remove("hidden");
+
+    if (typeof gsap === "undefined" || prefersReducedMotion) return;
+
+    if (tl) tl.kill();
+    const items = Array.from(menu.children);
+    gsap.set(menu, { transformOrigin: "top", scale: 0.92, opacity: 0, y: -8 });
+    gsap.set(items, { opacity: 0, y: -6 });
+
+    tl = gsap.timeline();
+    tl.to(menu, { scale: 1, opacity: 1, y: 0, duration: 0.32, ease: "back.out(1.7)" }).to(
+      items,
+      { opacity: 1, y: 0, duration: 0.22, ease: "power2.out", stagger: 0.05 },
+      "-=0.18"
+    );
+  }
+
+  function close() {
+    if (!isOpen()) return;
+    btn.setAttribute("aria-expanded", "false");
+    chevron.style.transform = "rotate(0deg)";
+
+    if (typeof gsap === "undefined" || prefersReducedMotion) {
+      menu.classList.add("hidden");
+      return;
+    }
+
+    if (tl) tl.kill();
+    tl = gsap.timeline({
+      onComplete: () => {
+        menu.classList.add("hidden");
+        gsap.set(menu, { clearProps: "transform,opacity" });
+      },
+    });
+    tl.to(menu, { scale: 0.9, opacity: 0, y: -6, duration: 0.16, ease: "power1.in" });
+  }
+
+  function setValue(value) {
+    hiddenInput.value = value;
+    labelEl.textContent = value || placeholder;
+    labelEl.classList.toggle("text-on-surface-variant", !value);
+    labelEl.classList.toggle("text-on-surface", !!value);
+    // Existing code (updateGenerateButtonState, etc.) listens for "change" on
+    // this hidden input, same as it would on a real <select>.
+    hiddenInput.dispatchEvent(new Event("change"));
+  }
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    isOpen() ? close() : open();
+  });
+
+  menu.querySelectorAll("[data-value]").forEach((opt) => {
+    opt.addEventListener("click", () => {
+      setValue(opt.dataset.value);
+      close();
+    });
+  });
+
+  document.addEventListener("click", (e) => {
+    if (isOpen() && !menu.contains(e.target) && !btn.contains(e.target)) close();
+  });
+
+  return { setValue, close };
+}
+
+const interiorStyleDropdown = setupMorphDropdown({
+  btnId: "interior-style-btn",
+  chevronId: "interior-style-chevron",
+  menuId: "interior-style-menu",
+  hiddenInputId: "interior-style-select",
+  placeholder: "Select a style…",
+});
+const colorPaletteDropdown = setupMorphDropdown({
+  btnId: "color-palette-btn",
+  chevronId: "color-palette-chevron",
+  menuId: "color-palette-menu",
+  hiddenInputId: "color-palette-select",
+  placeholder: "Select a palette…",
 });
 
 const houseUploadView = document.getElementById("house-upload-view");
@@ -370,8 +480,11 @@ async function restorePendingGeneration() {
   currentTab = pending.tab;
 
   if (pending.tab === "room") {
-    stylePromptInput.value = pending.styleNotes || "";
+    interiorStyleDropdown.setValue(pending.interiorStyle || "");
+    colorPaletteDropdown.setValue(pending.colorPalette || "");
+    additionalInstructionsInput.value = pending.additionalInstructions || "";
     cityInput.value = pending.city || "";
+    updateGenerateButtonState();
   } else {
     houseLengthInput.value = pending.length || "";
     houseWidthInput.value = pending.width || "";
@@ -514,6 +627,14 @@ let stallTimer = null;
 
 /* ---------- File selection ---------- */
 
+// Generate button stays disabled until every REQUIRED field is filled: a photo,
+// an Interior Style, and a Color Palette (Additional Instructions and city stay
+// optional). Re-checked on every relevant change instead of only on file select,
+// since a user can pick the photo first and the dropdowns after, in any order.
+function updateGenerateButtonState() {
+  generateBtn.disabled = !(selectedFile && interiorStyleSelect.value && colorPaletteSelect.value);
+}
+
 function setSelectedFile(file) {
   if (!file) return;
   selectedFile = file;
@@ -524,7 +645,7 @@ function setSelectedFile(file) {
     previewFilename.textContent = file.name;
     dropzoneEmpty.hidden = true;
     dropzonePreview.hidden = false;
-    generateBtn.disabled = false;
+    updateGenerateButtonState();
   };
   reader.readAsDataURL(file);
 }
@@ -532,12 +653,14 @@ function setSelectedFile(file) {
 function clearSelectedFile() {
   selectedFile = null;
   fileInput.value = "";
-  generateBtn.disabled = true;
+  updateGenerateButtonState();
   dropzoneEmpty.hidden = false;
   dropzonePreview.hidden = true;
 }
 
 fileInput.addEventListener("change", () => setSelectedFile(fileInput.files[0]));
+interiorStyleSelect.addEventListener("change", updateGenerateButtonState);
+colorPaletteSelect.addEventListener("change", updateGenerateButtonState);
 
 removePhotoBtn.addEventListener("click", (e) => {
   // Stop this from bubbling up to the <label> (which would reopen the file picker)
@@ -580,7 +703,10 @@ if (savedCity) cityInput.value = savedCity;
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!selectedFile) return;
+  // Belt-and-suspenders: mirrors updateGenerateButtonState()'s gating in case a
+  // form submits via Enter-key implicit submission even while the button itself
+  // is disabled (browser behavior here is inconsistent).
+  if (!selectedFile || !interiorStyleSelect.value || !colorPaletteSelect.value) return;
 
   const city = cityInput.value.trim();
 
@@ -603,7 +729,9 @@ form.addEventListener("submit", async (e) => {
 
   const formData = new FormData();
   formData.append("file", selectedFile);
-  formData.append("style_notes", stylePromptInput.value.trim());
+  formData.append("interior_style", interiorStyleSelect.value);
+  formData.append("color_palette", colorPaletteSelect.value);
+  formData.append("additional_instructions", additionalInstructionsInput.value.trim());
   formData.append("city", city);
 
   let projectId;
@@ -614,7 +742,9 @@ form.addEventListener("submit", async (e) => {
         fileName: selectedFile.name,
         fileType: selectedFile.type,
         fileDataUrl: previewImg.src,
-        styleNotes: stylePromptInput.value,
+        interiorStyle: interiorStyleSelect.value,
+        colorPalette: colorPaletteSelect.value,
+        additionalInstructions: additionalInstructionsInput.value,
         city: cityInput.value,
       });
       window.location.href = "/login";
@@ -1120,7 +1250,9 @@ function showError(message) {
 function resetToUpload() {
   stopProgressMessages();
   clearSelectedFile();
-  stylePromptInput.value = "";
+  interiorStyleDropdown.setValue("");
+  colorPaletteDropdown.setValue("");
+  additionalInstructionsInput.value = "";
   showState("upload");
 }
 
