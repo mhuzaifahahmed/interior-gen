@@ -532,6 +532,34 @@ state would render **visible even while "hidden"**. Fixed with one global rule i
 `.hidden = ` — pick one mechanism per element, never both (see `nav-auth-guest`/`nav-auth-user` for the
 classList-only pattern used for elements *not* driven by the native attribute).
 
+**Motion / GSAP animation conventions** — GSAP is loaded via CDN in `index.html`'s `<head>`
+(`gsap.min.js` + `ScrollTrigger.min.js`, `gsap.registerPlugin(ScrollTrigger)` near the top of
+`app.js`), governed by the `gsap-transitions` skill (`.claude/skills/gsap-transitions/SKILL.md`) —
+read it before adding any new animation. Every GSAP-driven interaction in this codebase follows the
+same two rules: (1) guard with `if (typeof gsap === "undefined" || prefersReducedMotion) { ...instant
+fallback... }` so motion-sensitive users and a failed CDN load both still get a fully working, static
+UI, never a broken/invisible one; (2) for any **staggered** tween inside a `gsap.timeline()`, use
+`gsap.set()` for the start state followed by `.to()` for the end state — never `.from()` + `stagger`
++ an overlapping timeline position, which was observed live in this project to silently freeze at its
+start values with the timeline itself reporting `progress() === 1`. See the skill file for the full
+incident writeup.
+
+**Dropdown menus specifically use a "morph" open/close animation, not an instant hidden-class
+toggle** — established by the nav account menu (`#nav-user-menu` in `index.html`, `openNavUserMenu()`/
+`closeNavUserMenu()` in `app.js`) at the user's explicit request that *every* dropdown added to this
+site going forward reuse the same motion, "so everywhere having the same animation looks more
+uniform." The reference implementation: on open, `gsap.set()` the menu to `{ transformOrigin: "top
+right"` (or whichever corner it's anchored from), `scale: 0.85, opacity: 0, y: -8 }`, then `.to()` it
+to `{ scale: 1, opacity: 1, y: 0, duration: 0.32, ease: "back.out(1.7)" }` for a springy "pop," with
+its direct children staggered in right after (`gsap.set` to `{ opacity: 0, y: -6 }`, `.to()` to
+`{ opacity: 1, y: 0, duration: 0.22, ease: "power2.out", stagger: 0.05 }`, started at `"-=0.18"` so it
+overlaps the container's own settle). Close is a quicker, plainer fade (`scale: 0.9, opacity: 0,
+y: -6, duration: 0.16, ease: "power1.in"`), with the `hidden` class re-applied only in `onComplete` —
+never before the fade finishes, or the menu would visibly snap away instead of dissolving. Kill any
+in-flight timeline (`if (tl) tl.kill()`) before starting a new open/close, same rapid-click-safety
+discipline as the tab-switch timeline. **When adding a new dropdown, copy this exact easing/duration/
+stagger recipe rather than inventing a new one** — that consistency is the whole point of the request.
+
 Structure preserved from the original vanilla build: single-screen, clarity-first flow per tab (upload
 → progress → results/error, one state visible at a time via `showState()`/`showHouseState()` in
 `app.js`), a **real-signal-driven progress stepper** (4 stages per tab, keyed off real poll-response
