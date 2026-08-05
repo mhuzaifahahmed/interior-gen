@@ -1,7 +1,11 @@
 from app.pipeline.prompts import (
+    DESIGN_CONCEPTS,
+    NEGATIVE_ADDITIONS,
     PRESERVE_STRUCTURE,
     ROOM_TYPE_COMMON_SENSE,
+    TIER_FLOORING,
     TIER_SPECS,
+    TIER_STRUCTURE_REMINDER,
     USER_NOTES_MAX_CHARS,
     build_prompt,
 )
@@ -9,23 +13,70 @@ from app.pipeline.prompts import (
 
 def test_all_tiers_present():
     assert set(TIER_SPECS.keys()) == {"economical", "mid", "premium"}
+    assert set(DESIGN_CONCEPTS.keys()) == {"economical", "mid", "premium"}
 
 
 def test_tier_specs_are_mutually_distinct():
-    # paint/flooring/palette/decor are lists (random.choice'd in build_prompt() for
-    # variety across generations, not hardcoded to one fixed phrasing) - lists
-    # aren't hashable, so each is converted to a tuple just for this fingerprint.
     seen = set()
     for tier, spec in TIER_SPECS.items():
-        fingerprint = tuple(tuple(v) if isinstance(v, list) else v for v in spec.values())
+        fingerprint = tuple(spec.values())
         assert fingerprint not in seen, f"tier {tier} duplicates another tier's spec"
         seen.add(fingerprint)
+
+
+def test_every_tier_has_multiple_design_concepts():
+    # The whole point of the hierarchical system: real variety requires more
+    # than one concept per tier to randomly choose between.
+    for tier, concepts in DESIGN_CONCEPTS.items():
+        assert len(concepts) >= 3, f"tier {tier} needs multiple concepts for real variety"
+
+
+def test_design_concepts_within_a_tier_have_distinct_names():
+    for tier, concepts in DESIGN_CONCEPTS.items():
+        names = [c.name for c in concepts]
+        assert len(names) == len(set(names)), f"tier {tier} has duplicate concept names"
+
+
+def test_economical_concepts_never_mention_luxury_materials():
+    # The real cost-ladder constraint: economical must stay under the cost
+    # ceiling regardless of which concept gets randomly picked - "random within
+    # boundaries", not "random anything".
+    banned = ("marble", "brass", "velvet", "chandelier", "gold")
+    for concept in DESIGN_CONCEPTS["economical"]:
+        blob = " ".join(
+            concept.materials.primary
+            + concept.materials.accents
+            + concept.lighting.fixtures
+            + concept.decor.textiles
+            + concept.decor.accessories
+        ).lower()
+        for word in banned:
+            assert word not in blob, f"economical concept {concept.name!r} mentions {word!r}"
+
+
+def test_only_mid_and_premium_concepts_offer_a_feature_wall():
+    # "no accent wall, no wall mouldings" is a real cost-ladder rule, not a
+    # missing field - every economical concept must have an empty feature_wall.
+    for concept in DESIGN_CONCEPTS["economical"]:
+        assert concept.feature_wall == []
+    for tier in ("mid", "premium"):
+        for concept in DESIGN_CONCEPTS[tier]:
+            assert concept.feature_wall, f"{tier} concept {concept.name!r} has no feature wall option"
 
 
 def test_build_prompt_contains_preserve_structure():
     for tier in TIER_SPECS:
         prompt = build_prompt(tier)
         assert PRESERVE_STRUCTURE in prompt
+
+
+def test_build_prompt_names_the_chosen_concept():
+    # The prompt should commit to one coherent design direction (Step 1 of the
+    # hierarchical system) - whichever concept random.choice() landed on should
+    # be named explicitly in the prompt, not left implicit.
+    prompt = build_prompt("mid")
+    chosen = next(c for c in DESIGN_CONCEPTS["mid"] if c.name in prompt)
+    assert chosen.name in prompt
 
 
 def test_build_prompt_includes_room_description_when_given():
@@ -44,27 +95,23 @@ def test_build_prompt_unknown_tier_raises():
 def test_positive_prompt_states_chandelier_exclusion_for_budget_and_mid():
     # Instruction-following models are built to follow exclusions stated directly
     # in the prompt, so the tier exclusion is a positive-prompt "Do not include: ..."
-    # sentence. Premium has no exclusions, so it should never mention chandelier.
+    # sentence. Premium legitimately has NO chandelier exclusion (some premium
+    # concepts - Luxury Hotel, Designer Penthouse, Modern Classic - genuinely
+    # include a chandelier as real lighting vocabulary), so the check for
+    # premium is that it never emits a "Do not include" sentence at all, not
+    # that the word never appears.
     for tier in ("economical", "mid"):
         prompt = build_prompt(tier)
         assert "chandelier" in prompt
         assert "Do not include" in prompt
-    assert "chandelier" not in build_prompt("premium")
+    for _ in range(10):
+        assert "Do not include" not in build_prompt("premium")
 
 
-def test_tier_paint_field_names_the_distinguishing_color():
-    # Sanity check that each tier's `paint` options collectively name its
-    # distinguishing color/quality - `paint` is now a list (random.choice'd in
-    # build_prompt() for variety across generations, not one hardcoded phrasing),
-    # so this checks the keyword shows up SOMEWHERE across the tier's own options
-    # rather than requiring every single option to repeat the same word.
-    economical_text = " ".join(TIER_SPECS["economical"]["paint"]).lower()
-    mid_text = " ".join(TIER_SPECS["mid"]["paint"]).lower()
-    premium_text = " ".join(TIER_SPECS["premium"]["paint"]).lower()
-
-    assert any(word in economical_text for word in ("sage", "cream", "beige", "ivory"))
-    assert any(word in mid_text for word in ("beige", "greige", "taupe", "ivory", "mushroom"))
-    assert any(word in premium_text for word in ("luxury", "premium", "designer", "high-end"))
+def test_negative_additions_cover_budget_and_mid_but_not_premium():
+    assert NEGATIVE_ADDITIONS["economical"]
+    assert NEGATIVE_ADDITIONS["mid"]
+    assert NEGATIVE_ADDITIONS["premium"] == ""
 
 
 def test_build_prompt_includes_tier_note_when_given():
@@ -104,15 +151,12 @@ def test_build_prompt_strips_whitespace_from_user_notes():
     assert "  cozy" not in prompt
 
 
-def test_user_notes_appear_before_tier_paint_field():
-    # user_notes should be high-priority (ahead of the tier's own generic paint
-    # description) so an explicit user request can actually steer the render,
-    # not just get appended after the tier's defaults have already been stated.
-    # `paint` is randomly chosen per call, so find whichever option actually
-    # landed in this prompt rather than assuming a fixed string.
+def test_user_notes_appear_before_concept_design_content():
+    # user_notes should be high-priority (ahead of the concept's own generic
+    # design instructions) so an explicit user request can actually steer the
+    # render, not just get appended after the concept's defaults are stated.
     prompt = build_prompt("mid", user_notes="scandinavian style")
-    chosen_paint = next(p for p in TIER_SPECS["mid"]["paint"] if p in prompt)
-    assert prompt.index("scandinavian style") < prompt.index(chosen_paint)
+    assert prompt.index("scandinavian style") < prompt.index("as the primary materials throughout")
 
 
 # ---- instruction-format invariants ----
@@ -129,13 +173,27 @@ def test_build_prompt_reads_as_an_edit_instruction_not_a_generation_spec():
         assert "same physical room" in prompt
 
 
-def test_build_prompt_includes_each_tiers_key_materials():
-    # `flooring` is randomly chosen per call (see paint's comment above) - check
-    # that whichever option was picked appears, not one fixed phrasing.
+def test_build_prompt_encourages_creative_redesign_without_overly_restrictive_wording():
+    # "only redecorated" / "preserve everything" read as overly restrictive on
+    # CONTENT (furniture/decor), not just geometry - the prompt must protect the
+    # architecture while still explicitly inviting creative redesign of contents.
     for tier in TIER_SPECS:
         prompt = build_prompt(tier)
-        assert TIER_SPECS[tier]["materials"] in prompt
-        assert any(option in prompt for option in TIER_SPECS[tier]["flooring"])
+        assert "only redecorated" not in prompt
+        assert "preserve everything" not in prompt
+        assert "Creatively redesign" in prompt
+
+
+def test_build_prompt_includes_flooring_from_the_tier_floor_ladder():
+    for tier in TIER_SPECS:
+        prompt = build_prompt(tier)
+        assert any(option in prompt for option in TIER_FLOORING[tier])
+
+
+def test_build_prompt_includes_a_material_instruction():
+    for tier in TIER_SPECS:
+        prompt = build_prompt(tier)
+        assert "as the primary materials throughout" in prompt
 
 
 def test_build_prompt_includes_positive_damage_repair_instruction():
@@ -146,6 +204,12 @@ def test_build_prompt_includes_positive_damage_repair_instruction():
         prompt = build_prompt(tier)
         assert "Repair and clean" in prompt
         assert "move-in ready" in prompt
+
+
+def test_build_prompt_includes_diversity_instruction():
+    for tier in TIER_SPECS:
+        prompt = build_prompt(tier)
+        assert "fresh interior concept" in prompt
 
 
 def test_build_prompt_is_natural_language_sentences_not_comma_keywords():
@@ -180,17 +244,25 @@ def test_preserve_structure_explicitly_locks_room_depth():
     assert "depth" in PRESERVE_STRUCTURE.lower()
 
 
+def test_preserve_structure_explicitly_names_the_never_change_list():
+    # Room geometry, walls, doors, windows, ceiling height, camera angle,
+    # perspective - the exact "Preserve (Never Change)" list.
+    lowered = PRESERVE_STRUCTURE.lower()
+    for word in ("geometry", "walls", "doors", "windows", "ceiling", "camera angle", "perspective"):
+        assert word in lowered
+
+
 # ---- structure_reminder reactivation ----
 
 
-def test_only_economical_has_no_structure_reminder_in_the_spec():
+def test_only_economical_has_no_structure_reminder():
     # Economical is the only tier that never touches the ceiling plane (its
-    # ceiling field is explicitly "no false ceiling") - mid and premium both
-    # rework it (false ceiling / designer cove ceiling respectively), which is
-    # the kind of depth-carrying-surface change that needs the reminder.
-    assert TIER_SPECS["economical"]["structure_reminder"] == ""
-    assert TIER_SPECS["mid"]["structure_reminder"] != ""
-    assert TIER_SPECS["premium"]["structure_reminder"] != ""
+    # ceiling stays "no false ceiling") - mid and premium both rework it
+    # (false ceiling / designer cove ceiling respectively), which is the kind
+    # of depth-carrying-surface change that needs the reminder.
+    assert TIER_STRUCTURE_REMINDER["economical"] == ""
+    assert TIER_STRUCTURE_REMINDER["mid"] != ""
+    assert TIER_STRUCTURE_REMINDER["premium"] != ""
 
 
 def test_build_prompt_reactivates_structure_reminder_for_tiers_that_have_one():
@@ -201,17 +273,17 @@ def test_build_prompt_reactivates_structure_reminder_for_tiers_that_have_one():
     # reworks the ceiling.
     for tier in ("mid", "premium"):
         prompt = build_prompt(tier)
-        assert TIER_SPECS[tier]["structure_reminder"] in prompt
+        assert TIER_STRUCTURE_REMINDER[tier] in prompt
 
-    assert TIER_SPECS["economical"]["structure_reminder"] == ""
-    assert "Even with these material upgrades" not in build_prompt("economical")
+    assert "Even with these design choices" not in build_prompt("economical")
 
 
-def test_structure_reminder_appears_after_the_tiers_material_instructions():
-    # Placement matters, not just presence: it must land AFTER the marble/brass/
-    # lighting sentences so it counteracts that vocabulary's pull, not get buried
+def test_structure_reminder_appears_after_the_materials_instruction():
+    # Placement matters, not just presence: it must land AFTER the materials
+    # sentence so it counteracts vivid concept vocabulary, not get buried
     # before it where PRESERVE_STRUCTURE already sits.
-    prompt = build_prompt("premium")
-    assert prompt.index(TIER_SPECS["premium"]["materials"]) < prompt.index(
-        TIER_SPECS["premium"]["structure_reminder"]
-    )
+    for tier in ("mid", "premium"):
+        prompt = build_prompt(tier)
+        assert prompt.index("as the primary materials throughout") < prompt.index(
+            TIER_STRUCTURE_REMINDER[tier]
+        )
