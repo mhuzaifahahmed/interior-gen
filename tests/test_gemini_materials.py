@@ -513,3 +513,40 @@ def test_generate_materials_falls_back_after_exhausting_retries(monkeypatch):
     # Never-empty fallback still kicks in once retries are genuinely exhausted.
     assert len(result["items"]) > 0
     assert all(item["is_estimate"] for item in result["items"])
+
+
+def test_generate_materials_uses_fallback_model_after_primary_exhausts_retries(monkeypatch):
+    # Regression guard for a real, live-observed outage: gemini-3.5-flash
+    # 503'd on all MATERIALS_GEMINI_MAX_ATTEMPTS attempts, while
+    # gemini-flash-latest answered instantly on the same key at the same
+    # moment - a real, single-model outage, not a global Gemini one. Rather
+    # than discarding already-successful SerpApi results to the generic
+    # fallback, one last attempt against a different model should rescue it.
+    calls = []
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Flooring", "price": "PKR 1000", "is_estimate": false}], "total": "PKR 1000"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            calls.append(model)
+            if model == gemini_module.MATERIALS_GEMINI_FALLBACK_MODEL:
+                return FakeResponse()
+            raise genai_errors.ServerError(503, {"error": {"message": "high demand"}})
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
+
+    provider = GeminiProvider()
+    tier_spec = {"label": "x", "flooring": "tile", "paint": "cream"}
+    result = provider.generate_materials("economical", tier_spec, None, "Karachi")
+
+    assert calls.count(gemini_module.settings.gemini_text_model) == gemini_module.MATERIALS_GEMINI_MAX_ATTEMPTS
+    assert calls[-1] == gemini_module.MATERIALS_GEMINI_FALLBACK_MODEL
+    assert result["items"][0]["name"] == "Flooring"
+    assert result["items"][0]["is_estimate"] is False

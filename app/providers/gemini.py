@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 MATERIALS_GEMINI_MAX_ATTEMPTS = 3
 MATERIALS_GEMINI_RETRY_DELAY_SECONDS = 2
 
+# Last-resort fallback model, tried once if every retry above still 503s.
+# Real, live-observed reason (not hypothetical): during a live diagnostic call
+# on 2026-08-05, gemini-3.5-flash 503'd on all 3 attempts within seconds
+# (a genuine Google-side outage on that specific model), while this model
+# answered instantly on the same key at the same moment - a different model
+# means different underlying capacity/load, so it's a real hedge against a
+# single-model outage, not just a retry of the same failing thing.
+# gemini-2.5-flash is NOT viable here - confirmed 404 "no longer available to
+# new users" on this project's keys (see gemini_text_model's own comment).
+MATERIALS_GEMINI_FALLBACK_MODEL = "gemini-flash-latest"
+
 # MATERIALS PRICING DESIGN (real, live-tested reason this isn't Gemini's own
 # Google Search grounding tool): grounding hit a 429 RESOURCE_EXHAUSTED wall on
 # every Gemini key/project tested here, including brand-new ones with the
@@ -346,6 +357,11 @@ def _generate_content_with_retry(client: genai.Client, model: str, contents: lis
     (5xx - see MATERIALS_GEMINI_MAX_ATTEMPTS's comment for the real 503 this
     guards against). Deliberately narrow: only retries server-side errors,
     not e.g. auth/bad-request errors that would just fail identically again.
+
+    If every attempt on `model` still 503s, makes one final attempt against
+    MATERIALS_GEMINI_FALLBACK_MODEL - a different model has independent
+    capacity/load, so it's a real hedge against a single-model outage (see
+    that constant's docstring for the live incident that motivated this).
     """
     last_exc: Exception | None = None
     for attempt in range(1, MATERIALS_GEMINI_MAX_ATTEMPTS + 1):
@@ -361,6 +377,18 @@ def _generate_content_with_retry(client: genai.Client, model: str, contents: lis
             )
             if attempt < MATERIALS_GEMINI_MAX_ATTEMPTS:
                 time.sleep(MATERIALS_GEMINI_RETRY_DELAY_SECONDS)
+
+    if model != MATERIALS_GEMINI_FALLBACK_MODEL:
+        try:
+            logger.warning(
+                "Gemini model %s exhausted retries, trying fallback model %s",
+                model,
+                MATERIALS_GEMINI_FALLBACK_MODEL,
+            )
+            return client.models.generate_content(model=MATERIALS_GEMINI_FALLBACK_MODEL, contents=contents)
+        except Exception:
+            logger.exception("Gemini fallback model %s also failed", MATERIALS_GEMINI_FALLBACK_MODEL)
+
     raise last_exc
 
 

@@ -444,11 +444,12 @@ function createSimulatedFill(barEl) {
         stallUntil = now + stallDurationMs;
         return;
       }
-      // Ease out as it nears the cap - bigger steps early, tiny creeping
-      // steps near the end, rather than a constant linear rate.
-      const remaining = CAP - percent;
-      const step = Math.max(0.15, remaining * 0.045);
-      percent = Math.min(CAP, percent + step);
+      // Constant step rate - previously eased out (step shrank toward 0 as
+      // percent approached CAP), which visually read as the bar grinding to
+      // a halt near the end instead of finishing. A flat step keeps the fill
+      // moving at the same visible speed the whole way to CAP.
+      const STEP = 0.6;
+      percent = Math.min(CAP, percent + STEP);
       barEl.style.width = `${percent}%`;
     }, 150);
   }
