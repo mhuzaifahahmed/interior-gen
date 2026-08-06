@@ -45,6 +45,18 @@ class Settings(BaseSettings):
     # split it three ways. Free plan: 250 searches/month, no card required.
     serpapi_api_key: str = ""
 
+    # Optional second SerpApi key/account - app/providers/serpapi.py
+    # automatically switches to this one the moment the first key's monthly
+    # quota runs out mid-generation (detected from SerpApi's own "run out of
+    # searches"/401/429 response), instead of that and every subsequent
+    # item's search failing for the rest of the month. Blank means no
+    # fallback key - behavior is unchanged (single-key, same as before).
+    serpapi_api_key_2: str = ""
+
+    @property
+    def serpapi_api_keys(self) -> list[str]:
+        return [k for k in (self.serpapi_api_key, self.serpapi_api_key_2) if k]
+
     # Image generation: OpenAI's official Images API (app/providers/openai.py) -
     # the sole image backend. Google discontinued free-tier Gemini image generation
     # in Dec 2025 (Gemini is still used for the separate-quota, still-free
@@ -78,6 +90,22 @@ class Settings(BaseSettings):
     # tier also reads) so raising the house render's fidelity doesn't silently
     # raise Economical's cost/fidelity too.
     openai_house_input_fidelity: str = "high"
+
+    # Room-redesign image backend selector: "openai" (default, gpt-image-1) or
+    # "kaggle" (a user's own fine-tuned model - see app/providers/kaggle.py).
+    # A toggle, not a hard swap, specifically so a dropped Kaggle tunnel can be
+    # reverted to OpenAI by changing one .env line, no code edit needed. Only
+    # affects room-redesign generate_image() - "Build a House" renders always
+    # stay on OpenAI (see HybridProvider), since a fine-tuned interior-redesign
+    # model wasn't trained for exterior/plot renders.
+    image_provider: str = "openai"
+
+    # KaggleImageProvider's endpoint - a Cloudflare quick-tunnel URL pointing at
+    # a live Kaggle notebook session running the user's own fine-tuned SD-style
+    # img2img model. Only used when image_provider == "kaggle". Ephemeral by
+    # nature (dies whenever the notebook session ends) - expect to update this
+    # each time the notebook is restarted.
+    kaggle_api_url: str = ""
 
     storage_backend: str = "local"
     local_storage_dir: str = "data/storage"

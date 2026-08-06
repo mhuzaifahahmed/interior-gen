@@ -4,7 +4,12 @@ from google.genai import errors as genai_errors
 from PIL import Image
 
 import app.providers.gemini as gemini_module
-from app.providers.gemini import GeminiProvider, fallback_materials, parse_materials
+from app.providers.gemini import (
+    GeminiProvider,
+    _estimate_light_fixture_count,
+    fallback_materials,
+    parse_materials,
+)
 
 
 def _sample_image_bytes() -> bytes:
@@ -253,6 +258,67 @@ def test_generate_materials_asks_for_an_assumption_when_area_unknown(monkeypatch
     provider = GeminiProvider()
     provider.generate_materials("economical", {"label": "x", "flooring": "tile"}, None, "Karachi")
     assert "No floor-area estimate is available" in captured["prompt"]
+
+
+# ---- Lighting fixture-count multiplication (real bug: a 6000 sqft hall's ----
+# ---- Lighting item came back priced as a single fixture, no multiplication) ----
+
+
+def test_estimate_light_fixture_count_scales_with_area():
+    assert _estimate_light_fixture_count(None) == 1
+    assert _estimate_light_fixture_count(0) == 1
+    assert _estimate_light_fixture_count(50) == 1
+    assert _estimate_light_fixture_count(600) == 6
+    assert _estimate_light_fixture_count(6000) == 60
+
+
+def test_generate_materials_states_fixture_count_in_prompt_when_area_known(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Lighting", "price": "$500"}], "total": "$500"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            captured["prompt"] = contents[0]
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+
+    provider = GeminiProvider()
+    provider.generate_materials(
+        "economical", {"label": "x", "lighting_temp": "warm"}, None, "Karachi", room_area_sqft=6000
+    )
+    assert "60 light fixture" in captured["prompt"]
+    assert "Lighting" in captured["prompt"] and "multiplication" in captured["prompt"]
+
+
+def test_generate_materials_asks_for_a_fixture_assumption_when_area_unknown(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Lighting", "price": "$1"}], "total": "$1"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            captured["prompt"] = contents[0]
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+
+    provider = GeminiProvider()
+    provider.generate_materials("economical", {"label": "x", "lighting_temp": "warm"}, None, "Karachi")
+    assert "assume a typical fixture count" in captured["prompt"]
 
 
 def test_estimate_room_area_parses_numeric_response(monkeypatch):
@@ -550,6 +616,102 @@ def test_generate_materials_uses_fallback_model_after_primary_exhausts_retries(m
     assert calls[-1] == gemini_module.MATERIALS_GEMINI_FALLBACK_MODEL
     assert result["items"][0]["name"] == "Flooring"
     assert result["items"][0]["is_estimate"] is False
+
+
+def test_generate_materials_retries_on_rate_limit_error(monkeypatch):
+    # Regression guard for a real gap: genai_errors.ClientError (which a 429
+    # rate-limit/quota-exceeded response raises as) was not caught by the
+    # retry loop at all - it propagated straight past both the retry loop AND
+    # the fallback-model attempt, collapsing the tier to the generic fallback
+    # on the very first hit even though a retry (or the fallback model, on its
+    # own separate quota) could plausibly have succeeded.
+    call_count = {"n": 0}
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Flooring", "price": "PKR 1000", "is_estimate": false}], "total": "PKR 1000"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            call_count["n"] += 1
+            if call_count["n"] < 2:
+                raise genai_errors.ClientError(429, {"error": {"message": "quota exceeded"}})
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
+
+    provider = GeminiProvider()
+    result = provider.generate_materials("economical", {"label": "x", "flooring": "tile"}, None, "Karachi")
+
+    assert call_count["n"] == 2
+    assert result["items"][0]["name"] == "Flooring"
+    assert result["items"][0]["is_estimate"] is False
+
+
+def test_generate_materials_uses_fallback_model_after_rate_limit_exhausts_retries(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Flooring", "price": "PKR 1000", "is_estimate": false}], "total": "PKR 1000"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            calls.append(model)
+            if model == gemini_module.MATERIALS_GEMINI_FALLBACK_MODEL:
+                return FakeResponse()
+            raise genai_errors.ClientError(429, {"error": {"message": "quota exceeded"}})
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
+
+    provider = GeminiProvider()
+    tier_spec = {"label": "x", "flooring": "tile", "paint": "cream"}
+    result = provider.generate_materials("economical", tier_spec, None, "Karachi")
+
+    assert calls.count(gemini_module.settings.gemini_text_model) == gemini_module.MATERIALS_GEMINI_MAX_ATTEMPTS
+    assert calls[-1] == gemini_module.MATERIALS_GEMINI_FALLBACK_MODEL
+    assert result["items"][0]["name"] == "Flooring"
+    assert result["items"][0]["is_estimate"] is False
+
+
+def test_generate_materials_does_not_retry_non_rate_limit_client_errors(monkeypatch):
+    # A 400 bad-request/401 auth-style ClientError would just fail identically
+    # again - only 429 is treated as transient/retryable. Confirms the retry
+    # loop makes exactly one attempt (no retries) before falling back.
+    call_count = {"n": 0}
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            call_count["n"] += 1
+            raise genai_errors.ClientError(400, {"error": {"message": "bad request"}})
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
+
+    provider = GeminiProvider()
+    tier_spec = {"label": "x", "flooring": "tile", "paint": "cream"}
+    result = provider.generate_materials("economical", tier_spec, None, "Karachi")
+
+    # Exactly one attempt on the primary model - no retry, no fallback-model
+    # attempt (the whole point is a 400 isn't a transient failure).
+    assert call_count["n"] == 1
+    assert len(result["items"]) > 0
+    assert all(item["is_estimate"] for item in result["items"])
 
 
 def test_describe_room_second_call_on_identical_bytes_is_a_cache_hit(monkeypatch):

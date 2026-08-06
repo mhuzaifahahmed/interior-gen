@@ -48,9 +48,10 @@ maintainable if each axis only ever encodes its own concern.
 """
 
 import random
+import re
 from dataclasses import dataclass
 
-PROMPT_VERSION = "v11.1"
+PROMPT_VERSION = "v11.2"
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +269,7 @@ class StyleElementPool:
     coffee_tables: list[str]
     dining_tables: list[str]
     chairs: list[str]  # accent/dining chairs
+    beds: list[str]  # used ONLY when the room is a bedroom - see build_prompt()
     rugs: list[str]
     artwork: list[str]
     mirrors: list[str]
@@ -283,6 +285,7 @@ STYLE_ELEMENT_POOLS: dict[str, StyleElementPool] = {
         coffee_tables=["a sculptural glass-and-metal coffee table", "a low rectangular coffee table with a lacquered top"],
         dining_tables=["a streamlined dining table with a lacquered finish", "a rectangular dining table with slim metal legs"],
         chairs=["slim-armed accent chairs with a molded shell design", "dining chairs with a simple cantilevered frame"],
+        beds=["a low-profile platform bed with a sleek upholstered headboard", "a minimalist bed frame with clean geometric lines and a wide flat headboard"],
         rugs=["a low-pile rug with a subtle geometric weave", "a flatweave rug with clean linear patterning"],
         artwork=["a large abstract canvas in a slim frame", "a set of minimalist line-art prints"],
         mirrors=["a frameless floating mirror", "a slim metal-framed rectangular mirror"],
@@ -296,6 +299,7 @@ STYLE_ELEMENT_POOLS: dict[str, StyleElementPool] = {
         coffee_tables=["a simple slab-style coffee table", "a low cube-shaped side table"],
         dining_tables=["an unadorned rectangular dining table", "a simple round dining table on a single pedestal"],
         chairs=["backless stools in a single material", "simple armless dining chairs with no pattern"],
+        beds=["a simple platform bed with no headboard, just a low frame", "an unadorned low bed frame in a single solid material"],
         rugs=["a plain low-pile rug in a single tone", "a simple flatweave rug with no pattern"],
         artwork=["a single small framed print", "one understated abstract piece"],
         mirrors=["a simple unframed mirror", "a thin rectangular mirror with no ornamentation"],
@@ -309,6 +313,7 @@ STYLE_ELEMENT_POOLS: dict[str, StyleElementPool] = {
         coffee_tables=["a round light-oak coffee table", "a simple pale-wood coffee table with turned legs"],
         dining_tables=["a pale birch dining table", "a simple light-wood dining table with rounded edges"],
         chairs=["a simple wishbone-style dining chair set", "light-wood chairs with a woven cord seat"],
+        beds=["a light-wood bed frame with a simple slatted headboard", "a pale birch platform bed with rounded edges"],
         rugs=["a soft wool rug with a light woven texture", "a simple flatweave rug in a natural fiber"],
         artwork=["a set of simple framed graphic prints", "a single botanical print in a light wood frame"],
         mirrors=["a round mirror in a light wood frame", "an oval mirror with a slim pale frame"],
@@ -322,6 +327,7 @@ STYLE_ELEMENT_POOLS: dict[str, StyleElementPool] = {
         coffee_tables=["a minimalist ash coffee table", "a low rounded-edge wood coffee table"],
         dining_tables=["a platform-style dining table in natural wood", "a simple oak dining table with rounded corners"],
         chairs=["a curved bouclé accent chair", "simple wood-framed dining chairs with a woven seat"],
+        beds=["a low platform bed in natural oak with a slim wood headboard", "a minimalist tatami-style low bed frame in light wood"],
         rugs=["a jute or wool-blend rug with a natural weave", "a low-pile rug in a raw fiber texture"],
         artwork=["a single dried-branch arrangement as a wall accent", "a minimalist ink-wash style print"],
         mirrors=["a round mirror in a thin natural wood frame", "a simple unlacquered wood-framed mirror"],
@@ -335,6 +341,7 @@ STYLE_ELEMENT_POOLS: dict[str, StyleElementPool] = {
         coffee_tables=["a reclaimed-wood-and-metal coffee table", "a low coffee table on a raw steel-pipe frame"],
         dining_tables=["a metal-framed dining table with a raw wood top", "a dining table with a concrete-look top and metal legs"],
         chairs=["metal-framed stools with a worn leather seat", "dining chairs with a bent-metal frame"],
+        beds=["a metal-framed bed with a raw iron headboard", "a bed frame with exposed metal piping and a reclaimed-wood headboard"],
         rugs=["a flatweave rug in a raw natural fiber", "a low-pile rug with a distressed pattern"],
         artwork=["a large-scale black-and-white photograph", "a metal-framed graphic print"],
         mirrors=["a round mirror in a matte black metal frame", "a mirror with an exposed rivet-style frame"],
@@ -348,6 +355,7 @@ STYLE_ELEMENT_POOLS: dict[str, StyleElementPool] = {
         coffee_tables=["a hand-carved wood coffee table", "a low coffee table with a mosaic-tiled top"],
         dining_tables=["a rustic wood dining table with turned legs", "a dining table with a hand-finished wood top"],
         chairs=["wrought-iron-framed dining chairs with woven seats", "rustic wood dining chairs with a rush-woven seat"],
+        beds=["a rustic wood bed frame with a hand-carved headboard", "a wrought-iron bed frame with a scrolled headboard"],
         rugs=["a hand-woven textured rug", "a flatweave rug with a traditional motif"],
         artwork=["a hand-painted ceramic wall plate display", "a framed botanical or coastal-inspired print"],
         mirrors=["a mirror with an arched wrought-iron frame", "a mirror framed in hand-carved wood"],
@@ -361,6 +369,7 @@ STYLE_ELEMENT_POOLS: dict[str, StyleElementPool] = {
         coffee_tables=["a hand-carved wood coffee table", "a low coffee table with a wrought-iron base"],
         dining_tables=["a rustic wood dining table with wrought-iron accents", "a dark-wood dining table with hand-carved legs"],
         chairs=["high-back wood dining chairs with leather seats", "dining chairs with a hand-carved wood frame"],
+        beds=["a dark-wood bed frame with a hand-carved headboard", "a wrought-iron bed frame with an ornate scrolled headboard"],
         rugs=["a hand-woven rug with a traditional pattern", "a textured flatweave rug"],
         artwork=["a decorative tile mosaic wall accent", "a framed piece with a traditional motif"],
         mirrors=["a mirror framed in hand-carved dark wood", "a mirror with an ornate wrought-iron surround"],
@@ -374,6 +383,7 @@ STYLE_ELEMENT_POOLS: dict[str, StyleElementPool] = {
         coffee_tables=["a carved wood coffee table", "a coffee table with turned legs and a wood-veneer top"],
         dining_tables=["a formal wood dining table with detailed legs", "a dining table with a traditional pedestal base"],
         chairs=["a set of classic wingback-inspired dining chairs", "dining chairs with a carved wood frame and upholstered seat"],
+        beds=["a tailored upholstered bed with a tall button-tufted headboard", "a classic wood sleigh bed frame"],
         rugs=["a patterned wool-blend rug", "a rug with a classic border motif"],
         artwork=["a curated pair of classic framed artworks", "a formal gallery-style art arrangement"],
         mirrors=["a mirror in a detailed carved wood frame", "an oval mirror with a classic moulded frame"],
@@ -387,6 +397,7 @@ STYLE_ELEMENT_POOLS: dict[str, StyleElementPool] = {
         coffee_tables=["a polished stone-top coffee table", "a coffee table with a sculptural metal base and glass top"],
         dining_tables=["a designer dining table with a sculptural base", "a dining table with a polished stone top"],
         chairs=["a set of upholstered dining chairs with metal detailing", "dining chairs with a sculptural frame and plush upholstery"],
+        beds=["a tailored upholstered bed with a tall channel-tufted velvet headboard", "a designer bed frame with a sculptural upholstered headboard"],
         rugs=["a hand-knotted wool rug", "a plush high-pile designer rug"],
         artwork=["a curated large-scale statement art piece", "a gallery-quality framed artwork"],
         mirrors=["a large gilt-framed mirror", "a sculptural designer mirror"],
@@ -419,8 +430,12 @@ ROOM_TYPE_COMMON_SENSE = (
     "Only add furniture and decor that would realistically belong in this specific "
     "type of space, based on common sense about what the photo actually shows - for "
     "example, do not add a bed or wardrobe to a hallway, entryway, or living room, "
-    "and do not add dining or kitchen items to a bedroom. Do not change what kind of "
-    "room or space this is."
+    "and do not add dining or kitchen items to a bedroom. If this room is a bedroom, "
+    "do not add a dining table, coffee table, or dining chairs under any circumstance - "
+    "instead make sure it includes a proper, well-made bed appropriate to the "
+    "renovation tier, with real bedding, and keep the room functioning as a bedroom. "
+    "Do not change what kind of room or space this is - a bedroom must stay a bedroom, "
+    "a living room must stay a living room, and so on."
 )
 
 # Nudges toward real variety across repeated generations of the same room/style.
@@ -556,6 +571,7 @@ def build_prompt(
     coffee_table = random.choice(pool.coffee_tables)
     dining_table = random.choice(pool.dining_tables)
     chair = random.choice(pool.chairs)
+    bed = random.choice(pool.beds)
     rug = random.choice(pool.rugs)
     artwork = random.choice(pool.artwork)
     mirror = random.choice(pool.mirrors)
@@ -564,9 +580,17 @@ def build_prompt(
     fabric = random.choice(pool.fabrics)
     accessory = random.choice(pool.accessories)
 
+    # Explicitly branched on room type (the image model judges this from the
+    # photo itself, same as ROOM_TYPE_COMMON_SENSE above) rather than always
+    # suggesting a sofa/coffee-table/dining-table combo - that combo makes no
+    # sense in a bedroom and previously contradicted ROOM_TYPE_COMMON_SENSE's
+    # "do not add dining items to a bedroom" instruction with no bed
+    # alternative offered in its place.
     sentences.append(
-        f"Furnish the room with {seating} and {coffee_table}, plus, if the space calls "
-        f"for it, {dining_table} with {chair}."
+        f"If this room is a bedroom, furnish it with {bed}, along with appropriate "
+        "nightstands and bedroom textiles, and do NOT add a dining table, coffee "
+        f"table, or dining chairs. Otherwise, furnish the room with {seating} and "
+        f"{coffee_table}, plus, if the space calls for it, {dining_table} with {chair}."
     )
     sentences.append(
         f"Light the room with {fixture}, and add {rug} on the floor, {artwork} as wall "
@@ -626,3 +650,175 @@ def build_tier_spec(tier: str, style: str, palette: str) -> dict[str, str]:
         "palette": palette_text,
         "decor": pool.accessories[0],
     }
+
+
+# ---------------------------------------------------------------------------
+# KAGGLE MODEL PROMPT - a completely SEPARATE, SHORT prompt for the user's own
+# fine-tuned image model (app/providers/kaggle.py), built alongside build_prompt()
+# above WITHOUT modifying it in any way. build_prompt() (~3500-4000 characters,
+# ~550-650 words) is written for gpt-image-1, which has no meaningful prompt
+# length limit - the Kaggle model is a classic CLIP-conditioned model with a
+# hard ~77-TOKEN limit on its prompt (and, separately, on its negative_prompt -
+# see KaggleImageProvider). Sending it build_prompt()'s full output would just
+# get silently truncated by CLIP partway through a sentence, losing whatever
+# came after token 77 - almost certainly including the palette/furniture
+# content near the end.
+#
+# Per the user (this model was trained specifically on layout/geometry
+# preservation): PRESERVE_STRUCTURE / ROOM_TYPE_COMMON_SENSE's geometry
+# clauses / TIER_STRUCTURE_REMINDER are deliberately OMITTED here entirely -
+# redundant token spend on something the model already does on its own. Token
+# budget instead goes to what the model can't infer from the photo alone:
+# style, tier quality, palette, and a few concrete furniture pieces. The one
+# exception is the bedroom/no-table rule (see ROOM_TYPE_COMMON_SENSE's own
+# comment for the real failure that motivated it) - kept as a short 5-word
+# hint since it's a content-correctness rule, not a geometry-preservation one.
+#
+# Format is short comma-separated keyword phrases, not natural-language
+# sentences - unlike gpt-image-1 (an instruction-following editor, where that
+# format was a proven real failure - see this module's top docstring), a
+# classic CLIP text encoder is trained on exactly this kind of caption, so
+# keyword phrasing is the CORRECT format for this different model, not a
+# regression back to the old mistake.
+#
+# WORD-count budgeted, not TOKEN-count budgeted - no CLIP tokenizer is
+# installed in this project (would mean pulling in `transformers`, a large
+# dependency, just for this one estimate). ~45 words is a conservative proxy
+# for staying under ~77 CLIP BPE tokens (English text runs roughly 1.3-1.5
+# tokens/word, and multi-syllable design terms like "upholstery" or
+# "wainscoting" often split into 2+ subword tokens) - if real generations
+# still show truncation artifacts, tighten KAGGLE_PROMPT_MAX_WORDS further.
+# ---------------------------------------------------------------------------
+
+KAGGLE_PROMPT_MAX_WORDS = 45
+
+# Short paraphrase of TIER_MATERIAL_QUALITY above, purely for word-budget
+# reasons - the full sentence ("affordable, durable materials with simple,
+# honest finishes - no premium or luxury materials") is itself already
+# several times longer than this whole function's total word budget.
+TIER_QUALITY_TAG = {
+    "economical": "affordable simple finishes",
+    "mid": "good quality refined finishes",
+    "premium": "premium luxury finishes",
+}
+
+# Matches the server's own stated default negative_prompt (read from this
+# project's own live /openapi.json - see app/providers/kaggle.py's module
+# docstring) - restated explicitly here (not left to the server default)
+# because build_kaggle_negative_prompt() below needs to ADD tier-specific
+# exclusions on top of it for economical/mid, and sending our own
+# negative_prompt value REPLACES the server's default rather than merging
+# with it.
+KAGGLE_DEFAULT_NEGATIVE_PROMPT = "ugly, low quality, distorted, blurry, bad architecture"
+
+
+def _short_style_keywords(style: str, segments: int = 3) -> str:
+    """First few comma-separated phrases from STYLE_PROFILES[style]. That text
+    is already short keyword-style phrasing (e.g. "Clean lines, sleek
+    furniture, uncluttered spaces, ...") - this truncates it rather than
+    hand-maintaining a second, separate style vocabulary that could drift out
+    of sync with STYLE_PROFILES over time.
+    """
+    parts = [p.strip().rstrip(".") for p in STYLE_PROFILES[style].split(",")]
+    return ", ".join(parts[:segments])
+
+
+def build_kaggle_prompt(tier: str, style: str, palette: str) -> str:
+    """SHORT, keyword-style prompt for KaggleImageProvider - see this
+    section's module-level comment above for the full "why" (77-token CLIP
+    limit, no geometry-preservation text, keyword phrasing). Completely
+    independent of build_prompt() - does not call it, parse it, or share any
+    mutable state with it.
+
+    Same "random within boundaries" contract: style/palette/tier are fixed
+    inputs, one furniture piece is randomized from the chosen style's own
+    STYLE_ELEMENT_POOLS (only one, not every category, to fit the word
+    budget) - so repeated calls with the same inputs still vary slightly.
+
+    Builds a priority-ordered list of phrases (most important first) and
+    drops from the END if the result is still over KAGGLE_PROMPT_MAX_WORDS -
+    so if anything has to be cut to fit, it's the lowest-priority content
+    (the closing quality tag), never the style/tier/palette identity.
+    """
+    if tier not in TIER_LABELS:
+        raise ValueError(f"unknown tier: {tier}")
+    if style not in STYLE_PROFILES:
+        raise ValueError(f"unknown style: {style}")
+    if palette not in COLOR_PROFILE:
+        raise ValueError(f"unknown palette: {palette}")
+
+    pool = STYLE_ELEMENT_POOLS[style]
+    furniture = random.choice(pool.seating)
+
+    parts = [
+        f"{style} style {TIER_LABELS[tier]} interior",
+        _short_style_keywords(style),
+        TIER_QUALITY_TAG[tier],
+        COLOR_PROFILE[palette],
+        random.choice(TIER_FLOORING[tier]),
+        furniture,
+        "bedroom: use a bed, never a table",
+        "clean renovated interior, photorealistic",
+    ]
+
+    prompt = ", ".join(parts)
+    while len(prompt.split()) > KAGGLE_PROMPT_MAX_WORDS and len(parts) > 1:
+        parts.pop()
+        prompt = ", ".join(parts)
+    return prompt
+
+
+def build_kaggle_negative_prompt(tier: str) -> str:
+    """Short negative-prompt equivalent of build_prompt()'s "Do not include"
+    exclusion sentence (NEGATIVE_ADDITIONS) - kept OUT of build_kaggle_prompt()'s
+    already-tight positive-prompt word budget entirely, since the Kaggle
+    model's API exposes a genuinely separate negative_prompt field (unlike
+    gpt-image-1, which has no negative-prompt channel at all - see this
+    module's top docstring). CLIP-style models tokenize prompt and
+    negative_prompt separately, each with their own ~77-token budget, so
+    exclusions belong here, not crammed into the positive prompt.
+    """
+    if tier not in TIER_LABELS:
+        raise ValueError(f"unknown tier: {tier}")
+    exclusions = NEGATIVE_ADDITIONS[tier]
+    if not exclusions:
+        return KAGGLE_DEFAULT_NEGATIVE_PROMPT
+    return f"{KAGGLE_DEFAULT_NEGATIVE_PROMPT}, {exclusions}"
+
+
+_STYLE_FROM_PROMPT_RE = re.compile(r"designed in an? (.+?) interior design style")
+
+
+def extract_style_and_palette(prompt: str) -> tuple[str | None, str | None]:
+    """Best-effort reverse-lookup of which Style/Palette a FULL build_prompt()
+    output was built with, WITHOUT build_prompt() needing to expose them
+    separately and WITHOUT changing the Provider.generate_image(image_bytes,
+    prompt, tier) interface (which only ever receives the already-assembled
+    prompt string, not the original style/palette arguments) - see
+    KaggleImageProvider.generate_image(), the only caller.
+
+    Reliable, not a guess: style is stated literally and unambiguously in
+    build_prompt()'s edit-framing sentence ("designed in a {style} interior
+    design style") - extracted via regex and validated against STYLE_OPTIONS.
+    Palette has no name written anywhere in the prompt (only its color WORDS
+    do, via COLOR_PROFILE[palette]), so this checks which COLOR_PROFILE value
+    is present verbatim in the text instead - exact, not fuzzy, since that
+    text is inserted unmodified by build_prompt().
+
+    Returns (None, None) (or a partial pair) if either can't be determined -
+    callers must treat this as best-effort, same contract as this module's
+    other "may not have real data" extractors, and fall back to something
+    else rather than raising.
+    """
+    style_match = _STYLE_FROM_PROMPT_RE.search(prompt)
+    style = style_match.group(1) if style_match else None
+    if style not in STYLE_PROFILES:
+        style = None
+
+    palette = None
+    for key, text in COLOR_PROFILE.items():
+        if text in prompt:
+            palette = key
+            break
+
+    return style, palette

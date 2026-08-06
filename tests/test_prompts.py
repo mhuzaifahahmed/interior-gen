@@ -2,6 +2,8 @@ from app.pipeline.prompts import (
     ADDITIONAL_INSTRUCTIONS_MAX_CHARS,
     COLOR_PALETTES,
     COLOR_PROFILE,
+    KAGGLE_DEFAULT_NEGATIVE_PROMPT,
+    KAGGLE_PROMPT_MAX_WORDS,
     NEGATIVE_ADDITIONS,
     PRESERVE_STRUCTURE,
     ROOM_TYPE_COMMON_SENSE,
@@ -10,8 +12,11 @@ from app.pipeline.prompts import (
     STYLE_PROFILES,
     TIER_FLOORING,
     TIER_STRUCTURE_REMINDER,
+    build_kaggle_negative_prompt,
+    build_kaggle_prompt,
     build_prompt,
     build_tier_spec,
+    extract_style_and_palette,
 )
 
 TIERS = ("economical", "mid", "premium")
@@ -216,6 +221,45 @@ def test_only_mid_and_premium_offer_a_feature_wall():
         assert "feature wall" in build_prompt(tier, "Modern", "Neutral")
 
 
+# ---- bedroom handling: no table, a real bed, room purpose never changes ----
+
+
+def test_every_style_has_bed_vocabulary():
+    for style in STYLE_OPTIONS:
+        assert STYLE_ELEMENT_POOLS[style].beds, f"style {style!r} has no bed options"
+
+
+def test_room_type_common_sense_explicitly_addresses_bedrooms():
+    lowered = ROOM_TYPE_COMMON_SENSE.lower()
+    assert "dining table" in lowered
+    assert "bed" in lowered
+    assert "bedroom must stay a bedroom" in lowered
+
+
+def test_build_prompt_gives_the_model_an_explicit_bedroom_branch():
+    # Regression guard: the old furnish sentence unconditionally suggested a
+    # sofa + coffee table + dining table for every room, including bedrooms -
+    # directly contradicting ROOM_TYPE_COMMON_SENSE's "no dining items in a
+    # bedroom" rule with no bed alternative ever offered. build_prompt() must
+    # give the model an explicit if/else so it can furnish a bedroom
+    # correctly (the model itself judges room type from the photo - this
+    # codebase has no structured room-type data to branch on in Python).
+    for tier in TIERS:
+        for style in STYLE_OPTIONS:
+            prompt = build_prompt(tier, style, "Neutral")
+            assert "If this room is a bedroom" in prompt
+            assert "do NOT add a dining table, coffee table, or dining chairs" in prompt
+            assert any(bed in prompt for bed in STYLE_ELEMENT_POOLS[style].beds)
+
+
+def test_bed_choice_varies_across_calls():
+    prompts = {build_prompt("mid", "Modern", "Neutral") for _ in range(20)}
+    beds_seen = {
+        bed for bed in STYLE_ELEMENT_POOLS["Modern"].beds if any(bed in p for p in prompts)
+    }
+    assert len(beds_seen) > 1, "expected genuine variety across the style's bed options"
+
+
 def test_build_prompt_restates_structure_reminder_for_every_tier():
     # Regression guard for a real failure: a deep/vast room (e.g. a large
     # industrial hall) came back shallow and ordinary-sized once furnished -
@@ -414,3 +458,89 @@ def test_twenty_sample_prompts_are_all_distinct_and_valid():
         prompts.append(prompt)
 
     assert len(set(prompts)) == len(prompts)
+
+
+# ---- Kaggle short prompt (separate from build_prompt(), which stays untouched) ----
+
+
+def test_build_prompt_is_unaffected_by_the_kaggle_functions_existing():
+    # build_prompt() must remain completely untouched by this feature - same
+    # content/order/length characteristics as before.
+    prompt = build_prompt("mid", "Spanish", "Sage")
+    assert len(prompt) > 1000
+    assert PRESERVE_STRUCTURE in prompt
+    assert ROOM_TYPE_COMMON_SENSE in prompt
+
+
+def test_build_kaggle_prompt_stays_within_the_word_budget():
+    for tier in TIERS:
+        for style in STYLE_OPTIONS:
+            for palette in ("Neutral", "Sage"):
+                prompt = build_kaggle_prompt(tier, style, palette)
+                assert len(prompt.split()) <= KAGGLE_PROMPT_MAX_WORDS
+
+
+def test_build_kaggle_prompt_omits_geometry_preservation_text():
+    # The whole point: PRESERVE_STRUCTURE/ROOM_TYPE_COMMON_SENSE's geometry
+    # clauses are real content the OpenAI prompt needs but this model was
+    # trained to not need - they must not appear in the short prompt at all.
+    prompt = build_kaggle_prompt("mid", "Spanish", "Sage")
+    assert "camera angle" not in prompt
+    assert "ceiling height" not in prompt
+    for banned_phrase in ("geometry", "camera angle", "perspective", "proportions"):
+        assert banned_phrase not in prompt.lower()
+
+
+def test_build_kaggle_prompt_keeps_the_bedroom_rule_briefly():
+    prompt = build_kaggle_prompt("mid", "Modern", "Neutral")
+    assert "bed" in prompt.lower()
+    assert "table" in prompt.lower()
+
+
+def test_build_kaggle_prompt_includes_style_tier_and_palette_identity():
+    prompt = build_kaggle_prompt("premium", "Japandi", "Sage")
+    assert "Japandi" in prompt
+    assert "sage green" in prompt  # COLOR_PROFILE["Sage"]'s first word
+
+
+def test_build_kaggle_prompt_unknown_inputs_raise():
+    for bad_call in (
+        lambda: build_kaggle_prompt("nope", "Modern", "Neutral"),
+        lambda: build_kaggle_prompt("mid", "nope", "Neutral"),
+        lambda: build_kaggle_prompt("mid", "Modern", "nope"),
+    ):
+        try:
+            bad_call()
+        except ValueError:
+            continue
+        assert False, "expected ValueError"
+
+
+def test_build_kaggle_negative_prompt_includes_base_quality_terms_always():
+    for tier in TIERS:
+        assert KAGGLE_DEFAULT_NEGATIVE_PROMPT in build_kaggle_negative_prompt(tier)
+
+
+def test_build_kaggle_negative_prompt_adds_tier_exclusions_for_budget_and_mid():
+    for tier in ("economical", "mid"):
+        negative = build_kaggle_negative_prompt(tier)
+        assert NEGATIVE_ADDITIONS[tier] in negative
+    # Premium has no NEGATIVE_ADDITIONS - negative prompt is just the base
+    # quality terms, not "base terms + nothing" awkwardly appended.
+    assert build_kaggle_negative_prompt("premium") == KAGGLE_DEFAULT_NEGATIVE_PROMPT
+
+
+def test_extract_style_and_palette_round_trips_through_build_prompt():
+    for tier in TIERS:
+        for style in STYLE_OPTIONS:
+            for palette in COLOR_PALETTES:
+                full_prompt = build_prompt(tier, style, palette)
+                extracted_style, extracted_palette = extract_style_and_palette(full_prompt)
+                assert extracted_style == style
+                assert extracted_palette == palette
+
+
+def test_extract_style_and_palette_returns_none_for_unrelated_text():
+    style, palette = extract_style_and_palette("just some random text about nothing in particular")
+    assert style is None
+    assert palette is None

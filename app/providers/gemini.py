@@ -81,8 +81,15 @@ MATERIALS_PROMPT_TEMPLATE = (
     "or your own reasonable estimate if none is given) to get that item's real total price for "
     "the whole room - never report a bare per-sqft rate as if it were already the item's total "
     "cost. Show the calculation in that item's spec field (e.g. \"Ceramic tile, Rs. 1,100/sqft x "
-    "~180 sqft\"). Lighting, Feature wall, and Decor are normally priced per fixture/piece, not "
-    "by area - price those as typically sold, with no area multiplication.\n\n"
+    "~180 sqft\").\n\n"
+    "IMPORTANT - Lighting is priced PER FIXTURE, but a large room needs MULTIPLE fixtures to "
+    "actually light it - never report a single fixture's price as the item's total for a room "
+    "of any real size. Multiply the per-fixture price by the fixture count given below (or your "
+    "own reasonable estimate for a room of this size/type if no count is given) to get "
+    "Lighting's real total price, and show the calculation in its spec field (e.g. \"12W LED "
+    "downlight, Rs. 800/fixture x 15 fixtures\"). Feature wall and Decor ARE priced as a single "
+    "piece/set with NO multiplication - those genuinely are one purchase regardless of room "
+    "size, unlike Lighting.\n\n"
     "IMPORTANT - currency: always express every price (and the total) in the LOCAL currency "
     "actually used in {city} (e.g. PKR for Pakistan, INR for India, USD for the United States) - "
     "never a different country's currency, even if a source result quotes one. If a real "
@@ -328,17 +335,27 @@ class GeminiProvider(Provider):
         # (e.g. "$12/sqft" for flooring) was passed straight through as the
         # item's "total" price - never actually multiplied by how much floor
         # the room has. See estimate_room_area()'s docstring for the full story.
+        # Lighting's own fixture-count multiplication (see
+        # LIGHT_FIXTURE_COVERAGE_SQFT/_estimate_light_fixture_count above) is
+        # a SEPARATE, later real bug fix - a large room's Lighting item was
+        # coming back priced as a single fixture with no multiplication at all.
         if room_area_sqft:
+            fixture_count = _estimate_light_fixture_count(room_area_sqft)
             area_block = (
                 f"This room's estimated floor area is approximately {room_area_sqft:.0f} square "
-                "feet - use this for the quantity/multiplication rule below.\n\n"
+                "feet - use this for the quantity/multiplication rule below. For Lighting "
+                f"specifically, this room needs approximately {fixture_count} light fixture(s) "
+                "to adequately illuminate that area - use this count for Lighting's own "
+                "multiplication rule below.\n\n"
             )
         else:
             area_block = (
                 "No floor-area estimate is available for this room - for Flooring, Ceiling "
                 "treatment, and Paint / wall finish, assume a typical room of this type and "
                 "state your assumed square footage explicitly in that item's spec field before "
-                "applying the quantity rule below.\n\n"
+                "applying the quantity rule below. For Lighting, assume a typical fixture count "
+                "for a room of this type and size, and state that assumed count explicitly in "
+                "its spec field before applying its own multiplication rule below.\n\n"
             )
 
         prompt = MATERIALS_PROMPT_TEMPLATE.format(
@@ -381,25 +398,47 @@ class GeminiProvider(Provider):
         return fallback_room_layout(dimensions, prompt)
 
 
-def _generate_content_with_retry(client: genai.Client, model: str, contents: list) -> object:
-    """Retries the materials-synthesis Gemini call on genai_errors.ServerError
-    (5xx - see MATERIALS_GEMINI_MAX_ATTEMPTS's comment for the real 503 this
-    guards against). Deliberately narrow: only retries server-side errors,
-    not e.g. auth/bad-request errors that would just fail identically again.
+def _is_retryable(exc: Exception) -> bool:
+    # ServerError (5xx, e.g. the 503 "high demand" this was originally built
+    # for) is always retryable. ClientError is much broader (400 bad request,
+    # 401/403 auth, 404 not found, 429 rate-limit) and most of those would just
+    # fail identically again - only 429 (quota/rate-limit exceeded) is a
+    # transient condition worth retrying/falling back on. Real, live-observed
+    # gap this closes: a free-tier 429 was propagating straight past this
+    # function entirely (ClientError was never caught at all), skipping both
+    # the retry loop AND the fallback-model attempt below, collapsing the tier
+    # to fallback_materials() on the very first hit even though the fallback
+    # model (a different key/model, independent quota) could very plausibly
+    # have succeeded.
+    if isinstance(exc, genai_errors.ServerError):
+        return True
+    return isinstance(exc, genai_errors.ClientError) and getattr(exc, "code", None) == 429
 
-    If every attempt on `model` still 503s, makes one final attempt against
+
+def _generate_content_with_retry(client: genai.Client, model: str, contents: list) -> object:
+    """Retries the materials-synthesis Gemini call on transient errors - 5xx
+    server overload (the original 503 "high demand" this was built for) AND
+    429 rate-limit/quota-exceeded (see _is_retryable). Deliberately narrow
+    otherwise: does not retry e.g. auth/bad-request errors that would just
+    fail identically again.
+
+    If every attempt on `model` still fails, makes one final attempt against
     MATERIALS_GEMINI_FALLBACK_MODEL - a different model has independent
-    capacity/load, so it's a real hedge against a single-model outage (see
-    that constant's docstring for the live incident that motivated this).
+    capacity/load AND, for 429s specifically, its own separate quota, so it's
+    a real hedge against a single-model outage or a single-model's quota
+    being exhausted (see that constant's docstring for the live incident that
+    motivated this).
     """
     last_exc: Exception | None = None
     for attempt in range(1, MATERIALS_GEMINI_MAX_ATTEMPTS + 1):
         try:
             return client.models.generate_content(model=model, contents=contents)
-        except genai_errors.ServerError as exc:
+        except Exception as exc:
+            if not _is_retryable(exc):
+                raise
             last_exc = exc
             logger.warning(
-                "Gemini server error on materials call, attempt %d/%d: %s",
+                "Gemini transient error on materials call, attempt %d/%d: %s",
                 attempt,
                 MATERIALS_GEMINI_MAX_ATTEMPTS,
                 exc,
@@ -419,6 +458,25 @@ def _generate_content_with_retry(client: genai.Client, model: str, contents: lis
             logger.exception("Gemini fallback model %s also failed", MATERIALS_GEMINI_FALLBACK_MODEL)
 
     raise last_exc
+
+
+# Rough coverage per general-lighting fixture, used only to give Gemini a
+# concrete fixture-count starting point for Lighting's own quantity rule (see
+# MATERIALS_PROMPT_TEMPLATE) - this is a coarse estimate-tool heuristic, not a
+# certified lighting-design spacing standard. Real bug this fixes: a 6000 sqft
+# hall's Lighting item was coming back priced as a SINGLE fixture (e.g. "Rs.
+# 431" for one 12W downlight) with no multiplication at all, the same
+# per-sqft-not-multiplied mistake flooring/paint/ceiling already had a fix
+# for - Lighting just never got the equivalent fix, since a single fixture
+# genuinely is a reasonable price for a small/typical room, and that
+# incorrect assumption only breaks down for large spaces like this one.
+LIGHT_FIXTURE_COVERAGE_SQFT = 100
+
+
+def _estimate_light_fixture_count(room_area_sqft: float | None) -> int:
+    if not room_area_sqft or room_area_sqft <= 0:
+        return 1
+    return max(1, round(room_area_sqft / LIGHT_FIXTURE_COVERAGE_SQFT))
 
 
 def _format_dimensions(dimensions: dict) -> str:

@@ -1,15 +1,38 @@
+from app.config import settings
 from app.providers import idealhouse
 from app.providers.base import Provider
 from app.providers.gemini import GeminiProvider
+from app.providers.kaggle import KaggleImageProvider
 from app.providers.openai import OpenAIImageProvider
+
+
+def _default_room_image_provider(house_image_provider):
+    # IMAGE_PROVIDER=kaggle in .env swaps ONLY room-redesign image generation
+    # to a user's own fine-tuned model (see app/providers/kaggle.py) - a
+    # toggle, not a hard swap, so a dropped Kaggle tunnel can be reverted to
+    # OpenAI by editing one .env line, no code change needed. "Build a House"
+    # rendering is untouched by this setting on purpose (see HybridProvider's
+    # docstring).
+    if settings.image_provider == "kaggle":
+        return KaggleImageProvider()
+    return house_image_provider
 
 
 class HybridProvider(Provider):
     """Room description + tier-notes analysis via Gemini (still free, separate
-    quota from image gen). Image generation via an injectable image backend -
-    OpenAI's gpt-image-1 (default) unless a different one is passed in (mainly
-    for tests). Google removed free-tier Gemini image generation in Dec 2025,
-    which is why image gen isn't just Gemini too.
+    quota from image gen). Image generation via injectable image backends -
+    OpenAI's gpt-image-1 by default for both room-redesign and "Build a
+    House" renders, unless a different one is passed in (mainly for tests).
+    Google removed free-tier Gemini image generation in Dec 2025, which is
+    why image gen isn't just Gemini too.
+
+    Room-redesign image generation (generate_image) and "Build a House"
+    rendering (generate_house_render) are DELIBERATELY separate provider
+    instances (_room_image_provider vs _house_image_provider), not one shared
+    _image_provider - added when IMAGE_PROVIDER=kaggle first let room-redesign
+    swap to a user's own fine-tuned model. That model was trained on interior
+    redesign, not exterior/plot renders, so "Build a House" always keeps using
+    OpenAI regardless of IMAGE_PROVIDER; only generate_image() reads the toggle.
 
     floor_plan_provider defaults to the app.providers.idealhouse MODULE itself
     (not an instance - its generate_floor_plan is a plain function, same style
@@ -17,9 +40,14 @@ class HybridProvider(Provider):
     one file, or by injecting a different object here (e.g. in tests).
     """
 
-    def __init__(self, image_provider=None, floor_plan_provider=None) -> None:
+    def __init__(
+        self, image_provider=None, room_image_provider=None, floor_plan_provider=None
+    ) -> None:
         self._gemini = GeminiProvider()
-        self._image_provider = image_provider or OpenAIImageProvider()
+        self._house_image_provider = image_provider or OpenAIImageProvider()
+        self._room_image_provider = room_image_provider or _default_room_image_provider(
+            self._house_image_provider
+        )
         self._floor_plan_provider = floor_plan_provider or idealhouse
 
     def describe_room(self, image_bytes: bytes) -> str:
@@ -29,7 +57,7 @@ class HybridProvider(Provider):
         return self._gemini.generate_tier_notes(image_bytes)
 
     def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
-        return self._image_provider.generate_image(image_bytes, prompt, tier)
+        return self._room_image_provider.generate_image(image_bytes, prompt, tier)
 
     def generate_materials(
         self,
@@ -56,7 +84,7 @@ class HybridProvider(Provider):
         return self._floor_plan_provider.generate_floor_plan(plot_description, dimensions, prompt)
 
     def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
-        return self._image_provider.generate_house_render(image_bytes, prompt)
+        return self._house_image_provider.generate_house_render(image_bytes, prompt)
 
     def generate_room_layout(
         self, dimensions: dict, prompt: str, plot_description: str | None = None
