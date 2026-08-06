@@ -48,6 +48,13 @@ services:
         value: high
       - key: S3_REGION
         value: auto
+      # Room-redesign image backend toggle - "openai" or "kaggle" (see
+      # app/providers/kaggle.py). Hardcoded here (not a secret) since it's
+      # just a mode switch, not a credential - flip to "openai" instantly by
+      # editing this file if the Kaggle tunnel is down, no dashboard visit
+      # needed. Leave as "openai" if you don't have a Kaggle model running.
+      - key: IMAGE_PROVIDER
+        value: kaggle
 
       # --- Secret: signs the login-session cookie. Render generates a strong
       #     random value for you; no need to paste anything. ---
@@ -67,6 +74,17 @@ services:
       - key: GEMINI_MATERIALS_API_KEY_PREMIUM
         sync: false
       - key: SERPAPI_API_KEY
+        sync: false
+      # Optional fallback SerpApi key - app/providers/serpapi.py switches to
+      # it automatically when the first key runs out of monthly credits.
+      # Leave blank in the Render dashboard if you don't have a second key.
+      - key: SERPAPI_API_KEY_2
+        sync: false
+      # Your Kaggle notebook's Cloudflare tunnel URL (app/providers/kaggle.py).
+      # This is EPHEMERAL - it changes every time the notebook restarts, so
+      # you'll need to come back and update it in the Render dashboard
+      # whenever that happens. Only used when IMAGE_PROVIDER=kaggle above.
+      - key: KAGGLE_API_URL
         sync: false
 
       # --- S3 storage (AWS bucket in your .env). Leave S3_ENDPOINT_URL blank for
