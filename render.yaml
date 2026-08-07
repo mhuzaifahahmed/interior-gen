@@ -87,6 +87,15 @@ services:
       - key: KAGGLE_API_URL
         sync: false
 
+      # Set ONLY if you're deploying the frontend (static/) separately to
+      # Vercel instead of letting this backend serve it (the default - see
+      # app/main.py's index()). Enables CORS + cross-site session cookies for
+      # exactly this origin. Full URL, no trailing slash, e.g.
+      # https://your-app.vercel.app - leave blank in the dashboard if this
+      # backend is serving the frontend itself.
+      - key: FRONTEND_ORIGIN
+        sync: false
+
       # --- S3 storage (AWS bucket in your .env). Leave S3_ENDPOINT_URL blank for
       #     real AWS S3; set it only for R2/other S3-compatible hosts. ---
       - key: S3_BUCKET

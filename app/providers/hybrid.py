@@ -1,9 +1,13 @@
+import logging
+
 from app.config import settings
 from app.providers import idealhouse
 from app.providers.base import Provider
 from app.providers.gemini import GeminiProvider
 from app.providers.kaggle import KaggleImageProvider
 from app.providers.openai import OpenAIImageProvider
+
+logger = logging.getLogger(__name__)
 
 
 def _default_room_image_provider(house_image_provider):
@@ -34,6 +38,22 @@ class HybridProvider(Provider):
     redesign, not exterior/plot renders, so "Build a House" always keeps using
     OpenAI regardless of IMAGE_PROVIDER; only generate_image() reads the toggle.
 
+    RUNTIME FALLBACK: generate_image() automatically retries via OpenAI
+    (_house_image_provider, which is always OpenAI regardless of the toggle)
+    if _room_image_provider raises for any reason - a dead Kaggle tunnel,
+    a timeout, a malformed response, anything. This matters specifically
+    because the Kaggle model is an ephemeral, dev-hosted endpoint (a
+    Cloudflare quick tunnel tied to a live notebook session) that can and has
+    gone offline mid-testing - without this, one dead tunnel fails the whole
+    generation instead of degrading to the paid-but-reliable backend. Each of
+    the 3 tiers' generate_image() calls falls back independently (see
+    app/pipeline/generate.py's per-tier ThreadPoolExecutor), so a transient
+    failure on only one tier doesn't drag the other two down with it. No
+    fallback loop when IMAGE_PROVIDER=openai (the default) - in that case
+    _room_image_provider IS _house_image_provider, so there's nothing further
+    to fall back to and a failure just raises directly, exactly as before this
+    existed.
+
     floor_plan_provider defaults to the app.providers.idealhouse MODULE itself
     (not an instance - its generate_floor_plan is a plain function, same style
     as serpapi.py) so a real vendor can be wired in later by only changing that
@@ -57,7 +77,18 @@ class HybridProvider(Provider):
         return self._gemini.generate_tier_notes(image_bytes)
 
     def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
-        return self._room_image_provider.generate_image(image_bytes, prompt, tier)
+        try:
+            return self._room_image_provider.generate_image(image_bytes, prompt, tier)
+        except Exception:
+            if self._room_image_provider is self._house_image_provider:
+                raise  # already OpenAI (the fallback itself) - nothing left to try
+            logger.exception(
+                "room image provider %s failed for tier %s - falling back to OpenAI "
+                "for this generation",
+                type(self._room_image_provider).__name__,
+                tier,
+            )
+            return self._house_image_provider.generate_image(image_bytes, prompt, tier)
 
     def generate_materials(
         self,

@@ -1,5 +1,25 @@
 const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+// Backend base URL - auto-detected from the CURRENT page's own hostname,
+// not a single hardcoded value, specifically so local dev keeps working
+// unchanged after REMOTE_BACKEND_URL below was introduced for the split
+// Vercel+Render deploy. Real regression this fixes: REMOTE_BACKEND_URL used
+// to be assigned directly to API_BASE, so opening this same file locally
+// (http://127.0.0.1:8000) tried to fetch() the PRODUCTION Render backend
+// instead of the local one - CORS on Render only allows the configured
+// FRONTEND_ORIGIN (the Vercel domain), so every request from localhost was
+// blocked outright ("Failed to fetch"). localhost/127.0.0.1 (any port) now
+// always uses "" (same-origin, relative /api/... paths) regardless of
+// REMOTE_BACKEND_URL - only a REAL non-local hostname (i.e. this file
+// actually being served FROM Vercel) uses the remote backend.
+const REMOTE_BACKEND_URL = "https://interior-gen.onrender.com";
+const IS_LOCAL_HOST = ["localhost", "127.0.0.1"].includes(location.hostname);
+const API_BASE = IS_LOCAL_HOST ? "" : REMOTE_BACKEND_URL;
+
+function apiUrl(path) {
+  return `${API_BASE}${path}`;
+}
+
 const uploadView = document.getElementById("upload-view");
 const form = document.getElementById("upload-form");
 const fileInput = document.getElementById("file-input");
@@ -88,13 +108,13 @@ function initialsFrom(name) {
 navLoginBtn.addEventListener("click", () => (window.location.href = "/login"));
 navSignupBtn.addEventListener("click", () => (window.location.href = "/signup"));
 navLogoutBtn.addEventListener("click", async () => {
-  await fetch("/api/auth/logout", { method: "POST" });
+  await fetch(apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" });
   window.location.href = "/";
 });
 
 async function checkAuthState() {
   try {
-    const res = await fetch("/api/auth/me");
+    const res = await fetch(apiUrl("/api/auth/me"), { credentials: "include" });
     if (!res.ok) throw new Error("not logged in");
     const user = await res.json();
     const displayName = user.full_name || user.username;
@@ -736,7 +756,7 @@ form.addEventListener("submit", async (e) => {
 
   let projectId;
   try {
-    const res = await fetch("/api/projects", { method: "POST", body: formData });
+    const res = await fetch(apiUrl("/api/projects"), { method: "POST", body: formData, credentials: "include" });
     if (res.status === 401) {
       savePendingGeneration("room", {
         fileName: selectedFile.name,
@@ -922,7 +942,7 @@ function finishProgress(data, onDone) {
 async function pollProject(projectId) {
   let data;
   try {
-    const res = await fetch(`/api/projects/${projectId}`);
+    const res = await fetch(apiUrl(`/api/projects/${projectId}`), { credentials: "include" });
     data = await res.json();
   } catch (err) {
     showError("Lost connection while checking progress. " + err.message);
@@ -1134,7 +1154,10 @@ async function openHistoryModal() {
   historyModalBody.innerHTML = '<p class="font-body-md text-on-surface-variant text-sm">Loading…</p>';
 
   try {
-    const [roomRes, houseRes] = await Promise.all([fetch("/api/projects"), fetch("/api/house-projects")]);
+    const [roomRes, houseRes] = await Promise.all([
+      fetch(apiUrl("/api/projects"), { credentials: "include" }),
+      fetch(apiUrl("/api/house-projects"), { credentials: "include" }),
+    ]);
     historyRoomProjects = roomRes.ok ? await roomRes.json() : [];
     historyHouseProjects = houseRes.ok ? await houseRes.json() : [];
   } catch {
@@ -1363,7 +1386,11 @@ houseForm.addEventListener("submit", async (e) => {
 
   let houseProjectId;
   try {
-    const res = await fetch("/api/house-projects", { method: "POST", body: formData });
+    const res = await fetch(apiUrl("/api/house-projects"), {
+      method: "POST",
+      body: formData,
+      credentials: "include",
+    });
     if (res.status === 401) {
       savePendingGeneration("house", {
         fileName: houseSelectedFile.name,
@@ -1488,7 +1515,7 @@ function finishHouseProgress(onDone) {
 async function pollHouseProject(houseProjectId) {
   let data;
   try {
-    const res = await fetch(`/api/house-projects/${houseProjectId}`);
+    const res = await fetch(apiUrl(`/api/house-projects/${houseProjectId}`), { credentials: "include" });
     data = await res.json();
   } catch (err) {
     showHouseError("Lost connection while checking progress. " + err.message);

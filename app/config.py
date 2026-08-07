@@ -107,6 +107,20 @@ class Settings(BaseSettings):
     # each time the notebook is restarted.
     kaggle_api_url: str = ""
 
+    # Set ONLY when the frontend is hosted on a different domain from this
+    # backend (e.g. static/ deployed to Vercel, this FastAPI app deployed to
+    # Render) - blank (the default) means same-origin, which is how local dev
+    # and a single-Render-service deploy (this app serving its own static/
+    # via app.mount("/static", ...) - see index()) both already work, with
+    # zero extra config. When set, app/main.py adds CORS for exactly this
+    # origin and switches the session cookie to SameSite=None (required for
+    # ANY cross-site cookie, browsers reject it otherwise) + Secure (required
+    # to pair with SameSite=None - both hosts are HTTPS by default so this is
+    # safe). Exact origin only, no wildcard - allow_credentials=True (needed
+    # so the session cookie actually gets sent) is rejected by browsers when
+    # combined with a wildcard origin.
+    frontend_origin: str = ""
+
     storage_backend: str = "local"
     local_storage_dir: str = "data/storage"
 

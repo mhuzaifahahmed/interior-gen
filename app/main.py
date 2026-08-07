@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
@@ -53,7 +54,36 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Interior-Gen Backend", lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key=settings.resolved_session_secret_key)
+
+# Cross-site cookie requirements ONLY when the frontend is on a different
+# origin (settings.frontend_origin set - see its own comment in config.py):
+# browsers reject SameSite=None cookies unless also Secure, so both flip
+# together. Same-origin (frontend_origin blank - local dev, or this app
+# serving its own static/) keeps the plain Lax/non-Secure defaults, since
+# forcing Secure would break plain-HTTP local dev.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.resolved_session_secret_key,
+    same_site="none" if settings.frontend_origin else "lax",
+    https_only=bool(settings.frontend_origin),
+)
+
+# Added AFTER SessionMiddleware so it ends up OUTERMOST in the stack (each
+# add_middleware call wraps the existing stack) - CORS needs to see and
+# handle preflight OPTIONS requests before anything else runs. Exact origin
+# only (never "*") + allow_credentials=True is what actually lets the
+# session cookie survive a cross-site fetch() with credentials: "include"
+# (see static/app.js's API_BASE) - browsers reject the combination of "*"
+# with allow_credentials entirely, so this only activates for a real,
+# specific configured frontend origin, never a blanket allow-all.
+if settings.frontend_origin:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[settings.frontend_origin],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB
@@ -219,7 +249,12 @@ def google_callback(
         session.refresh(user)
 
     request.session["user_id"] = user.id
-    return RedirectResponse("/")
+    # Redirect back to the frontend's own root when it's hosted separately
+    # (settings.frontend_origin set - e.g. Vercel) - a bare "/" would resolve
+    # relative to THIS backend's own host, landing the user back on Render's
+    # copy of the frontend instead of the one they actually started on.
+    # Same-origin (frontend_origin blank) keeps the plain relative redirect.
+    return RedirectResponse(settings.frontend_origin or "/")
 
 
 CITY_MAX_CHARS = 80
