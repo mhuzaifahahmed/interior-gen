@@ -27,7 +27,7 @@
 <button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full" id="tab-btn-room" data-tab="room">ROOM REDESIGN</button>
 <button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full" id="tab-btn-house" data-tab="house">BUILD A HOUSE</button>
 </nav>
-<div class="flex items-center gap-4 shrink-0 pr-2">
+<div class="hidden md:flex items-center gap-4 shrink-0 pr-2">
 <div class="flex items-center gap-4" id="nav-auth-guest">
 <button type="button" class="font-label-caps text-label-caps text-on-night-variant hover:text-on-night transition-colors" id="nav-login-btn">LOG IN</button>
 <button type="button" class="font-label-caps text-label-caps bg-white text-night rounded-full px-4 py-2 hover:bg-white/85 hover:shadow-md transition-all duration-200" id="nav-signup-btn">SIGN UP</button>
@@ -56,9 +56,50 @@ LOG OUT
 </div>
 </div>
 </div>
+<!-- Mobile-only hamburger - opens #mobile-sidebar-overlay below. The
+     desktop tab-bar (hidden md:flex, above) and the auth area just above
+     this button (now wrapped in hidden md:flex too) both disappear below
+     the md breakpoint, leaving ONLY the wordmark + this button in the
+     mobile header, per the mobile nav redesign. -->
+<button type="button" class="md:hidden flex items-center justify-center w-10 h-10 mr-1 rounded-full hover:bg-white/10 transition-colors" id="mobile-menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="mobile-sidebar-panel">
+<span class="material-symbols-outlined text-on-night text-2xl">menu</span>
+</button>
 </div>
 </div>
 </header>
+
+<!-- Mobile nav sidebar - md:hidden isn't needed on the overlay itself since
+     it's only ever opened via mobile-menu-btn, which is itself md:hidden -
+     resizing past the md breakpoint while open is an edge case handled
+     defensively in app.js (closeMobileSidebar() also runs on resize). -->
+<div class="fixed inset-0 z-[90] hidden" id="mobile-sidebar-overlay">
+<div class="absolute inset-0 bg-night/70 backdrop-blur-sm" id="mobile-sidebar-backdrop"></div>
+<div class="absolute top-0 right-0 h-full w-[78%] max-w-xs bg-night border-l border-night-border shadow-[0_0_40px_rgba(0,0,0,0.45)] flex flex-col" id="mobile-sidebar-panel">
+<div class="flex items-center justify-between h-16 px-5 border-b border-night-border shrink-0">
+<span class="font-headline-sm text-headline-sm text-on-night">Interior&#8209;Gen</span>
+<button type="button" class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors" id="mobile-sidebar-close" aria-label="Close menu">
+<span class="material-symbols-outlined text-on-night">close</span>
+</button>
+</div>
+<nav class="flex flex-col py-2 overflow-y-auto" id="mobile-sidebar-nav">
+<button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" data-tab="home">HOME</button>
+<button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" data-tab="room">ROOM REDESIGN</button>
+<button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" data-tab="house">BUILD A HOUSE</button>
+<div class="mt-2 pt-2 border-t border-night-border" id="mobile-sidebar-auth-guest">
+<a href="/static/login.html" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">LOG IN</a>
+<a href="/static/signup.html" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">SIGN UP</a>
+</div>
+<div class="hidden mt-2 pt-2 border-t border-night-border" id="mobile-sidebar-auth-user">
+<button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" id="mobile-sidebar-history-btn">HISTORY</button>
+<button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" id="mobile-sidebar-logout-btn">LOG OUT</button>
+</div>
+<div class="mt-2 pt-2 border-t border-night-border">
+<a href="/static/privacy.html" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">PRIVACY POLICY</a>
+<a href="/static/terms.html" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">TERMS</a>
+</div>
+</nav>
+</div>
+</div>
 
 <main class="pt-28 flex-1 relative">
 

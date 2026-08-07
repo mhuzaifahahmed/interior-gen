@@ -96,6 +96,25 @@ const navLoginBtn = document.getElementById("nav-login-btn");
 const navSignupBtn = document.getElementById("nav-signup-btn");
 const navLogoutBtn = document.getElementById("nav-logout-btn");
 
+/* ---------- Mobile nav sidebar ---------- */
+/* Below the md breakpoint the desktop tab-bar and auth area both disappear
+   (see index.html's header - both wrapped in hidden md:flex now) and this
+   slide-in sidebar is the only way to reach Home/Room Redesign/Build a
+   House/auth/Privacy/Terms on a phone. Mirrors nav-auth-guest/nav-auth-user's
+   own guest-vs-logged-in toggle (see checkAuthState() below) as its own
+   parallel set of elements, rather than trying to reuse the desktop ones
+   directly - the desktop nav-user-menu is a small anchored dropdown,
+   fundamentally a different shape than a full-height sidebar list. */
+const mobileMenuBtn = document.getElementById("mobile-menu-btn");
+const mobileSidebarOverlay = document.getElementById("mobile-sidebar-overlay");
+const mobileSidebarBackdrop = document.getElementById("mobile-sidebar-backdrop");
+const mobileSidebarPanel = document.getElementById("mobile-sidebar-panel");
+const mobileSidebarClose = document.getElementById("mobile-sidebar-close");
+const mobileSidebarAuthGuest = document.getElementById("mobile-sidebar-auth-guest");
+const mobileSidebarAuthUser = document.getElementById("mobile-sidebar-auth-user");
+const mobileSidebarHistoryBtn = document.getElementById("mobile-sidebar-history-btn");
+const mobileSidebarLogoutBtn = document.getElementById("mobile-sidebar-logout-btn");
+
 // Two-letter monogram for the avatar chip - initials of the first two words of
 // the display name, or the first two characters if it's a single word.
 function initialsFrom(name) {
@@ -131,13 +150,116 @@ async function checkAuthState() {
     navMenuEmailEl.textContent = user.email || "";
     navAuthGuest.classList.add("hidden");
     navAuthUser.classList.remove("hidden");
+    mobileSidebarAuthGuest.classList.add("hidden");
+    mobileSidebarAuthUser.classList.remove("hidden");
   } catch {
     navAuthGuest.classList.remove("hidden");
     navAuthUser.classList.add("hidden");
+    mobileSidebarAuthGuest.classList.remove("hidden");
+    mobileSidebarAuthUser.classList.add("hidden");
   }
 }
 
 checkAuthState();
+
+/* ---------- Mobile nav sidebar open/close (GSAP) ---------- */
+/* Slide-in-from-the-right panel + backdrop fade, not the small anchored
+   "morph" dropdown recipe used elsewhere (nav-user-menu, the Style/Palette
+   dropdowns) - a full-height sidebar is a different UI shape (edge-anchored
+   panel + scrim, not a small corner popover), so it gets its own slide
+   animation instead of forcing that recipe onto something it wasn't
+   designed for. Still follows the same house rules as every other GSAP
+   interaction in this file: prefers-reduced-motion + missing-gsap fallback,
+   and gsap.set() (start state) + .to() (end state) for the staggered link
+   reveal - never .from() + stagger, which was observed elsewhere in this
+   project to silently freeze at its start values (see the gsap-transitions
+   skill for the full incident writeup). */
+let mobileSidebarTl = null;
+
+function isMobileSidebarOpen() {
+  return !mobileSidebarOverlay.classList.contains("hidden");
+}
+
+function openMobileSidebar() {
+  if (isMobileSidebarOpen()) return;
+  mobileMenuBtn.setAttribute("aria-expanded", "true");
+  mobileSidebarOverlay.classList.remove("hidden");
+  document.body.style.overflow = "hidden"; // lock background scroll while open
+
+  if (typeof gsap === "undefined" || prefersReducedMotion) return;
+
+  if (mobileSidebarTl) mobileSidebarTl.kill();
+  const links = mobileSidebarPanel.querySelectorAll("nav > *");
+  gsap.set(mobileSidebarBackdrop, { opacity: 0 });
+  gsap.set(mobileSidebarPanel, { x: "100%" });
+  gsap.set(links, { opacity: 0, x: 16 });
+
+  mobileSidebarTl = gsap.timeline();
+  mobileSidebarTl
+    .to(mobileSidebarBackdrop, { opacity: 1, duration: 0.25, ease: "power1.out" }, 0)
+    .to(mobileSidebarPanel, { x: "0%", duration: 0.38, ease: "power3.out" }, 0)
+    .to(links, { opacity: 1, x: 0, duration: 0.24, ease: "power2.out", stagger: 0.04 }, "-=0.2");
+}
+
+function closeMobileSidebar() {
+  if (!isMobileSidebarOpen()) return;
+  mobileMenuBtn.setAttribute("aria-expanded", "false");
+  document.body.style.overflow = "";
+
+  if (typeof gsap === "undefined" || prefersReducedMotion) {
+    mobileSidebarOverlay.classList.add("hidden");
+    return;
+  }
+
+  if (mobileSidebarTl) mobileSidebarTl.kill();
+  mobileSidebarTl = gsap.timeline({
+    onComplete: () => {
+      mobileSidebarOverlay.classList.add("hidden");
+      gsap.set(mobileSidebarPanel, { clearProps: "transform" });
+      gsap.set(mobileSidebarBackdrop, { clearProps: "opacity" });
+    },
+  });
+  mobileSidebarTl
+    .to(mobileSidebarPanel, { x: "100%", duration: 0.28, ease: "power2.in" }, 0)
+    .to(mobileSidebarBackdrop, { opacity: 0, duration: 0.2, ease: "power1.in" }, 0);
+}
+
+mobileMenuBtn.addEventListener("click", () => {
+  isMobileSidebarOpen() ? closeMobileSidebar() : openMobileSidebar();
+});
+mobileSidebarClose.addEventListener("click", closeMobileSidebar);
+mobileSidebarBackdrop.addEventListener("click", closeMobileSidebar);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && isMobileSidebarOpen()) closeMobileSidebar();
+});
+// Defensive: if the viewport is resized/rotated past the md breakpoint while
+// open (mobile-menu-btn itself becomes hidden then, via md:hidden), don't
+// leave the sidebar stuck open with no visible way to close it.
+window.addEventListener("resize", () => {
+  if (window.innerWidth >= 768 && isMobileSidebarOpen()) closeMobileSidebar();
+});
+
+// Home/Room Redesign/Build a House reuse the EXACT SAME switchTab() the
+// desktop tab-bar uses (defined further down this file, but a hoisted
+// function declaration so it's safe to reference here) - no duplicated tab
+// logic, this just also closes the sidebar afterward.
+mobileSidebarPanel.querySelectorAll(".mobile-sidebar-link[data-tab]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    switchTab(btn.dataset.tab);
+    closeMobileSidebar();
+  });
+});
+
+// History/Log out reuse the desktop nav's own buttons' existing click
+// handlers (fetch+redirect for logout, modal-opening for history) via a
+// synthetic click, rather than duplicating that logic here.
+mobileSidebarHistoryBtn.addEventListener("click", () => {
+  closeMobileSidebar();
+  navHistoryBtn.click();
+});
+mobileSidebarLogoutBtn.addEventListener("click", () => {
+  navLogoutBtn.click();
+});
 
 /* ---------- User menu dropdown (History) ---------- */
 
