@@ -105,8 +105,15 @@ function initialsFrom(name) {
   return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 }
 
-navLoginBtn.addEventListener("click", () => (window.location.href = "/login"));
-navSignupBtn.addEventListener("click", () => (window.location.href = "/signup"));
+// /static/login.html and /static/signup.html, not the clean /login and
+// /signup routes - those clean routes only exist when this backend serves
+// its own frontend (app/main.py's login_page()/signup_page()). On a
+// static-only host (e.g. this file being served from Vercel with no backend
+// alongside it), those routes 404 - the /static/*.html path works
+// identically either way, since the backend also serves it at that same
+// path via its own StaticFiles mount.
+navLoginBtn.addEventListener("click", () => (window.location.href = "/static/login.html"));
+navSignupBtn.addEventListener("click", () => (window.location.href = "/static/signup.html"));
 navLogoutBtn.addEventListener("click", async () => {
   await fetch(apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" });
   window.location.href = "/";
@@ -767,7 +774,7 @@ form.addEventListener("submit", async (e) => {
         additionalInstructions: additionalInstructionsInput.value,
         city: cityInput.value,
       });
-      window.location.href = "/login";
+      window.location.href = "/static/login.html";
       return;
     }
     if (!res.ok) throw new Error(await res.text());
@@ -1401,7 +1408,7 @@ houseForm.addEventListener("submit", async (e) => {
         unit: houseUnitInput.value,
         prompt: housePromptInput.value,
       });
-      window.location.href = "/login";
+      window.location.href = "/static/login.html";
       return;
     }
     if (!res.ok) throw new Error(await res.text());
