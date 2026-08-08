@@ -1,4 +1,5 @@
 import io
+import json
 import uuid
 
 from fastapi.testclient import TestClient
@@ -121,6 +122,35 @@ def test_full_upload_and_poll_flow(monkeypatch):
         # No city was submitted - images-only path, no materials/pricing calls.
         assert body["materials_status"] == "skipped"
         assert body["materials"] is None
+
+
+def test_input_metadata_json_written_to_storage(monkeypatch):
+    storage = FakeStorage()
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: storage)
+
+    with TestClient(app) as client:
+        username = _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        data = {
+            "interior_style": "Modern",
+            "color_palette": "Neutral",
+            "additional_instructions": "add a reading nook",
+            "city": "Karachi",
+        }
+        create_res = client.post("/api/projects", files=files, data=data)
+        assert create_res.status_code == 200
+        project_id = create_res.json()["project_id"]
+
+        metadata_key = f"users/{username}/input/{project_id}/metadata.json"
+        assert metadata_key in storage.objects
+        saved = json.loads(storage.objects[metadata_key])
+        assert saved == {
+            "interior_style": "Modern",
+            "color_palette": "Neutral",
+            "additional_instructions": "add a reading nook",
+            "city": "Karachi",
+        }
 
 
 def test_interior_style_and_palette_reach_the_generated_prompts(monkeypatch):

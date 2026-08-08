@@ -38,6 +38,16 @@
   display: none !important;
 }
 
+/* Defense-in-depth against horizontal scroll on mobile: the actual overflow
+   source (a mismatched padding/negative-margin pair on #hero-copy) is fixed
+   at its root cause in index.html, but this stays as a safety net against a
+   future layout regression re-introducing sub-viewport-width overflow -
+   nothing in this app relies on horizontal page scroll, so it never clips
+   real content, only accidental overflow. */
+html, body {
+  overflow-x: hidden;
+}
+
 :root {
   --ink: #33362e;
   --ink-soft: #6e6c5c;

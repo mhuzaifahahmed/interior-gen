@@ -112,6 +112,9 @@ const mobileSidebarPanel = document.getElementById("mobile-sidebar-panel");
 const mobileSidebarClose = document.getElementById("mobile-sidebar-close");
 const mobileSidebarAuthGuest = document.getElementById("mobile-sidebar-auth-guest");
 const mobileSidebarAuthUser = document.getElementById("mobile-sidebar-auth-user");
+const mobileSidebarUsernameEl = document.getElementById("mobile-sidebar-username");
+const mobileSidebarEmailEl = document.getElementById("mobile-sidebar-email");
+const mobileSidebarAvatarEl = document.getElementById("mobile-sidebar-avatar");
 const mobileSidebarHistoryBtn = document.getElementById("mobile-sidebar-history-btn");
 const mobileSidebarLogoutBtn = document.getElementById("mobile-sidebar-logout-btn");
 
@@ -150,6 +153,9 @@ async function checkAuthState() {
     navMenuEmailEl.textContent = user.email || "";
     navAuthGuest.classList.add("hidden");
     navAuthUser.classList.remove("hidden");
+    mobileSidebarUsernameEl.textContent = displayName;
+    mobileSidebarEmailEl.textContent = user.email || "";
+    mobileSidebarAvatarEl.textContent = initialsFrom(displayName);
     mobileSidebarAuthGuest.classList.add("hidden");
     mobileSidebarAuthUser.classList.remove("hidden");
   } catch {

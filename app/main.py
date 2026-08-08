@@ -45,6 +45,7 @@ from app.schemas import (
 from app.storage import get_storage
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -318,6 +319,23 @@ async def create_project(
     project.original_key = original_key
     session.add(project)
     session.commit()
+
+    # Best-effort: also mirror the chosen inputs into S3 next to the upload
+    # itself (in addition to the SQLite row above), so a user's full input
+    # history is browsable directly from their own S3 prefix, not just via
+    # the DB. Never blocks/fails project creation if storage write hiccups -
+    # the SQLite row remains the source of truth either way.
+    metadata_key = f"users/{user.username}/input/{project.id}/metadata.json"
+    metadata = {
+        "interior_style": interior_style,
+        "color_palette": color_palette,
+        "additional_instructions": additional_instructions,
+        "city": city,
+    }
+    try:
+        storage.put(metadata_key, json.dumps(metadata).encode("utf-8"), content_type="application/json")
+    except Exception:
+        logger.exception("failed to write input metadata.json for project %s - continuing", project.id)
 
     background_tasks.add_task(
         run_pipeline,
