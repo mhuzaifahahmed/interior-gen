@@ -11,6 +11,11 @@ sqlmodel>=0.0.22
 pydantic-settings>=2.4
 python-dotenv>=1.0
 boto3>=1.34
+# Postgres driver - only needed when DATABASE_URL points at postgres:// (e.g. a
+# hosted Neon/Supabase/Render Postgres instance for production, where SQLite's
+# plain on-disk file doesn't survive a redeploy on Render's ephemeral
+# filesystem). Harmless to always install - sqlite:// URLs never touch this.
+psycopg2-binary>=2.9
 pytest>=8.3
 httpx>=0.27
 # bcrypt used directly, NOT via passlib - passlib 1.7.4 (its last release,

@@ -1,3 +1,5 @@
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -130,7 +132,41 @@ class Settings(BaseSettings):
     s3_secret_access_key: str = ""
     s3_region: str = "auto"
 
+    # Plain sqlite:///data/app.db by default (dev) - point this at a real
+    # hosted Postgres (Neon/Supabase/Render Postgres) connection string in
+    # production instead, since a plain SQLite file on Render's free tier
+    # lives on an EPHEMERAL filesystem and is wiped on every redeploy/restart
+    # (a real incident: signups vanished overnight because of this). See
+    # resolved_database_url below for two real Neon-specific connection
+    # string quirks this normalizes automatically.
     database_url: str = "sqlite:///data/app.db"
+
+    @property
+    def resolved_database_url(self) -> str:
+        url = self.database_url
+        if not url or url.startswith("sqlite"):
+            return url
+
+        # SQLAlchemy 2.x rejects the bare "postgres://" scheme some providers
+        # (including Neon, historically) still hand out - only "postgresql://"
+        # resolves to a known dialect.
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url.removeprefix("postgres://")
+
+        # Neon's copy-paste connection string can include channel_binding=require
+        # - a libpq/SCRAM feature the psycopg2-binary wheel's bundled libpq
+        # doesn't recognize, which fails the connection outright ("invalid
+        # connection option 'channel_binding'") - a real, live-hit error, not
+        # theoretical. sslmode=require (also in Neon's string) already forces
+        # an encrypted connection, so dropping channel_binding is safe.
+        parts = urlsplit(url)
+        if "channel_binding" in dict(parse_qsl(parts.query)):
+            query = urlencode(
+                [(k, v) for k, v in parse_qsl(parts.query) if k != "channel_binding"]
+            )
+            url = urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+
+        return url
 
     # Signs the session cookie (Starlette SessionMiddleware) that holds the
     # logged-in user's id - see app/auth.py. Real random value lives in .env

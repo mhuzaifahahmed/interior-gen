@@ -5,11 +5,20 @@ from sqlmodel import SQLModel, Session, create_engine
 
 from app.config import settings
 
-_db_path = settings.database_url.removeprefix("sqlite:///")
-if _db_path and _db_path != ":memory:":
+_resolved_database_url = settings.resolved_database_url
+_is_sqlite = _resolved_database_url.startswith("sqlite")
+
+_db_path = _resolved_database_url.removeprefix("sqlite:///")
+if _is_sqlite and _db_path and _db_path != ":memory:":
     Path(_db_path).parent.mkdir(parents=True, exist_ok=True)
 
-engine = create_engine(settings.database_url, connect_args={"check_same_thread": False})
+# check_same_thread=False is a SQLite-only connect arg (works around SQLite's
+# single-thread default so FastAPI's threaded request handling doesn't error)
+# - psycopg2 rejects it outright when DATABASE_URL points at Postgres instead.
+engine = create_engine(
+    _resolved_database_url,
+    connect_args={"check_same_thread": False} if _is_sqlite else {},
+)
 
 # Columns added after the initial table was created. create_all() only creates
 # MISSING TABLES, never adds columns to an existing one - without this, an
@@ -47,7 +56,12 @@ _NEW_COLUMNS_BY_TABLE = {
 
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
-    _migrate_missing_columns()
+    # The PRAGMA-based column migration below is SQLite-only syntax - a fresh
+    # Postgres database already gets the full current schema straight from
+    # create_all() above (nothing to migrate), and an existing Postgres DB
+    # would need a real migration tool (e.g. Alembic), out of scope here.
+    if _is_sqlite:
+        _migrate_missing_columns()
 
 
 def _migrate_missing_columns() -> None:
