@@ -8,6 +8,46 @@ function apiUrl(path) {
   return path;
 }
 
+// Render's free tier spins the backend down after ~15 min idle - the first
+// request after that takes 30-60s to wake it back up. Left completely
+// unhandled, that just looks like a hang with no explanation. This shows a
+// small toast if ANY backend call (authFetch below, or the plain fetch()
+// calls still used for a couple of unauthenticated bits) takes longer than
+// COLD_START_HINT_DELAY_MS - long enough that a normal warm request never
+// triggers it, short enough that a real cold start gets explained quickly
+// rather than left silent. Reference-counted so overlapping requests (e.g.
+// the Promise.all in the history modal) don't hide the toast the instant
+// the fastest one finishes while others are still in flight.
+const COLD_START_HINT_DELAY_MS = 4000;
+const coldStartToast = document.getElementById("cold-start-toast");
+let coldStartInFlight = 0;
+let coldStartTimer = null;
+
+function beginColdStartWatch() {
+  coldStartInFlight += 1;
+  if (coldStartTimer === null) {
+    coldStartTimer = setTimeout(() => coldStartToast.classList.remove("hidden"), COLD_START_HINT_DELAY_MS);
+  }
+}
+
+function endColdStartWatch() {
+  coldStartInFlight = Math.max(0, coldStartInFlight - 1);
+  if (coldStartInFlight === 0) {
+    clearTimeout(coldStartTimer);
+    coldStartTimer = null;
+    coldStartToast.classList.add("hidden");
+  }
+}
+
+async function fetchWithColdStartHint(path, options) {
+  beginColdStartWatch();
+  try {
+    return await fetch(path, options);
+  } finally {
+    endColdStartWatch();
+  }
+}
+
 // Attaches a fresh Clerk session token as `Authorization: Bearer <token>` to
 // an authenticated API call - this is the entire auth mechanism now (see
 // app/auth.py's require_user), no cookies/credentials involved at all, which
@@ -21,7 +61,7 @@ async function authFetch(path, options = {}) {
   const token = await Clerk.session?.getToken();
   const headers = { ...(options.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  return fetch(path, { ...options, headers });
+  return fetchWithColdStartHint(path, { ...options, headers });
 }
 
 const uploadView = document.getElementById("upload-view");

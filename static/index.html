@@ -25,6 +25,18 @@
 </head>
 <body class="bg-background font-body-md text-on-background min-h-screen flex flex-col">
 
+<!-- Shown only if a backend call takes longer than a normal warm request -
+     Render's free tier spins the backend down after ~15 min idle, and the
+     first request after that takes 30-60s to wake it back up. See
+     app.js's fetchWithColdStartHint()/beginColdStartWatch(). Hidden by
+     default; never blocks interaction (pointer-events-none). -->
+<div class="hidden fixed bottom-6 inset-x-0 z-[100] flex justify-center px-margin-mobile pointer-events-none" id="cold-start-toast">
+<div class="flex items-center gap-3 bg-night/90 backdrop-blur-xl text-on-night rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.35)] border border-white/10 px-5 py-3 max-w-md">
+<span class="material-symbols-outlined text-[20px] shrink-0">progress_activity</span>
+<span class="font-body-md text-body-md">Starting up the server — this can take up to a minute on the first visit today.</span>
+</div>
+</div>
+
 <header class="fixed top-4 inset-x-0 z-50 px-margin-mobile pointer-events-none">
 <div class="max-w-4xl mx-auto bg-night/50 backdrop-blur-2xl rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.3)] border border-white/10 pointer-events-auto">
 <div class="h-16 px-3 lg:px-6 flex items-center justify-between gap-4 lg:gap-6">
