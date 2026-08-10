@@ -48,6 +48,20 @@ async function fetchWithColdStartHint(path, options) {
   }
 }
 
+// Best-effort human-readable label for the current user (from Clerk's own
+// profile, already loaded client-side - no extra network call) - sent along
+// with project/house-project creation purely so the backend can fold it
+// into that user's S3 folder name, since browsing the bucket by opaque
+// Clerk ids alone (e.g. "user_2abc...") is hard to match back to a real
+// person. Falls back to "" (backend degrades to id-only naming) if Clerk
+// hasn't loaded a user yet or has no name/email set.
+async function currentUserDisplayName() {
+  const Clerk = await clerkReady;
+  const user = Clerk.user;
+  if (!user) return "";
+  return user.fullName || user.username || user.primaryEmailAddress?.emailAddress || "";
+}
+
 // Attaches a fresh Clerk session token as `Authorization: Bearer <token>` to
 // an authenticated API call - this is the entire auth mechanism now (see
 // app/auth.py's require_user), no cookies/credentials involved at all, which
@@ -943,6 +957,7 @@ form.addEventListener("submit", async (e) => {
   formData.append("color_palette", colorPaletteSelect.value);
   formData.append("additional_instructions", additionalInstructionsInput.value.trim());
   formData.append("city", city);
+  formData.append("display_name", await currentUserDisplayName());
 
   let projectId;
   try {
@@ -1573,6 +1588,7 @@ houseForm.addEventListener("submit", async (e) => {
   if (houseWidthInput.value) formData.append("width", houseWidthInput.value);
   formData.append("unit", houseUnitInput.value);
   formData.append("prompt", housePromptInput.value.trim());
+  formData.append("display_name", await currentUserDisplayName());
 
   let houseProjectId;
   try {

@@ -141,6 +141,49 @@ def test_input_metadata_json_written_to_storage(monkeypatch):
         }
 
 
+def test_storage_namespace_sanitizes_and_truncates_display_name():
+    from app.main import _storage_namespace
+
+    assert _storage_namespace("user_abc", "Jane Doe") == "user_abc_jane_doe"
+    assert _storage_namespace("user_abc", "") == "user_abc"
+    assert _storage_namespace("user_abc", "   ") == "user_abc"
+    assert _storage_namespace("user_abc", "Jane!! Doe??") == "user_abc_jane_doe"
+    assert _storage_namespace("user_abc", "a" * 100) == f"user_abc_{'a' * 40}"
+
+
+def test_display_name_appended_to_storage_namespace(monkeypatch):
+    storage = FakeStorage()
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: storage)
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        data = {**_REQUIRED_STYLE_FIELDS, "display_name": "Jane Doe"}
+        create_res = client.post("/api/projects", files=files, data=data)
+        assert create_res.status_code == 200
+        project_id = create_res.json()["project_id"]
+
+        expected_key = f"users/{user_id}_jane_doe/input/{project_id}/original.png"
+        assert expected_key in storage.objects
+
+
+def test_no_display_name_falls_back_to_bare_user_id(monkeypatch):
+    storage = FakeStorage()
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: storage)
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        assert create_res.status_code == 200
+        project_id = create_res.json()["project_id"]
+
+        expected_key = f"users/{user_id}/input/{project_id}/original.png"
+        assert expected_key in storage.objects
+
+
 def test_interior_style_and_palette_reach_the_generated_prompts(monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(main_module, "get_provider", lambda: provider)

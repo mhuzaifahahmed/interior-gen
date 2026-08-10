@@ -86,6 +86,26 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
         assert f"users/{username}/output/" in body["images"]["render"]
 
 
+def test_house_display_name_appended_to_storage_namespace(monkeypatch):
+    storage = FakeStorage()
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: storage)
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"prompt": "2 floors", "display_name": "Jane Doe"},
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        expected_key = f"users/{user_id}_jane_doe/input/{house_project_id}/plot.png"
+        assert expected_key in storage.objects
+
+
 def test_house_prompt_reaches_the_render_call(monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(main_module, "get_provider", lambda: provider)

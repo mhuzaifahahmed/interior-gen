@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -100,6 +101,26 @@ def privacy():
 
 
 CITY_MAX_CHARS = 80
+DISPLAY_NAME_MAX_CHARS = 40
+_DISPLAY_NAME_UNSAFE_CHARS = re.compile(r"[^a-z0-9]+")
+
+
+def _storage_namespace(user_id: str, display_name: str) -> str:
+    """Folder-friendly S3 prefix for a user's uploads/renders - the Clerk
+    user id (e.g. "user_2abc...") stays the authoritative, stable part (so
+    existing uploads are never orphaned even if the person's display name
+    later changes), with a sanitized human-readable label appended so
+    browsing the bucket doesn't mean cross-referencing opaque Clerk ids
+    against the Clerk dashboard every time. `display_name` comes straight
+    from Clerk's own client-side profile (app.js's currentUserDisplayName())
+    - not re-verified server-side since it's only ever used for a folder
+    label, never for auth/ownership (that's still user_id, compared exactly
+    elsewhere in this file). Falls back to the bare id if no usable name was
+    supplied (e.g. a brand-new Clerk profile with no name/email loaded yet).
+    """
+    label = _DISPLAY_NAME_UNSAFE_CHARS.sub("_", display_name.strip().lower()).strip("_")
+    label = label[:DISPLAY_NAME_MAX_CHARS]
+    return f"{user_id}_{label}" if label else user_id
 
 
 @app.post("/api/projects", response_model=ProjectCreateResponse)
@@ -110,6 +131,7 @@ async def create_project(
     color_palette: str = Form(""),
     additional_instructions: str = Form(""),
     city: str = Form(""),
+    display_name: str = Form(""),
     session: Session = Depends(get_session),
     user: AuthUser = Depends(require_user),
 ):
@@ -151,11 +173,13 @@ async def create_project(
     session.commit()
     session.refresh(project)
 
-    # Namespaced by the Clerk user id (not just project id) so every user's
-    # uploads/renders group under their own S3 prefix - see CLAUDE.md's
-    # "Authentication & per-user storage" section for why (Clerk ids are
-    # alphanumeric + underscore, always a safe path segment).
-    original_key = f"users/{user.id}/input/{project.id}/original.png"
+    # Namespaced by the Clerk user id, optionally with a human-readable label
+    # appended (see _storage_namespace) so every user's uploads/renders group
+    # under their own S3 prefix, and that prefix is actually identifiable by
+    # name when browsing the bucket - see CLAUDE.md's "Authentication"
+    # section.
+    storage_namespace = _storage_namespace(user.id, display_name)
+    original_key = f"users/{storage_namespace}/input/{project.id}/original.png"
     storage.put(original_key, data, content_type=file.content_type)
     project.original_key = original_key
     session.add(project)
@@ -166,7 +190,7 @@ async def create_project(
     # history is browsable directly from their own S3 prefix, not just via
     # the DB. Never blocks/fails project creation if storage write hiccups -
     # the SQLite row remains the source of truth either way.
-    metadata_key = f"users/{user.id}/input/{project.id}/metadata.json"
+    metadata_key = f"users/{storage_namespace}/input/{project.id}/metadata.json"
     metadata = {
         "interior_style": interior_style,
         "color_palette": color_palette,
@@ -187,7 +211,7 @@ async def create_project(
         color_palette,
         additional_instructions,
         city,
-        user.id,
+        storage_namespace,
     )
 
     return ProjectCreateResponse(project_id=project.id)
@@ -255,6 +279,7 @@ async def create_house_project(
     width: float | None = Form(None),
     unit: str = Form("m"),
     prompt: str = Form(""),
+    display_name: str = Form(""),
     session: Session = Depends(get_session),
     user: AuthUser = Depends(require_user),
 ):
@@ -289,14 +314,15 @@ async def create_house_project(
     session.commit()
     session.refresh(house_project)
 
-    plot_image_key = f"users/{user.id}/input/{house_project.id}/plot.png"
+    storage_namespace = _storage_namespace(user.id, display_name)
+    plot_image_key = f"users/{storage_namespace}/input/{house_project.id}/plot.png"
     storage.put(plot_image_key, data, content_type=file.content_type)
     house_project.plot_image_key = plot_image_key
     session.add(house_project)
     session.commit()
 
     background_tasks.add_task(
-        run_house_pipeline, house_project.id, provider, storage, dimensions, prompt, user.id
+        run_house_pipeline, house_project.id, provider, storage, dimensions, prompt, storage_namespace
     )
 
     return HouseProjectCreateResponse(house_project_id=house_project.id)

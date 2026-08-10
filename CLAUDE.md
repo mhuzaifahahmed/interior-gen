@@ -730,6 +730,22 @@ replaced the old system" below for the real incident that drove it.
   alphanumeric + underscore, already a safe S3 path segment with **no separate charset validation
   needed** — the old `app.auth.validate_username`/`USERNAME_PATTERN` machinery is gone, since there's no
   user-chosen username left to validate at all.
+- **Human-readable label appended to the S3 prefix**: `app/main.py::_storage_namespace(user_id,
+  display_name)` turns `{id}` above into `{id}_{sanitized_display_name}` (e.g.
+  `user_2abc123_jane_doe`) — added because opaque Clerk ids alone made browsing the bucket to find a
+  specific person's files require cross-referencing the Clerk dashboard every time. `display_name` comes
+  from `POST /api/projects`/`/api/house-projects`'s new `display_name` Form field, sent by `app.js`'s
+  `currentUserDisplayName()` (reads `Clerk.user.fullName`/`username`/email client-side — no extra network
+  call, already loaded). **Deliberately not re-verified server-side** (only sanitized, never trusted for
+  auth/ownership — that's still the exact Clerk `user_id`, compared elsewhere in this file) since it's
+  only ever used for a folder label. **The Clerk id stays the stable, authoritative prefix** with the
+  name appended, not the reverse — so a later display-name change on Clerk's side only affects the
+  *next* upload's folder name, never orphans or breaks access to previously-created projects (each
+  `Project`/`HouseProject` row stores its own exact storage keys at creation time, never reconstructs
+  them from the user id later). Applies identically whether the session came from Clerk's email/password
+  flow or its Google sign-in — both produce the same kind of Clerk user object client-side, no
+  special-casing needed. Falls back to the bare id (old behavior) if no display name is available yet
+  (e.g. a brand-new profile with nothing set).
 - **Generator gating unchanged**: `create_project`/`create_house_project` still require
   `Depends(require_user)` and set `project.user_id = user.id`; `get_project`/`get_house_project` still
   return **404 (not 403)** for both "doesn't exist" and "exists but isn't yours", for the same
