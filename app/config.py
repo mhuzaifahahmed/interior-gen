@@ -115,12 +115,12 @@ class Settings(BaseSettings):
     # and a single-Render-service deploy (this app serving its own static/
     # via app.mount("/static", ...) - see index()) both already work, with
     # zero extra config. When set, app/main.py adds CORS for exactly this
-    # origin and switches the session cookie to SameSite=None (required for
-    # ANY cross-site cookie, browsers reject it otherwise) + Secure (required
-    # to pair with SameSite=None - both hosts are HTTPS by default so this is
-    # safe). Exact origin only, no wildcard - allow_credentials=True (needed
-    # so the session cookie actually gets sent) is rejected by browsers when
-    # combined with a wildcard origin.
+    # origin as a defensive fallback for any direct (non-proxied) API call.
+    # The real fix for cross-site auth is vercel.json's /api/:path* proxy
+    # (makes browser requests same-origin) plus Clerk's Bearer-token auth
+    # (app/auth.py) - neither depends on cookies/CORS the way the old
+    # session-cookie system did, so this setting matters much less than it
+    # used to.
     frontend_origin: str = ""
 
     storage_backend: str = "local"
@@ -168,29 +168,16 @@ class Settings(BaseSettings):
 
         return url
 
-    # Signs the session cookie (Starlette SessionMiddleware) that holds the
-    # logged-in user's id - see app/auth.py. Real random value lives in .env
-    # only, never in .env.example (same convention as the API keys above).
-    session_secret_key: str = ""
-
-    # Google OAuth ("Continue with Google" on login/signup) - sits alongside
-    # the existing username/password auth, not a replacement for it (user's
-    # explicit choice). Created under Google Cloud Console > APIs & Services >
-    # Credentials > OAuth client ID > Web application; the redirect URI there
-    # must exactly match google_redirect_uri below. See CLAUDE.md's
-    # "Authentication" section for the full setup walkthrough and the
-    # find-or-create-by-email account-linking behavior.
-    google_client_id: str = ""
-    google_client_secret: str = ""
-    google_redirect_uri: str = "http://127.0.0.1:8000/api/auth/google/callback"
-
-    @property
-    def resolved_session_secret_key(self) -> str:
-        # Dev-only fallback so a fresh checkout without .env still boots -
-        # sessions just won't survive a secret-key rotation/restart, which is
-        # fine for local dev but NOT safe for a real deployment (auth cookies
-        # for every logged-in user would be forgeable with a known/fixed key).
-        return self.session_secret_key or "dev-only-insecure-secret-key-set-SESSION_SECRET_KEY-in-.env"
+    # Clerk (https://clerk.com) - the entire auth system (signup, login,
+    # Google sign-in, session issuance) as of the Clerk migration. Replaced
+    # the old bcrypt password hashing + Starlette session cookies + hand-
+    # written Google OAuth flow entirely - see CLAUDE.md's "Authentication"
+    # section. publishable_key is used only by the frontend (safe to expose,
+    # it's meant to be public); secret_key is backend-only, used by
+    # app/auth.py's verify_token() call to verify the session JWT a
+    # Clerk-authenticated frontend sends as `Authorization: Bearer <token>`.
+    clerk_publishable_key: str = ""
+    clerk_secret_key: str = ""
 
 
 settings = Settings()

@@ -602,9 +602,10 @@ creep back in later. Recorded here so the reasoning doesn't have to be re-derive
   materials (name/spec/price/currency/source_url/is_estimate + total), `materials_status`.
   `POST /api/house-projects` takes exactly `file`, `length`, `width`, `unit`, `prompt` (≤200 chars);
   returns `plot_description`, per-floor blueprint images (`blueprint_urls`), one render, an inert
-  `floor_plan` slot. `POST /api/auth/{signup,login}` take exactly the fields in `SignupRequest`/
-  `LoginRequest` (`app/schemas.py`). There are exactly **two generator tools** (Room Redesign, Build a
-  House), a landing tab, and now login/signup — no third tool, no other pages.
+  `floor_plan` slot. Auth (`POST /api/auth/{signup,login}` at the time this reconciliation was written) is
+  now entirely Clerk's own hosted UI, not a backend contract this codebase defines — see "Authentication
+  (Clerk)" below. There are exactly **two generator tools** (Room Redesign, Build a House), a landing tab,
+  and login/signup — no third tool, no other pages.
 - **Stripped — invented inputs with no backend field** (room-redesign upload mockups): a "Design
   Intensity" selector, "Elements to Preserve" checkboxes, a "Material Luxury" slider, an "Architectural
   Vibe" enum dropdown, style-preset chips wired to nothing, a fake system log/console, fake
@@ -633,19 +634,17 @@ creep back in later. Recorded here so the reasoning doesn't have to be re-derive
     result-card content, check whether the field exists in the schema first; if it doesn't, either add
     it for real on the backend or don't render it.
 - **Login/signup — stripped**: the fake "Authentication sequence initialized"/setTimeout-then-`alert()`
-  success simulation and the color-swap "Access Granted" fake success state (both replaced with a real
-  `fetch()` to `/api/auth/login`/`signup` and a real redirect or inline error); the dead Google/Apple
-  social-login buttons (no OAuth backend exists); the "Encrypted with AES-256" badge (a false technical
-  claim — passwords are bcrypt-hashed at rest, the badge implied a specific transport-layer guarantee
-  that was never actually implemented or verified); the placeholder text in Full Name/Email/Password
-  (removed per user request — the mockup's fake example values like "Mies van der Rohe" read as
-  pre-filled data, not a hint). **Also removed, per user request**: the visible Username and Role form
-  fields — `signup.html`'s JS now **auto-derives** a username from the email's local part (sanitized to
-  the required `[a-z0-9_]{3,32}` charset, see `app/auth.py::validate_username`) plus a short random
-  suffix for collision-avoidance, retrying once with a fresh suffix on a `409`; `role` is simply omitted
-  (already optional server-side). The user never sees or picks their own username now, even though it
-  still exists and still names their S3 storage prefix (see "Authentication & per-user storage" below).
-  **Real bug fixed**: Chrome/Edge force a light yellow/white autofill background via an internal
+  success simulation and the color-swap "Access Granted" fake success state; the dead Google/Apple
+  social-login buttons (no OAuth backend existed at the time); the "Encrypted with AES-256" badge (a false
+  technical claim); the placeholder text in Full Name/Email/Password (removed per user request — the
+  mockup's fake example values like "Mies van der Rohe" read as pre-filled data, not a hint).
+  **Superseded**: this bullet originally described a real hand-built username/password + bcrypt system
+  that replaced the mockup's fakes (including a since-removed visible Username/Role form pair, auto-derived
+  usernames, etc.) — that entire system, along with the Google OAuth flow eventually built alongside it,
+  has since been replaced wholesale by Clerk. See "Authentication (Clerk)" below for the current, real
+  system; nothing about the stripped Stitch-mockup fakes changes as a result, only what replaced them.
+  **Real bug fixed at the time (kept for the CSS lesson, independent of the auth-system swap)**: Chrome/Edge
+  force a light yellow/white autofill background via an internal
   `-webkit-box-shadow` inset trick that plain `background-color` CSS can't override — both pages'
   `<style>` blocks now include a `-webkit-autofill` override (transparent-looking inset box-shadow +
   `-webkit-text-fill-color`) so autofilled fields stay on the dark theme instead of flashing white.
@@ -675,116 +674,92 @@ report-to-Google/Stitch issue, not a local config problem. The API key is stored
 (`.claude.json`, local/project scope), not in `.env` — it's a Stitch account key, unrelated to the
 Gemini/OpenAI/SerpApi keys documented elsewhere in this file.
 
-## Authentication & per-user storage
+## Authentication (Clerk)
 
-Real accounts, not a placeholder — added because the generators are gated behind login (user's explicit
-choice: easier to keep each user's own inputs/prompts/outputs organized in S3 under their own username,
-rather than the earlier flat `local.input|output/{project_id}/...` layout with no owner at all).
+**Auth is now entirely owned by Clerk (https://clerk.com)** — signup, login, Google sign-in, session
+issuance, and the account UI itself. This replaced an earlier hand-built system (bcrypt password hashing +
+Starlette session cookies + a hand-written Google OAuth flow) entirely, not incrementally — see "Why this
+replaced the old system" below for the real incident that drove it.
 
-- **`User`** (`app/models.py`): `id`, `username` (unique, charset-validated `[a-z0-9_]{3,32}` by
-  `app.auth.validate_username` — deliberately strict because it's also used verbatim as an S3 key path
-  segment, so this charset can never produce a path-traversal or otherwise unsafe key), `email`
-  (unique), `full_name`, `role`, `password_hash`. `Project`/`HouseProject` each gained a nullable
-  `user_id` FK (nullable only so any pre-auth dev-DB rows still load — not backfilled, this is a dev
-  prototype; every *new* row always gets a real owner).
-- **`app/auth.py`**: password hashing uses the **`bcrypt`** library **directly** (`hashpw`/`checkpw`),
-  deliberately **not `passlib`** — a real, live-hit compatibility break: `passlib` 1.7.4 (its last
-  release, unmaintained) hard-fails against modern `bcrypt` (5.x removed the internal
-  `__about__.__version__` attribute passlib's backend-detection probes for), confirmed by an actual
-  `ValueError`/`AttributeError` when tested, not a theoretical concern. `get_current_user()`/
-  `require_user()` read `request.session["user_id"]` (Starlette `SessionMiddleware`, signed cookie via
-  `settings.session_secret_key` / `SESSION_SECRET_KEY` in `.env` — falls back to an insecure dev-only
-  default if unset, fine for local dev, **not** for any real deployment).
-- **Endpoints** (`app/main.py`): `POST /api/auth/signup` (username/email uniqueness + charset/length
-  validation, hashes password, sets session), `POST /api/auth/login` (accepts username **or** email as
-  `identifier`), `POST /api/auth/logout`, `GET /api/auth/me`. `GET /login`/`GET /signup` serve the
-  static pages (same `FileResponse` pattern as `/terms`/`/privacy`).
-- **Generator gating**: `create_project`/`create_house_project` require `Depends(require_user)` and set
-  `project.user_id = user.id`. `get_project`/`get_house_project` return **404 (not 403)** for both
-  "doesn't exist" and "exists but isn't yours" — deliberately indistinguishable so project ids aren't
-  enumerable across accounts (a 403 would confirm the id is real).
-- **Per-user S3 namespacing**: storage keys changed from `local.input|output/{project_id}/...` to
-  **`users/{username}/input/{project_id}/...`** and **`users/{username}/output/{project_id}/...`** —
-  `create_project`/`create_house_project` build the input key with the logged-in user's username, and
-  pass `username` through to `run_pipeline(...)`/`run_house_pipeline(...)` (`app/pipeline/generate.py`,
-  `generate_house.py`), which use it to build every output key. Both pipeline functions treat `username`
-  as **optional** (falls back to the old flat `local.output/...` prefix when omitted) purely so direct
-  unit tests (`test_pipeline.py`, `test_house_pipeline.py`) that call them without going through the API
-  don't need updating — the real endpoints always pass it.
-- **Tests**: `tests/test_auth.py` (signup/login/logout/me, duplicate username/email rejection, bad
-  password, username-charset rejection, owner-only 404s). `tests/test_api.py`/`test_house_api.py` gained
-  a `_signup_and_login()` helper (every generator test now signs up a fresh random-suffixed user first)
-  and their storage-key assertions were updated to the `users/{username}/...` shape; also added
-  `test_create_project_requires_login` / `test_cannot_view_another_users_project` (and house
-  equivalents).
-
-### Google OAuth ("Continue with Google")
-
-Sits **alongside** username/password auth, not a replacement (user's explicit choice) — both work on the
-same `User` table and both end the same way (`request.session["user_id"] = user.id`), so every other
-auth-gated code path (`require_user`, generator gating, per-user S3 namespacing) needed zero changes.
-
-- **Flow, plain `httpx`, no OAuth library**: `app/google_oauth.py` implements the three-request
-  Authorization Code flow directly against Google's own endpoints (`build_authorize_url`,
-  `exchange_code_for_token`, `fetch_userinfo`) — deliberately not `authlib` or similar, since the flow is
-  only three requests and the project already depends on `httpx` for the Gemini/SerpApi providers. Kept in
-  its own module (mirrors `app/providers/serpapi.py`'s shape) specifically so tests can monkeypatch
-  `google_oauth.exchange_code_for_token`/`fetch_userinfo` directly — `app/main.py` calls them as
-  `google_oauth.exchange_code_for_token(...)` (module attribute access), not a `from ... import
-  exchange_code_for_token`, which is what makes that monkeypatching actually take effect.
-- **Endpoints** (`app/main.py`): `GET /api/auth/google/login` — 503s if `GOOGLE_CLIENT_ID`/
-  `GOOGLE_CLIENT_SECRET` aren't set (`google_oauth.is_configured()`), otherwise stashes a random CSRF
-  `state` in the session and redirects to Google's consent screen. `GET /api/auth/google/callback` —
-  validates `state` against the session (mismatch/missing → fail closed, redirect to
-  `/login?error=google_auth_failed`, never a 500), exchanges the code, fetches userinfo, then
-  find-or-creates the `User`: existing `google_sub` → log in directly; no `google_sub` match but the
-  email already has a password account → **link** (set `google_sub` on the existing row, same account,
-  not a duplicate) rather than creating a second account for the same person; no match at all → create a
-  new `User` with a server-side-derived username (see below) and log in. Every failure path (bad state,
-  Google returning `?error=`, the token/userinfo exchange itself failing) redirects to
-  `/login?error=google_auth_failed` — `login.html`'s JS reads that query param and shows it in the same
-  error slot password-login failures use.
-- **`User.google_sub`** (`app/models.py`): nullable, set only for accounts that have ever signed in with
-  Google. **Not** enforced unique at the DB level on existing dev databases — SQLite's `ALTER TABLE ADD
-  COLUMN` (this project's whole migration mechanism, see `app/db.py`) can't add a `UNIQUE` constraint
-  retroactively, so uniqueness here is application-level only (`get_user_by_google_sub` lookup before
-  create) — acceptable for this dev prototype, same standard as the other additive-only migrated columns.
-- **`User.password_hash` stays required, deliberately not made nullable for Google-only accounts** — same
-  underlying SQLite constraint problem (an existing NOT NULL column can't be relaxed via `ALTER TABLE`
-  without a full table rebuild). Instead, `app.auth.unusable_password_hash()` stores a real bcrypt hash of
-  a random value nobody knows, so `POST /api/auth/login` naturally 401s for these accounts (no schema
-  change needed, no special-casing in the login path either).
-- **`app.auth.derive_username_from_email()`**: server-side re-implementation of `signup.html`'s
-  client-side `deriveUsername()` — needed because Google sign-in creates the account entirely
-  server-side, with no signup form (and thus no client-side JS) in between. Unlike the client-side
-  version's single-attempt gamble, this one actually checks the DB and retries with a fresh random suffix
-  (up to 5 times) until it finds a genuinely free username, rather than relying on a 409 retry loop that
-  doesn't exist server-side.
-- **Setup** (real steps, not hypothetical — walk through these to actually enable it): Google Cloud
-  Console → create/select a project → **APIs & Services → OAuth consent screen** (User type External; add
-  your own account under *Test users* while the app is in "Testing" mode, required until Google verifies
-  it) → **APIs & Services → Credentials → Create Credentials → OAuth client ID** (Application type: Web
-  application; **Authorized redirect URI** must exactly match `GOOGLE_REDIRECT_URI` below) → copy the
-  Client ID/Secret into `.env` (never `.env.example`, same convention as every other real credential in
-  this file):
-  ```
-  GOOGLE_CLIENT_ID=...
-  GOOGLE_CLIENT_SECRET=...
-  GOOGLE_REDIRECT_URI=http://127.0.0.1:8000/api/auth/google/callback
-  ```
-  Leaving these blank keeps Google sign-in cleanly disabled (`google_login()` 503s) without touching
-  password auth at all.
-- **Frontend**: `login.html`/`signup.html` each gained an "OR" divider + a "Continue with Google" button
-  (official multi-color "G" mark inlined as SVG, not an icon font) linking straight to
-  `/api/auth/google/login` — no JS involved on the button itself, it's a plain link, since the whole flow
-  is server-side redirects.
-- **Tests**: `tests/test_google_oauth.py` — monkeypatches `google_oauth.exchange_code_for_token`/
-  `fetch_userinfo` (never a real Google network call, same testing convention as every other provider).
-  Covers: 503 when unconfigured, a real `state` round-trip through `/login` → `/callback`, new-account
-  creation, linking to a pre-existing password account by email, a second Google login reusing the
-  already-linked account (not creating a duplicate), and all three failure paths (state mismatch, Google's
-  own `?error=`, the token exchange raising `httpx.HTTPStatusError`) redirecting to
-  `/login?error=google_auth_failed` instead of 500ing.
+- **Frontend** (`static/clerk-init.js`, shared by `index.html`/`login.html`/`signup.html`): loads Clerk's
+  JS SDK via plain `<script>` tags from Clerk's own CDN — no npm/bundler, same convention as
+  Tailwind/GSAP elsewhere in this project. **Two scripts are required, in order**: `@clerk/ui@1/dist/
+  ui.browser.js` THEN `@clerk/clerk-js@6/dist/clerk.browser.js` — a real bug hit while wiring this up:
+  loading only `clerk-js` (the quickstart's more prominent script tag) throws `"Clerk was not loaded with
+  Ui components"` the moment `mountSignIn()`/`mountSignUp()` is called, confirmed live (widgets silently
+  failed to render, console showed the exact error) before the `@clerk/ui` script was added. `Clerk.load()`
+  is called with `{ ui: { ClerkUI: window.__internal_ClerkUICtor } }` — the value `ui.browser.js` sets on
+  `window` for `clerk-js` to pick up. Exposes a single `clerkReady` promise every page awaits before
+  touching `window.Clerk`. The **publishable key** (`pk_test_...`) is hardcoded directly in this file — safe
+  to expose, it's meant to be public (unlike `CLERK_SECRET_KEY`, backend-only, in `.env`). The **Frontend
+  API domain** Clerk's script URLs need is decoded from the publishable key itself
+  (`base64(frontendApiDomain + "$")` is the middle segment of a `pk_test_.../pk_live_...` key) rather than
+  hardcoded a second time — switching Clerk instances only ever means updating `CLERK_PUBLISHABLE_KEY`.
+- **`login.html`/`signup.html`**: the old hand-written forms + `/api/auth/login|signup` fetch calls +
+  client-side username-derivation are gone entirely. Each page now just mounts Clerk's own pre-built
+  widget into a `<div>` (`Clerk.mountSignIn(...)` / `Clerk.mountSignUp(...)`) with
+  `fallbackRedirectUrl: "/"` and an `appearance: { variables: { colorPrimary: "#7A4712" } }` override to
+  match this project's brand accent — everything else about Clerk's widget (email/password fields, the
+  "Continue with Google" button, validation, error states) is Clerk's own UI, not this codebase's. No
+  username field anywhere anymore — see below for why.
+- **`app.js`**: `applyAuthUI(user)` drives the nav/mobile-sidebar logged-in-vs-guest state directly off
+  `Clerk.user` (available client-side once `clerkReady` resolves — `user.fullName`, `user.username`,
+  `user.primaryEmailAddress.emailAddress`), **not** a round-trip to this backend — there's no `/api/auth/me`
+  equivalent anymore, Clerk already has this loaded client-side. Kept live via `Clerk.addListener()` so
+  logging out updates the UI immediately, no page reload needed. `authFetch(path, options)` attaches a
+  fresh `Authorization: Bearer <token>` header (`await Clerk.session.getToken()`, which Clerk caches in
+  memory and only re-issues over the network once actually near expiry) to every authenticated API call —
+  this is the **entire** auth mechanism reaching the backend now, no cookies/`credentials: "include"`
+  involved at all. Logging out calls `Clerk.signOut()` directly, no backend endpoint involved.
+- **Backend** (`app/auth.py`): `get_current_user(request)` reads the `Authorization: Bearer <token>`
+  header, verifies it via `clerk_backend_api.security.verify_token(token, VerifyTokenOptions(secret_key=
+  settings.clerk_secret_key))`, and returns an `AuthUser(id=payload["sub"])` — just the Clerk user id
+  (e.g. `"user_2abc..."`), nothing else. `require_user()` 401s if that's `None`. There is **no local
+  `User` table anymore** — Clerk's session JWT doesn't carry email/name by default, and nothing
+  server-side needs them (the frontend already has that from `Clerk.user` directly), so there was nothing
+  left to store locally. `Project.user_id`/`HouseProject.user_id` are now plain `Optional[str]` columns
+  holding the Clerk user id string directly — **not a local FK anymore** (there's no table left to
+  reference). An existing Postgres (Neon) database from before this migration needed
+  `app/db.py::_drop_legacy_user_table()` (runs once on every non-SQLite startup, idempotent) to drop the
+  old FK constraints and the orphaned `user` table — without it, Postgres would reject every new
+  project/house-project insert with a foreign-key violation, since a Clerk user id will never exist as a
+  row in that now-unmanaged table.
+- **Per-user S3 namespacing unchanged in shape, different value source**: storage keys are still
+  `users/{id}/input/{project_id}/...` / `users/{id}/output/{project_id}/...` — `{id}` is now the Clerk
+  user id (`user.id` in `app/main.py`) instead of the old hand-picked `username`. Clerk ids are
+  alphanumeric + underscore, already a safe S3 path segment with **no separate charset validation
+  needed** — the old `app.auth.validate_username`/`USERNAME_PATTERN` machinery is gone, since there's no
+  user-chosen username left to validate at all.
+- **Generator gating unchanged**: `create_project`/`create_house_project` still require
+  `Depends(require_user)` and set `project.user_id = user.id`; `get_project`/`get_house_project` still
+  return **404 (not 403)** for both "doesn't exist" and "exists but isn't yours", for the same
+  id-enumeration reason as before.
+- **Google sign-in**: fully owned by Clerk now — enabled/configured entirely inside the Clerk Dashboard
+  (Google as a social connection), not in this codebase. `app/google_oauth.py` (the old hand-written
+  three-request Authorization Code flow) is **deleted**, not dormant.
+- **Why this replaced the old system**: real incidents, not a preference swap. (1) Signups vanished
+  overnight because SQLite lived on Render's ephemeral filesystem and was wiped on every redeploy — fixed
+  first by migrating to hosted Postgres (see "Provider split"-adjacent `resolved_database_url` in
+  `app/config.py`), but that alone didn't explain everything. (2) Even after the DB fix, the nav UI never
+  showed a logged-in state on Safari/iOS — traced to Safari/WebKit's ITP silently dropping the session
+  cookie because it was cross-site (Vercel frontend, Render backend, different domains), confirmed via a
+  live side-by-side test: identical request/response, Chromium stored the cookie and logged in correctly,
+  WebKit discarded it outright. A Vercel-proxy workaround (`vercel.json`'s `/api/:path*` rewrite, making
+  requests same-origin) fixed the cookie problem but the user then chose to migrate to Clerk entirely
+  rather than keep maintaining a hand-rolled auth stack — Clerk's Bearer-token pattern sidesteps
+  cross-site cookie blocking structurally (a Bearer header isn't subject to `SameSite`/third-party-cookie
+  rules at all), on top of removing password-hashing/session-security/OAuth-flow code this project no
+  longer has to own or debug.
+- **Tests** (`tests/conftest.py`): `_fake_clerk_verification` (autouse) monkeypatches
+  `app.auth.verify_token` with a deterministic fake that accepts only `"test|<clerk_user_id>"` Bearer
+  tokens and rejects everything else — Clerk is never called for real in tests, same convention as every
+  other provider (see "Testing convention" below). `login_as(client, user_id=None)` attaches that fake
+  token to a `TestClient`'s headers (persists across requests on that client) and returns the user id —
+  the direct replacement for the old `_signup_and_login()` helper, aliased to it in `test_api.py`/
+  `test_house_api.py` so all existing call sites needed zero changes. `tests/test_auth.py` covers
+  `get_current_user`/`require_user` directly (missing header, non-Bearer header, invalid token, valid
+  token) plus a couple of integration checks against the real app (401 without/with a bad token, 200 with
+  a valid one). `tests/test_google_oauth.py` is deleted — there's no local Google OAuth code left to test.
 
 ## Testing convention
 

@@ -1,27 +1,14 @@
 import io
-import uuid
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
 import app.main as main_module
 from app.main import app
+from tests.conftest import login_as
 
-
-def _signup_and_login(client: TestClient) -> str:
-    """Generators are gated behind login now - see tests/test_api.py's
-    identical helper. Returns the created username."""
-    username = f"houseapitest_{uuid.uuid4().hex[:10]}"
-    res = client.post(
-        "/api/auth/signup",
-        json={
-            "username": username,
-            "email": f"{username}@example.com",
-            "password": "correct-horse-battery-staple",
-        },
-    )
-    assert res.status_code == 200, res.text
-    return username
+# See tests/test_api.py's identical alias - Clerk owns signup/login now.
+_signup_and_login = login_as
 
 
 class FakeProvider:

@@ -1,107 +1,56 @@
-"""Auth: bcrypt password hashing, cookie-session lookup, and the
-require_user() dependency that gates the generator endpoints. Real, not a
-placeholder - see CLAUDE.md's "Authentication" section for the full design
-(why Starlette SessionMiddleware over JWTs, why bcrypt directly instead of
-passlib, the username-as-S3-path-segment constraint).
+"""Auth: verifies Clerk-issued session JWTs and exposes the require_user()
+dependency that gates the generator endpoints. Clerk (https://clerk.com)
+owns the entire identity system now - signup, login, Google sign-in, session
+issuance - this module's only job is to verify the token a Clerk-
+authenticated frontend sends and extract the Clerk user id from it. See
+CLAUDE.md's "Authentication" section for the full migration story (this
+replaced a hand-written bcrypt + Starlette-session + Google OAuth stack).
 """
 
-import re
-import secrets
+from dataclasses import dataclass
 
-import bcrypt
+from clerk_backend_api.security import verify_token
+from clerk_backend_api.security.types import TokenVerificationError, VerifyTokenOptions
 from fastapi import Depends, HTTPException, Request
-from sqlmodel import Session, select
 
-from app.db import get_session
-from app.models import User
-
-USERNAME_PATTERN = re.compile(r"^[a-z0-9_]{3,32}$")
-# Requires a real domain with a TLD (user@host.tld) - just checking for "@"
-# let obviously malformed addresses like "xyz@gmail" (no TLD at all) through
-# at signup, which then "worked" at login since the identifier lookup just
-# matches whatever got stored.
-EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+from app.config import settings
 
 
-def validate_email(email: str) -> str:
-    """Raises ValueError with a user-facing message if invalid."""
-    email = email.strip().lower()
-    if not EMAIL_PATTERN.match(email):
-        raise ValueError("A valid email is required.")
-    return email
-
-
-def validate_username(username: str) -> str:
-    """Raises ValueError with a user-facing message if invalid. Deliberately
-    strict (lowercase letters/digits/underscore, 3-32 chars) since username is
-    used verbatim as an S3 key path segment (users/{username}/...) - this
-    charset can never produce a path-traversal or otherwise unsafe key.
+@dataclass(frozen=True)
+class AuthUser:
+    """Just the Clerk user id (e.g. "user_2abc...") - Clerk's own JWT session
+    tokens don't carry email/name by default, and nothing server-side needs
+    them: the frontend reads profile info (name, email, avatar) directly off
+    Clerk's own `Clerk.user` object client-side, never through this backend.
+    `id` doubles as the S3 path segment for this user's uploads/renders
+    (users/{id}/...) - Clerk ids are alphanumeric + underscore, already a
+    safe path segment with no separate validation needed, unlike the old
+    hand-picked `username` field this replaced.
     """
-    username = username.strip().lower()
-    if not USERNAME_PATTERN.match(username):
-        raise ValueError(
-            "Username must be 3-32 characters, lowercase letters/numbers/underscore only."
-        )
-    return username
+
+    id: str
 
 
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+def get_current_user(request: Request) -> AuthUser | None:
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        return None
+    token = auth_header[len("Bearer ") :].strip()
+    if not token:
+        return None
 
-
-def unusable_password_hash() -> str:
-    """A real bcrypt hash of a random value nobody knows - for Google-only
-    accounts (see models.User.password_hash's docstring for why this is a
-    hash of randomness rather than a nullable column). verify_password()
-    against this can never succeed by chance.
-    """
-    return hash_password(secrets.token_urlsafe(32))
-
-
-def derive_username_from_email(email: str, session: Session) -> str:
-    """Auto-derives a username from an email's local part, same charset/shape
-    as signup.html's client-side deriveUsername() (for password signups, where
-    the user typed the email themselves) - reused here because Google sign-in
-    creates the account entirely server-side, with no signup form in between.
-    Retries with a fresh random suffix until the (username, not just email) is
-    actually free, rather than a single fixed-attempt gamble.
-    """
-    base = re.sub(r"[^a-z0-9_]", "_", email.split("@")[0].lower())[:24] or "user"
-    for _ in range(5):
-        candidate = f"{base}_{secrets.token_hex(3)}"
-        if session.exec(select(User).where(User.username == candidate)).first() is None:
-            return candidate
-    # Astronomically unlikely to fall through 5 random suffixes - last resort.
-    return f"{base}_{secrets.token_hex(6)}"
-
-
-def verify_password(password: str, password_hash: str) -> bool:
     try:
-        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
-    except ValueError:
-        # Malformed/legacy hash - never a match, never a 500.
-        return False
+        payload = verify_token(token, VerifyTokenOptions(secret_key=settings.clerk_secret_key))
+    except TokenVerificationError:
+        return None
 
-
-def get_current_user(request: Request, session: Session = Depends(get_session)) -> User | None:
-    user_id = request.session.get("user_id")
+    user_id = payload.get("sub")
     if not user_id:
         return None
-    return session.get(User, user_id)
+    return AuthUser(id=user_id)
 
 
-def require_user(user: User | None = Depends(get_current_user)) -> User:
+def require_user(user: AuthUser | None = Depends(get_current_user)) -> AuthUser:
     if user is None:
         raise HTTPException(401, "login required")
     return user
-
-
-def get_user_by_username_or_email(session: Session, identifier: str) -> User | None:
-    identifier = identifier.strip().lower()
-    return session.exec(
-        select(User).where((User.username == identifier) | (User.email == identifier))
-    ).first()
-
-
-def get_user_by_google_sub(session: Session, google_sub: str) -> User | None:
-    return session.exec(select(User).where(User.google_sub == google_sub)).first()

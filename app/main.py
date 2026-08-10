@@ -1,33 +1,17 @@
 import json
 import logging
-import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, UploadFile, File
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
-from starlette.middleware.sessions import SessionMiddleware
 
-from app import google_oauth
-from app.auth import (
-    derive_username_from_email,
-    get_current_user,
-    get_user_by_google_sub,
-    get_user_by_username_or_email,
-    hash_password,
-    require_user,
-    unusable_password_hash,
-    validate_email,
-    validate_username,
-    verify_password,
-)
+from app.auth import AuthUser, require_user
 from app.config import settings
 from app.db import get_session, init_db
-from app.models import HouseProject, Project, User
+from app.models import HouseProject, Project
 from app.pipeline.generate import TIERS, run_pipeline
 from app.pipeline.generate_house import run_house_pipeline
 from app.pipeline.house_prompts import USER_PROMPT_MAX_CHARS
@@ -36,11 +20,8 @@ from app.providers import get_provider
 from app.schemas import (
     HouseProjectCreateResponse,
     HouseProjectStatusResponse,
-    LoginRequest,
     ProjectCreateResponse,
     ProjectStatusResponse,
-    SignupRequest,
-    UserResponse,
 )
 from app.storage import get_storage
 
@@ -56,32 +37,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Interior-Gen Backend", lifespan=lifespan)
 
-# Cross-site cookie requirements ONLY when the frontend is on a different
-# origin (settings.frontend_origin set - see its own comment in config.py):
-# browsers reject SameSite=None cookies unless also Secure, so both flip
-# together. Same-origin (frontend_origin blank - local dev, or this app
-# serving its own static/) keeps the plain Lax/non-Secure defaults, since
-# forcing Secure would break plain-HTTP local dev.
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=settings.resolved_session_secret_key,
-    same_site="none" if settings.frontend_origin else "lax",
-    https_only=bool(settings.frontend_origin),
-)
-
-# Added AFTER SessionMiddleware so it ends up OUTERMOST in the stack (each
-# add_middleware call wraps the existing stack) - CORS needs to see and
-# handle preflight OPTIONS requests before anything else runs. Exact origin
-# only (never "*") + allow_credentials=True is what actually lets the
-# session cookie survive a cross-site fetch() with credentials: "include"
-# (see static/app.js's API_BASE) - browsers reject the combination of "*"
-# with allow_credentials entirely, so this only activates for a real,
-# specific configured frontend origin, never a blanket allow-all.
+# No more session cookies/SessionMiddleware since the Clerk migration - auth
+# is a plain `Authorization: Bearer <clerk-jwt>` header now (see
+# app/auth.py), which isn't subject to cookie SameSite/cross-site rules at
+# all. CORS is kept as a defensive fallback for direct API calls that don't
+# go through the Vercel proxy (vercel.json) - allow_credentials stays off
+# since Bearer auth carries no cookie for the browser to need permission to
+# send.
 if settings.frontend_origin:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.frontend_origin],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -132,132 +99,6 @@ def privacy():
     return FileResponse("static/privacy.html")
 
 
-def _user_response(user: User) -> UserResponse:
-    return UserResponse(
-        id=user.id, username=user.username, email=user.email, full_name=user.full_name, role=user.role
-    )
-
-
-@app.post("/api/auth/signup", response_model=UserResponse)
-def signup(body: SignupRequest, request: Request, session: Session = Depends(get_session)):
-    try:
-        username = validate_username(body.username)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-    try:
-        email = validate_email(body.email)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    if len(body.password) < 8:
-        raise HTTPException(400, "Password must be at least 8 characters.")
-
-    if get_user_by_username_or_email(session, username) or get_user_by_username_or_email(session, email):
-        raise HTTPException(409, "That username or email is already taken.")
-
-    user = User(
-        username=username,
-        email=email,
-        full_name=(body.full_name or "").strip() or None,
-        role=(body.role or "").strip() or None,
-        password_hash=hash_password(body.password),
-    )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-
-    request.session["user_id"] = user.id
-    return _user_response(user)
-
-
-@app.post("/api/auth/login", response_model=UserResponse)
-def login(body: LoginRequest, request: Request, session: Session = Depends(get_session)):
-    user = get_user_by_username_or_email(session, body.identifier)
-    if user is None or not verify_password(body.password, user.password_hash):
-        raise HTTPException(401, "Incorrect username/email or password.")
-
-    request.session["user_id"] = user.id
-    return _user_response(user)
-
-
-@app.post("/api/auth/logout")
-def logout(request: Request):
-    request.session.clear()
-    return {"ok": True}
-
-
-@app.get("/api/auth/me", response_model=UserResponse)
-def me(user: User = Depends(require_user)):
-    return _user_response(user)
-
-
-@app.get("/api/auth/google/login")
-def google_login(request: Request):
-    """Redirects to Google's consent screen. Sits alongside password auth,
-    not a replacement for it - see CLAUDE.md's "Authentication" section.
-    """
-    if not google_oauth.is_configured():
-        raise HTTPException(503, "Google sign-in is not configured.")
-    state = secrets.token_urlsafe(24)
-    request.session["oauth_state"] = state
-    return RedirectResponse(google_oauth.build_authorize_url(state))
-
-
-@app.get("/api/auth/google/callback")
-def google_callback(
-    request: Request,
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
-    session: Session = Depends(get_session),
-):
-    # A mismatched/missing state means this request didn't originate from our
-    # own google_login() redirect (CSRF / replay) - fail closed, same as any
-    # other error path below: back to /login with a flag, never a 500.
-    expected_state = request.session.pop("oauth_state", None)
-    if error or not code or not state or state != expected_state:
-        return RedirectResponse("/login?error=google_auth_failed")
-
-    try:
-        access_token = google_oauth.exchange_code_for_token(code)
-        userinfo = google_oauth.fetch_userinfo(access_token)
-    except httpx.HTTPError:
-        return RedirectResponse("/login?error=google_auth_failed")
-
-    google_sub = userinfo.get("sub")
-    email = (userinfo.get("email") or "").strip().lower()
-    if not google_sub or not email:
-        return RedirectResponse("/login?error=google_auth_failed")
-
-    user = get_user_by_google_sub(session, google_sub)
-    if user is None:
-        # Find-or-create by email: a Google sign-in with an email that
-        # already has a password account links to it (sets google_sub)
-        # instead of creating a duplicate account for the same person.
-        user = get_user_by_username_or_email(session, email)
-        if user is not None:
-            user.google_sub = google_sub
-        else:
-            user = User(
-                username=derive_username_from_email(email, session),
-                email=email,
-                full_name=(userinfo.get("name") or "").strip() or None,
-                password_hash=unusable_password_hash(),
-                google_sub=google_sub,
-            )
-        session.add(user)
-        session.commit()
-        session.refresh(user)
-
-    request.session["user_id"] = user.id
-    # Redirect back to the frontend's own root when it's hosted separately
-    # (settings.frontend_origin set - e.g. Vercel) - a bare "/" would resolve
-    # relative to THIS backend's own host, landing the user back on Render's
-    # copy of the frontend instead of the one they actually started on.
-    # Same-origin (frontend_origin blank) keeps the plain relative redirect.
-    return RedirectResponse(settings.frontend_origin or "/")
-
-
 CITY_MAX_CHARS = 80
 
 
@@ -270,7 +111,7 @@ async def create_project(
     additional_instructions: str = Form(""),
     city: str = Form(""),
     session: Session = Depends(get_session),
-    user: User = Depends(require_user),
+    user: AuthUser = Depends(require_user),
 ):
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(400, f"unsupported file type: {file.content_type}")
@@ -310,11 +151,11 @@ async def create_project(
     session.commit()
     session.refresh(project)
 
-    # Namespaced by username (not just project id) so every user's uploads/
-    # renders group under their own S3 prefix - see CLAUDE.md's "Authentication
-    # & per-user storage" section for why (username is charset-validated at
-    # signup, so it's always a safe path segment).
-    original_key = f"users/{user.username}/input/{project.id}/original.png"
+    # Namespaced by the Clerk user id (not just project id) so every user's
+    # uploads/renders group under their own S3 prefix - see CLAUDE.md's
+    # "Authentication & per-user storage" section for why (Clerk ids are
+    # alphanumeric + underscore, always a safe path segment).
+    original_key = f"users/{user.id}/input/{project.id}/original.png"
     storage.put(original_key, data, content_type=file.content_type)
     project.original_key = original_key
     session.add(project)
@@ -325,7 +166,7 @@ async def create_project(
     # history is browsable directly from their own S3 prefix, not just via
     # the DB. Never blocks/fails project creation if storage write hiccups -
     # the SQLite row remains the source of truth either way.
-    metadata_key = f"users/{user.username}/input/{project.id}/metadata.json"
+    metadata_key = f"users/{user.id}/input/{project.id}/metadata.json"
     metadata = {
         "interior_style": interior_style,
         "color_palette": color_palette,
@@ -346,7 +187,7 @@ async def create_project(
         color_palette,
         additional_instructions,
         city,
-        user.username,
+        user.id,
     )
 
     return ProjectCreateResponse(project_id=project.id)
@@ -380,7 +221,7 @@ def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
 
 @app.get("/api/projects/{project_id}", response_model=ProjectStatusResponse)
 def get_project(
-    project_id: str, session: Session = Depends(get_session), user: User = Depends(require_user)
+    project_id: str, session: Session = Depends(get_session), user: AuthUser = Depends(require_user)
 ):
     project = session.get(Project, project_id)
     # 404 (not 403) for both "doesn't exist" and "not yours" - doesn't let a
@@ -393,7 +234,7 @@ def get_project(
 
 
 @app.get("/api/projects", response_model=list[ProjectStatusResponse])
-def list_projects(session: Session = Depends(get_session), user: User = Depends(require_user)):
+def list_projects(session: Session = Depends(get_session), user: AuthUser = Depends(require_user)):
     """History dropdown (static/app.js's history modal) - every Room Redesign
     project this user has ever created, newest first. Same 404-not-403 owner
     scoping as get_project applies implicitly here since the query is already
@@ -415,7 +256,7 @@ async def create_house_project(
     unit: str = Form("m"),
     prompt: str = Form(""),
     session: Session = Depends(get_session),
-    user: User = Depends(require_user),
+    user: AuthUser = Depends(require_user),
 ):
     """Mirrors create_project()'s validate -> create-row -> commit ->
     upload-original -> commit -> background_tasks.add_task shape. length/width
@@ -448,14 +289,14 @@ async def create_house_project(
     session.commit()
     session.refresh(house_project)
 
-    plot_image_key = f"users/{user.username}/input/{house_project.id}/plot.png"
+    plot_image_key = f"users/{user.id}/input/{house_project.id}/plot.png"
     storage.put(plot_image_key, data, content_type=file.content_type)
     house_project.plot_image_key = plot_image_key
     session.add(house_project)
     session.commit()
 
     background_tasks.add_task(
-        run_house_pipeline, house_project.id, provider, storage, dimensions, prompt, user.username
+        run_house_pipeline, house_project.id, provider, storage, dimensions, prompt, user.id
     )
 
     return HouseProjectCreateResponse(house_project_id=house_project.id)
@@ -487,7 +328,7 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
 
 @app.get("/api/house-projects/{house_project_id}", response_model=HouseProjectStatusResponse)
 def get_house_project(
-    house_project_id: str, session: Session = Depends(get_session), user: User = Depends(require_user)
+    house_project_id: str, session: Session = Depends(get_session), user: AuthUser = Depends(require_user)
 ):
     house_project = session.get(HouseProject, house_project_id)
     if house_project is None or house_project.user_id != user.id:
@@ -497,7 +338,7 @@ def get_house_project(
 
 
 @app.get("/api/house-projects", response_model=list[HouseProjectStatusResponse])
-def list_house_projects(session: Session = Depends(get_session), user: User = Depends(require_user)):
+def list_house_projects(session: Session = Depends(get_session), user: AuthUser = Depends(require_user)):
     """History dropdown - every Build a House project this user has ever
     created, newest first. Mirrors list_projects() above."""
     house_projects = session.exec(

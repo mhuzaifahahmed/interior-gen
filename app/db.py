@@ -48,9 +48,6 @@ _NEW_COLUMNS_BY_TABLE = {
         ("blueprint_status", "TEXT NOT NULL DEFAULT 'idle'"),
         ("user_id", "TEXT"),
     ],
-    "user": [
-        ("google_sub", "TEXT"),
-    ],
 }
 
 
@@ -62,6 +59,30 @@ def init_db() -> None:
     # would need a real migration tool (e.g. Alembic), out of scope here.
     if _is_sqlite:
         _migrate_missing_columns()
+    else:
+        _drop_legacy_user_table()
+
+
+def _drop_legacy_user_table() -> None:
+    """One-time cleanup for an existing Postgres (Neon) database from before
+    the Clerk migration: the old User table (and the FK constraints
+    project.user_id/houseproject.user_id had pointing at it) are gone now
+    that Clerk owns identity entirely and those columns just hold Clerk's own
+    user id string, not a local FK - see app/auth.py. Without this, Postgres
+    would keep enforcing the old FK constraint and reject every new
+    project/house-project insert with a foreign key violation, since a Clerk
+    user id will never exist as a row in the now-unmanaged "user" table.
+    Best-effort and idempotent (IF EXISTS everywhere) - a no-op on a database
+    that never had these, so it's safe to run on every startup.
+    """
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE project DROP CONSTRAINT IF EXISTS project_user_id_fkey"))
+            conn.execute(text("ALTER TABLE houseproject DROP CONSTRAINT IF EXISTS houseproject_user_id_fkey"))
+            conn.execute(text('DROP TABLE IF EXISTS "user"'))
+            conn.commit()
+        except Exception:
+            conn.rollback()
 
 
 def _migrate_missing_columns() -> None:

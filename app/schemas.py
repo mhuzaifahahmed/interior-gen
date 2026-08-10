@@ -3,27 +3,6 @@ from typing import Optional
 from pydantic import BaseModel
 
 
-class SignupRequest(BaseModel):
-    username: str
-    email: str
-    password: str
-    full_name: Optional[str] = None
-    role: Optional[str] = None
-
-
-class LoginRequest(BaseModel):
-    identifier: str  # username or email
-    password: str
-
-
-class UserResponse(BaseModel):
-    id: str
-    username: str
-    email: str
-    full_name: Optional[str] = None
-    role: Optional[str] = None
-
-
 class ProjectCreateResponse(BaseModel):
     project_id: str
 

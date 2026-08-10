@@ -9,47 +9,19 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class User(SQLModel, table=True):
-    """Real account, not a placeholder - see app/auth.py for the session/
-    password-hashing logic. username is validated (app.auth.validate_username)
-    to a safe charset ([a-z0-9_], 3-32 chars) BEFORE a row is ever created,
-    since it's also used verbatim as an S3 key path segment
-    (users/{username}/...) - see app/pipeline/generate.py / generate_house.py.
-    """
-
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    created_at: datetime = Field(default_factory=_now)
-    username: str = Field(unique=True, index=True)
-    email: str = Field(unique=True, index=True)
-    full_name: Optional[str] = None
-    role: Optional[str] = None
-    # Real password for password-based signups. Google-only accounts (created
-    # via /api/auth/google/callback, see app/main.py) get a random, never-
-    # revealed bcrypt hash here instead of a nullable column - simpler than a
-    # schema change (SQLite can't drop a NOT NULL constraint via ALTER TABLE
-    # without a full table rebuild) and has the same effect: password login
-    # naturally fails for these accounts since nobody knows the random value.
-    password_hash: str
-    # Google's stable per-account subject ID, set only for accounts that have
-    # ever signed in with Google (find-or-create-by-email in
-    # app/main.py::google_callback links this to a pre-existing password
-    # account on first Google sign-in). Not enforced unique at the DB level on
-    # existing dev databases (see db.py's additive-only migration), only via
-    # application-level lookup before create - fine for this dev prototype.
-    google_sub: Optional[str] = Field(default=None, index=True)
-
-
 class Project(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     created_at: datetime = Field(default_factory=_now)
     status: str = Field(default="queued")  # queued | running | done | failed
     error: Optional[str] = None
 
-    # Nullable so any pre-auth dev-DB rows (from before login was required)
-    # still load - not backfilled, this is a dev prototype, not a real
-    # migration target. Every NEW row always gets a real owner (main.py's
+    # The Clerk user id (e.g. "user_2abc...") of whoever created this project -
+    # NOT a local FK anymore (there is no local User table since the Clerk
+    # migration; Clerk owns identity entirely - see app/auth.py). Nullable so
+    # any pre-Clerk dev-DB rows still load - not backfilled, this is a dev
+    # prototype. Every NEW row always gets a real owner (main.py's
     # create_project requires a logged-in user).
-    user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    user_id: Optional[str] = None
 
     original_key: Optional[str] = None
     room_description: Optional[str] = None
@@ -93,8 +65,8 @@ class HouseProject(SQLModel, table=True):
     status: str = Field(default="queued")  # queued | running | done | failed
     error: Optional[str] = None
 
-    # Same nullable-for-pre-auth-rows reasoning as Project.user_id above.
-    user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    # Same "Clerk user id, not a local FK" reasoning as Project.user_id above.
+    user_id: Optional[str] = None
 
     plot_image_key: Optional[str] = None
     # {"length": float, "width": float, "unit": str} as JSON text - same

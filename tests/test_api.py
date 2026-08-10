@@ -1,30 +1,18 @@
 import io
 import json
-import uuid
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
 import app.main as main_module
 from app.main import app
+from tests.conftest import login_as
 
-
-def _signup_and_login(client: TestClient) -> str:
-    """Generators are gated behind login now - every test hitting them needs
-    a logged-in session first. Returns the created username (random per call
-    so repeated runs against the real dev DB - see CLAUDE.md's testing
-    convention - never collide on a previously-used username)."""
-    username = f"apitest_{uuid.uuid4().hex[:10]}"
-    res = client.post(
-        "/api/auth/signup",
-        json={
-            "username": username,
-            "email": f"{username}@example.com",
-            "password": "correct-horse-battery-staple",
-        },
-    )
-    assert res.status_code == 200, res.text
-    return username
+# Generators are gated behind login now - every test hitting them needs a
+# logged-in session first. login_as() (tests/conftest.py) attaches a fake
+# Clerk Bearer token, standing in for the real signup+login flow Clerk now
+# owns entirely (see CLAUDE.md's "Authentication" section).
+_signup_and_login = login_as
 
 
 class FakeProvider:

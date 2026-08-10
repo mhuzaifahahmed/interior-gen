@@ -26,6 +26,7 @@
 <script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"inverse-surface":"#33362e","surface-container-high":"#e6dcc5","on-secondary-container":"#4a4230","on-secondary":"#ffffff","primary-fixed-dim":"#C08A4E","surface-container":"#efe7d6","tertiary-fixed":"#dceae2","inverse-primary":"#C08A4E","background":"#faf6ee","surface-container-highest":"#dccfb0","primary-container":"#F3E4CD","surface-variant":"#efe7d6","surface":"#ffffff","secondary-fixed-dim":"#d8c9a6","on-primary-fixed":"#2B1904","tertiary-container":"#dceae2","on-tertiary-container":"#1f3a31","primary":"#7A4712","on-background":"#33362e","outline":"#c9bfa6","on-primary-fixed-variant":"#5C3A12","on-error-container":"#5c2119","on-primary":"#ffffff","surface-tint":"#7A4712","on-primary-container":"#4A2F10","error":"#b3544a","surface-container-low":"#f5efe2","secondary-fixed":"#efe4ce","on-secondary-fixed-variant":"#6b6248","on-tertiary-fixed":"#12271f","surface-container-lowest":"#ffffff","on-surface":"#33362e","primary-fixed":"#F3E4CD","error-container":"#f7deda","secondary":"#b7a88c","on-tertiary":"#17352b","outline-variant":"#e2d9c3","on-surface-variant":"#6e6c5c","tertiary":"#8faf9e","surface-bright":"#ffffff","surface-dim":"#f1eadc","inverse-on-surface":"#f5efe2","on-error":"#ffffff","secondary-container":"#efe4ce","on-tertiary-fixed-variant":"#3d5a4c","tertiary-fixed-dim":"#b7d2c4","on-secondary-fixed":"#2a2515","night":"#1c1815","night-container":"#242019","on-night":"#f5efe2","on-night-variant":"#c9bfa6","night-border":"rgba(245,239,226,0.14)"},"borderRadius":{"DEFAULT":"14px","lg":"18px","xl":"22px","full":"9999px"},"spacing":{"unit":"8px","margin-mobile":"24px","container-max":"1440px","section-gap":"128px","margin-desktop":"64px","gutter":"32px"},"fontFamily":{"headline-md":["Fraunces"],"label-caps":["Poppins"],"body-md":["Poppins"],"display-lg-mobile":["Fraunces"],"body-lg":["Poppins"],"technical-data":["Poppins"],"headline-sm":["Fraunces"],"display-lg":["Fraunces"]},"fontSize":{"headline-md":["32px",{"lineHeight":"1.3","fontWeight":"600"}],"label-caps":["12px",{"lineHeight":"1.2","letterSpacing":"0.1em","fontWeight":"600"}],"body-md":["16px",{"lineHeight":"1.6","fontWeight":"400"}],"display-lg-mobile":["38px",{"lineHeight":"1.2","letterSpacing":"-0.01em","fontWeight":"700"}],"body-lg":["18px",{"lineHeight":"1.6","fontWeight":"400"}],"technical-data":["14px",{"lineHeight":"1.4","fontWeight":"500"}],"headline-sm":["24px",{"lineHeight":"1.4","fontWeight":"600"}],"display-lg":["60px",{"lineHeight":"1.12","letterSpacing":"-0.01em","fontWeight":"700"}]}}}}</script>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="/static/clerk-init.js"></script>
 </head>
 <body class="bg-background font-body-md text-on-surface">
 
@@ -69,53 +70,14 @@
 <p class="font-body-md text-body-md text-on-surface-variant">Join Interior-Gen to start generating.</p>
 </div>
 
-<form class="space-y-8 mt-10" id="signup-form">
-<div class="relative group">
-<label class="block font-label-caps text-label-caps text-on-surface-variant mb-2 transition-colors group-focus-within:text-primary">Full Name</label>
-<input class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200" id="full-name" type="text"/>
-</div>
-
-<div class="relative group">
-<label class="block font-label-caps text-label-caps text-on-surface-variant mb-2 transition-colors group-focus-within:text-primary">Email</label>
-<input class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200" id="email" required type="email"/>
-</div>
-
-<div class="relative group">
-<label class="block font-label-caps text-label-caps text-on-surface-variant mb-2 transition-colors group-focus-within:text-primary">Password</label>
-<input class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200" id="password" required type="password"/>
-<p class="font-technical-data text-[10px] uppercase tracking-tighter text-on-surface-variant mt-2">Minimum 8 characters</p>
-</div>
-
-<p class="text-sm text-error hidden" id="signup-error"></p>
-
-<div class="pt-4 space-y-6">
-<button class="group relative w-full bg-primary py-5 flex items-center justify-center gap-3 overflow-hidden shadow-md hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 active:scale-[0.98]" id="signup-submit" type="submit">
-<span class="relative z-10 font-label-caps text-label-caps text-on-primary font-bold" id="signup-submit-label">Create Account</span>
-<span class="material-symbols-outlined relative z-10 text-on-primary transition-transform group-hover:translate-x-1">arrow_forward</span>
-<div class="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
-</button>
-
-<div class="flex items-center gap-4">
-<div class="flex-1 h-px bg-outline-variant"></div>
-<span class="font-label-caps text-label-caps text-on-surface-variant">OR</span>
-<div class="flex-1 h-px bg-outline-variant"></div>
-</div>
-
-<a href="/api/auth/google/login" id="google-login-link" class="w-full flex items-center justify-center gap-3 py-4 px-8 border border-outline-variant bg-surface text-on-surface font-label-caps text-label-caps hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
-<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-<path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.9c1.7-1.56 2.7-3.86 2.7-6.62z"/>
-<path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.9-2.26c-.81.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.96v2.33A9 9 0 0 0 9 18z"/>
-<path fill="#FBBC05" d="M3.95 10.7A5.4 5.4 0 0 1 3.66 9c0-.59.1-1.17.29-1.7V4.97H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.03l2.99-2.33z"/>
-<path fill="#EA4335" d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.97l2.99 2.33C4.66 5.17 6.65 3.58 9 3.58z"/>
-</svg>
-<span class="font-medium">Continue with Google</span>
-</a>
-
-<p class="font-body-md text-body-md text-on-surface-variant text-center">
-Already have an account? <a class="text-primary hover:underline underline-offset-4 transition-all" href="/static/login.html">Log in</a>
-</p>
-</div>
-</form>
+<!-- Clerk mounts its <SignUp/> widget here (email/password + "Continue with
+     Google" both come from Clerk itself - see static/clerk-init.js and the
+     script at the bottom of this page). Replaced the old hand-written form +
+     /api/auth/signup fetch + client-side username-derivation entirely -
+     Clerk owns account creation now, no username field needed at all (see
+     app/auth.py - the Clerk user id itself is the S3 path segment). -->
+<div id="clerk-sign-up"></div>
+<p class="text-sm text-error hidden mt-4" id="signup-error"></p>
 </div>
 </div>
 </div>
@@ -136,73 +98,25 @@ Interior&#8209;Gen
 </footer>
 
 <script>
-  // Always relative/same-origin - see static/app.js's apiUrl() comment for
-  // why (vercel.json proxies /api/:path* to Render, avoiding the cross-site
-  // cookie blocking a direct-to-Render absolute URL caused on Safari/WebKit).
-  function apiUrl(path) {
-    return path;
-  }
-  document.getElementById("google-login-link").href = apiUrl("/api/auth/google/login");
-
-  const form = document.getElementById("signup-form");
   const errorEl = document.getElementById("signup-error");
-  const submitBtn = document.getElementById("signup-submit");
-  const submitLabel = document.getElementById("signup-submit-label");
 
-  // There's no username field in this form (dropped per request) - the
-  // account still needs one (uniqueness + it names the user's S3 storage
-  // prefix, see app/auth.py's validate_username), so it's derived from the
-  // email's local part, sanitized to the required [a-z0-9_]{3,32} charset,
-  // with a short random suffix to make collisions unlikely. If the backend
-  // still rejects it as taken (409), retry once with a fresh suffix before
-  // giving up - the user never needs to see or choose this value.
-  function deriveUsername(email) {
-    const base = email.split("@")[0].toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 24) || "user";
-    const suffix = Math.random().toString(36).slice(2, 8);
-    return `${base}_${suffix}`;
-  }
-
-  async function trySignup(email, password, fullName) {
-    return fetch(apiUrl("/api/auth/signup"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({
-        username: deriveUsername(email),
-        email,
-        password,
-        full_name: fullName || null,
-      }),
-    });
-  }
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    errorEl.classList.add("hidden");
-    submitBtn.disabled = true;
-    submitLabel.textContent = "Creating…";
-
-    const email = document.getElementById("email").value.trim();
-    const password = document.getElementById("password").value;
-    const fullName = document.getElementById("full-name").value.trim();
-
-    try {
-      let res = await trySignup(email, password, fullName);
-      if (res.status === 409) {
-        res = await trySignup(email, password, fullName); // one retry with a fresh random suffix
+  clerkReady
+    .then((Clerk) => {
+      if (Clerk.user) {
+        window.location.href = "/";
+        return;
       }
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || "Signup failed.");
-      }
-      window.location.href = "/";
-    } catch (err) {
-      errorEl.textContent = err.message;
+      Clerk.mountSignUp(document.getElementById("clerk-sign-up"), {
+        fallbackRedirectUrl: "/",
+        signInUrl: "/static/login.html",
+        appearance: { variables: { colorPrimary: "#7A4712" } },
+      });
+    })
+    .catch((err) => {
+      console.error(err);
+      errorEl.textContent = "Sign-up is temporarily unavailable. Please try again shortly.";
       errorEl.classList.remove("hidden");
-      submitBtn.disabled = false;
-      submitLabel.textContent = "Create Account";
-    }
-  });
+    });
 </script>
 </body>
 </html>

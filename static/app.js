@@ -3,19 +3,25 @@ const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)
 // All /api/... calls are always relative (same-origin), on both local dev
 // (single FastAPI server serves this file + the API together) and
 // production (vercel.json proxies /api/:path* to the real Render backend
-// server-side). Deliberately NOT calling the Render backend by its own
-// absolute URL from the browser anymore - that made every request genuinely
-// cross-site, and Safari/WebKit's ITP silently drops third-party cookies
-// even with SameSite=None; Secure set correctly (confirmed via a real,
-// live-tested comparison: identical request/response in Chromium accepted
-// and stored the session cookie, WebKit discarded it outright) - so logged-in
-// state never reached the UI on Safari despite the backend's login/session
-// logic being entirely correct. Routing through Vercel's own domain makes
-// every request same-origin from the browser's point of view, which is
-// immune to third-party cookie blocking in every browser, not just a
-// Safari-specific patch.
+// server-side).
 function apiUrl(path) {
   return path;
+}
+
+// Attaches a fresh Clerk session token as `Authorization: Bearer <token>` to
+// an authenticated API call - this is the entire auth mechanism now (see
+// app/auth.py's require_user), no cookies/credentials involved at all, which
+// sidesteps cross-site cookie blocking (Safari/WebKit ITP) entirely rather
+// than working around it. Clerk.session.getToken() caches the token in
+// memory and only makes a network call once it's actually close to expiry,
+// so calling this on every request is cheap. `clerkReady` is defined in
+// static/clerk-init.js, loaded before this file.
+async function authFetch(path, options = {}) {
+  const Clerk = await clerkReady;
+  const token = await Clerk.session?.getToken();
+  const headers = { ...(options.headers || {}) };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return fetch(path, { ...options, headers });
 }
 
 const uploadView = document.getElementById("upload-view");
@@ -77,12 +83,16 @@ const homeHeroHouseBtn = document.getElementById("home-hero-house-btn");
 const homeToolsHouseRow = document.getElementById("home-tools-house-row");
 
 /* ---------- Auth ---------- */
-/* Real accounts (app/auth.py) - the room/house generators are gated behind
-   login (require_user in app/main.py), so a logged-out visitor can still
-   browse the landing page and switch tabs, but POSTing to /api/projects or
-   /api/house-projects 401s. checkAuthState() drives which nav block shows
-   (guest links vs. username + log out) and doubles as the redirect trigger
-   for a 401 hit mid-submit. */
+/* Clerk (https://clerk.com) owns the entire identity system - signup, login,
+   Google sign-in, session issuance. This backend only verifies the token a
+   Clerk-authenticated frontend sends (app/auth.py's require_user), so a
+   logged-out visitor can still browse the landing page and switch tabs, but
+   POSTing to /api/projects or /api/house-projects 401s. applyAuthUI() below
+   drives which nav block shows (guest links vs. name/avatar + log out) -
+   fed by Clerk.user directly (available client-side after clerkReady
+   resolves - see static/clerk-init.js), not a round-trip to our own
+   backend, and kept live via Clerk.addListener() so signing out updates the
+   UI immediately without a page reload. */
 
 const navAuthGuest = document.getElementById("nav-auth-guest");
 const navAuthUser = document.getElementById("nav-auth-user");
@@ -135,36 +145,43 @@ function initialsFrom(name) {
 navLoginBtn.addEventListener("click", () => (window.location.href = "/static/login.html"));
 navSignupBtn.addEventListener("click", () => (window.location.href = "/static/signup.html"));
 navLogoutBtn.addEventListener("click", async () => {
-  await fetch(apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" });
+  const Clerk = await clerkReady;
+  await Clerk.signOut();
   window.location.href = "/";
 });
 
-async function checkAuthState() {
-  try {
-    const res = await fetch(apiUrl("/api/auth/me"), { credentials: "include" });
-    if (!res.ok) throw new Error("not logged in");
-    const user = await res.json();
-    const displayName = user.full_name || user.username;
-    navUsernameEl.textContent = displayName;
-    navUserAvatarEl.textContent = initialsFrom(displayName);
-    navMenuNameEl.textContent = displayName;
-    navMenuEmailEl.textContent = user.email || "";
-    navAuthGuest.classList.add("hidden");
-    navAuthUser.classList.remove("hidden");
-    mobileSidebarUsernameEl.textContent = displayName;
-    mobileSidebarEmailEl.textContent = user.email || "";
-    mobileSidebarAvatarEl.textContent = initialsFrom(displayName);
-    mobileSidebarAuthGuest.classList.add("hidden");
-    mobileSidebarAuthUser.classList.remove("hidden");
-  } catch {
+function applyAuthUI(user) {
+  if (!user) {
     navAuthGuest.classList.remove("hidden");
     navAuthUser.classList.add("hidden");
     mobileSidebarAuthGuest.classList.remove("hidden");
     mobileSidebarAuthUser.classList.add("hidden");
+    return;
   }
+  const displayName = user.fullName || user.username || user.primaryEmailAddress?.emailAddress || "Account";
+  const email = user.primaryEmailAddress?.emailAddress || "";
+  navUsernameEl.textContent = displayName;
+  navUserAvatarEl.textContent = initialsFrom(displayName);
+  navMenuNameEl.textContent = displayName;
+  navMenuEmailEl.textContent = email;
+  navAuthGuest.classList.add("hidden");
+  navAuthUser.classList.remove("hidden");
+  mobileSidebarUsernameEl.textContent = displayName;
+  mobileSidebarEmailEl.textContent = email;
+  mobileSidebarAvatarEl.textContent = initialsFrom(displayName);
+  mobileSidebarAuthGuest.classList.add("hidden");
+  mobileSidebarAuthUser.classList.remove("hidden");
 }
 
-checkAuthState();
+clerkReady
+  .then((Clerk) => {
+    applyAuthUI(Clerk.user);
+    Clerk.addListener(({ user }) => applyAuthUI(user));
+  })
+  .catch((err) => {
+    console.error("Clerk failed to load", err);
+    applyAuthUI(null);
+  });
 
 /* ---------- Mobile nav sidebar open/close (GSAP) ---------- */
 /* Slide-in-from-the-right panel + backdrop fade, not the small anchored
@@ -889,7 +906,7 @@ form.addEventListener("submit", async (e) => {
 
   let projectId;
   try {
-    const res = await fetch(apiUrl("/api/projects"), { method: "POST", body: formData, credentials: "include" });
+    const res = await authFetch(apiUrl("/api/projects"), { method: "POST", body: formData });
     if (res.status === 401) {
       savePendingGeneration("room", {
         fileName: selectedFile.name,
@@ -1075,7 +1092,7 @@ function finishProgress(data, onDone) {
 async function pollProject(projectId) {
   let data;
   try {
-    const res = await fetch(apiUrl(`/api/projects/${projectId}`), { credentials: "include" });
+    const res = await authFetch(apiUrl(`/api/projects/${projectId}`));
     data = await res.json();
   } catch (err) {
     showError("Lost connection while checking progress. " + err.message);
@@ -1288,8 +1305,8 @@ async function openHistoryModal() {
 
   try {
     const [roomRes, houseRes] = await Promise.all([
-      fetch(apiUrl("/api/projects"), { credentials: "include" }),
-      fetch(apiUrl("/api/house-projects"), { credentials: "include" }),
+      authFetch(apiUrl("/api/projects")),
+      authFetch(apiUrl("/api/house-projects")),
     ]);
     historyRoomProjects = roomRes.ok ? await roomRes.json() : [];
     historyHouseProjects = houseRes.ok ? await houseRes.json() : [];
@@ -1519,10 +1536,9 @@ houseForm.addEventListener("submit", async (e) => {
 
   let houseProjectId;
   try {
-    const res = await fetch(apiUrl("/api/house-projects"), {
+    const res = await authFetch(apiUrl("/api/house-projects"), {
       method: "POST",
       body: formData,
-      credentials: "include",
     });
     if (res.status === 401) {
       savePendingGeneration("house", {
@@ -1648,7 +1664,7 @@ function finishHouseProgress(onDone) {
 async function pollHouseProject(houseProjectId) {
   let data;
   try {
-    const res = await fetch(apiUrl(`/api/house-projects/${houseProjectId}`), { credentials: "include" });
+    const res = await authFetch(apiUrl(`/api/house-projects/${houseProjectId}`));
     data = await res.json();
   } catch (err) {
     showHouseError("Lost connection while checking progress. " + err.message);

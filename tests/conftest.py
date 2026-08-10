@@ -20,9 +20,43 @@ import os
 # fresh (see tests/test_cross_origin.py).
 os.environ["FRONTEND_ORIGIN"] = ""
 
-import pytest
+import uuid
 
+import pytest
+from clerk_backend_api.security.types import TokenVerificationError, TokenVerificationErrorReason
+from fastapi.testclient import TestClient
+
+from app import auth as auth_module
 from app.providers import analysis_cache
+
+
+def _fake_verify_token(token, options):
+    """Stands in for a real Clerk network call - accepts only tokens shaped
+    like "test|<clerk_user_id>" (see login_as() below) and rejects
+    everything else, the same shape a real Clerk verify_token() failure
+    takes. Clerk is never called for real in tests, same convention as every
+    other provider in this project - see CLAUDE.md's "Testing convention"."""
+    if isinstance(token, str) and token.startswith("test|"):
+        return {"sub": token.split("|", 1)[1]}
+    raise TokenVerificationError(TokenVerificationErrorReason.TOKEN_INVALID)
+
+
+@pytest.fixture(autouse=True)
+def _fake_clerk_verification(monkeypatch):
+    monkeypatch.setattr(auth_module, "verify_token", _fake_verify_token)
+
+
+def login_as(client: TestClient, user_id: str | None = None) -> str:
+    """Logs a TestClient in as a fake Clerk user by attaching a Bearer token
+    every subsequent request on this client will send (TestClient persists
+    headers set via client.headers.update() across requests). Returns the
+    user id (a random Clerk-shaped id if none given) - used directly as the
+    S3 path segment in storage-key assertions, same role the old `username`
+    return value played before the Clerk migration.
+    """
+    user_id = user_id or f"user_{uuid.uuid4().hex[:24]}"
+    client.headers.update({"Authorization": f"Bearer test|{user_id}"})
+    return user_id
 
 
 @pytest.fixture(autouse=True)
