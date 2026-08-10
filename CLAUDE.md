@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working with the user
+
+Whenever an issue/bug is fixed, explain what was wrong and how it was fixed in detail, in the very next
+message right after the fix is done - not deferred to a later summary, not skipped. The user relies on
+these explanations to understand what happened and to relay updates (e.g. to their own lead/team).
+
 ## What this is
 
 B2B AI interior-design tool. A user uploads a room photo; the backend returns **3 visually distinct

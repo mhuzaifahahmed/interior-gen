@@ -136,15 +136,11 @@ Interior&#8209;Gen
 </footer>
 
 <script>
-  // Backend base URL - auto-detected from the current hostname so local dev
-  // keeps working unchanged; see static/app.js's API_BASE comment for the
-  // full explanation (real "Failed to fetch" regression this avoids), same
-  // convention repeated here since this page has its own inline script.
-  const REMOTE_BACKEND_URL = "https://interior-gen.onrender.com";
-  const IS_LOCAL_HOST = ["localhost", "127.0.0.1"].includes(location.hostname);
-  const API_BASE = IS_LOCAL_HOST ? "" : REMOTE_BACKEND_URL;
+  // Always relative/same-origin - see static/app.js's apiUrl() comment for
+  // why (vercel.json proxies /api/:path* to Render, avoiding the cross-site
+  // cookie blocking a direct-to-Render absolute URL caused on Safari/WebKit).
   function apiUrl(path) {
-    return `${API_BASE}${path}`;
+    return path;
   }
   document.getElementById("google-login-link").href = apiUrl("/api/auth/google/login");
 

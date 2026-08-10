@@ -1,5 +1,6 @@
 {
   "rewrites": [
-    { "source": "/", "destination": "/static/index.html" }
+    { "source": "/", "destination": "/static/index.html" },
+    { "source": "/api/:path*", "destination": "https://interior-gen.onrender.com/api/:path*" }
   ]
 }

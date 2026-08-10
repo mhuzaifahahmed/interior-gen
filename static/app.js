@@ -1,23 +1,21 @@
 const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-// Backend base URL - auto-detected from the CURRENT page's own hostname,
-// not a single hardcoded value, specifically so local dev keeps working
-// unchanged after REMOTE_BACKEND_URL below was introduced for the split
-// Vercel+Render deploy. Real regression this fixes: REMOTE_BACKEND_URL used
-// to be assigned directly to API_BASE, so opening this same file locally
-// (http://127.0.0.1:8000) tried to fetch() the PRODUCTION Render backend
-// instead of the local one - CORS on Render only allows the configured
-// FRONTEND_ORIGIN (the Vercel domain), so every request from localhost was
-// blocked outright ("Failed to fetch"). localhost/127.0.0.1 (any port) now
-// always uses "" (same-origin, relative /api/... paths) regardless of
-// REMOTE_BACKEND_URL - only a REAL non-local hostname (i.e. this file
-// actually being served FROM Vercel) uses the remote backend.
-const REMOTE_BACKEND_URL = "https://interior-gen.onrender.com";
-const IS_LOCAL_HOST = ["localhost", "127.0.0.1"].includes(location.hostname);
-const API_BASE = IS_LOCAL_HOST ? "" : REMOTE_BACKEND_URL;
-
+// All /api/... calls are always relative (same-origin), on both local dev
+// (single FastAPI server serves this file + the API together) and
+// production (vercel.json proxies /api/:path* to the real Render backend
+// server-side). Deliberately NOT calling the Render backend by its own
+// absolute URL from the browser anymore - that made every request genuinely
+// cross-site, and Safari/WebKit's ITP silently drops third-party cookies
+// even with SameSite=None; Secure set correctly (confirmed via a real,
+// live-tested comparison: identical request/response in Chromium accepted
+// and stored the session cookie, WebKit discarded it outright) - so logged-in
+// state never reached the UI on Safari despite the backend's login/session
+// logic being entirely correct. Routing through Vercel's own domain makes
+// every request same-origin from the browser's point of view, which is
+// immune to third-party cookie blocking in every browser, not just a
+// Safari-specific patch.
 function apiUrl(path) {
-  return `${API_BASE}${path}`;
+  return path;
 }
 
 const uploadView = document.getElementById("upload-view");
