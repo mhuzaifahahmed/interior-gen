@@ -1148,6 +1148,24 @@ async function pollProject(projectId) {
   let data;
   try {
     const res = await authFetch(apiUrl(`/api/projects/${projectId}`));
+    if (res.status === 401) {
+      // A real bug this fixes: without this check, a 401 body
+      // ({"detail": "login required"}) has no `status` field, so the old
+      // code fell through to the setTimeout below and polled forever,
+      // showing "loading" indefinitely even though the generation had
+      // already finished server-side. The session token can expire mid-poll
+      // (long generations, or a Clerk token-refresh failure) well after the
+      // initial authenticated POST that created this project succeeded.
+      showError(
+        "Your session expired while this was generating. Please log in again - " +
+          "the generation itself finished and will be in your History once you're back in."
+      );
+      return;
+    }
+    if (!res.ok) {
+      showError(`Lost connection while checking progress (status ${res.status}).`);
+      return;
+    }
     data = await res.json();
   } catch (err) {
     showError("Lost connection while checking progress. " + err.message);
@@ -1721,6 +1739,20 @@ async function pollHouseProject(houseProjectId) {
   let data;
   try {
     const res = await authFetch(apiUrl(`/api/house-projects/${houseProjectId}`));
+    if (res.status === 401) {
+      // Same fix as pollProject() above - see its comment for the full
+      // explanation (a stale/expired session token mid-poll used to loop
+      // forever instead of surfacing an error).
+      showHouseError(
+        "Your session expired while this was generating. Please log in again - " +
+          "the generation itself finished and will be in your History once you're back in."
+      );
+      return;
+    }
+    if (!res.ok) {
+      showHouseError(`Lost connection while checking progress (status ${res.status}).`);
+      return;
+    }
     data = await res.json();
   } catch (err) {
     showHouseError("Lost connection while checking progress. " + err.message);
