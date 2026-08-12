@@ -138,18 +138,25 @@ def test_generate_house_render_shares_the_edit_call_shape(monkeypatch):
     def fake_post(url, headers=None, data=None, files=None, timeout=None):
         captured["prompt"] = data["prompt"]
         captured["input_fidelity"] = data["input_fidelity"]
+        captured["quality"] = data["quality"]
         assert "image" in files
         return FakeResponse(json_data={"data": [{"b64_json": base64.b64encode(b"render-bytes").decode()}]})
 
     monkeypatch.setattr(openai_module.httpx, "post", fake_post)
     monkeypatch.setattr(openai_module.settings, "openai_house_input_fidelity", "high")
+    monkeypatch.setattr(openai_module.settings, "openai_house_image_quality", "high")
+    monkeypatch.setattr(openai_module.settings, "openai_image_quality", "low")
 
     result = OpenAIImageProvider().generate_house_render(b"plot-bytes", "a modern house concept render")
 
     assert result == b"render-bytes"
     assert captured["prompt"] == "a modern house concept render"
-    # Uses its own dedicated setting, not the room-redesign one.
+    # Uses its own dedicated settings, not the room-redesign ones - both
+    # input_fidelity AND quality must be sent explicitly (the same cost trap
+    # documented at the top of this module: omitting either silently drifts
+    # to an expensive/wrong default).
     assert captured["input_fidelity"] == "high"
+    assert captured["quality"] == "high"
 
 
 def test_generate_image_unexpected_response_shape_raises(monkeypatch):

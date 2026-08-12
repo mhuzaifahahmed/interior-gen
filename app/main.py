@@ -332,6 +332,7 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
     images: dict[str, str | None] = {
         "plot": storage.url(house_project.plot_image_key) if house_project.plot_image_key else None,
         "render": storage.url(house_project.render_key) if house_project.render_key else None,
+        "render_from_layout": storage.url(house_project.render_layout_key) if house_project.render_layout_key else None,
         "floor_plan": storage.url(house_project.floor_plan_key) if house_project.floor_plan_key else None,
     }
 

@@ -1750,6 +1750,7 @@ async function pollHouseProject(houseProjectId) {
 const HOUSE_RESULT_TIERS = [
   { key: "plot", label: "Original Plot", desc: "Your uploaded plot photo." },
   { key: "render", label: "Concept Render", desc: "AI-generated exterior/interior concept." },
+  { key: "render_from_layout", label: "3D Layout Render", desc: "Rendered from your computed floor plan." },
 ];
 
 function renderHouseResults(data) {

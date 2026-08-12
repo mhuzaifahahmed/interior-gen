@@ -47,6 +47,7 @@ _NEW_COLUMNS_BY_TABLE = {
         ("blueprint_keys_json", "TEXT"),
         ("blueprint_status", "TEXT NOT NULL DEFAULT 'idle'"),
         ("user_id", "TEXT"),
+        ("render_layout_key", "TEXT"),
     ],
 }
 

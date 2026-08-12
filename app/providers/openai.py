@@ -67,20 +67,24 @@ class OpenAIImageProvider:
         # kept as its own public method (not just calling generate_image
         # directly) so the "Build a House" feature's parameters never get
         # tangled with room-redesign's tier/fidelity semantics. Uses its own
-        # dedicated openai_house_input_fidelity setting (not
-        # openai_image_input_fidelity, which the Economical tier also reads)
-        # so raising this feature's fidelity doesn't silently raise
-        # Economical's cost/fidelity too.
-        return self._edit_image(image_bytes, prompt, settings.openai_house_input_fidelity)
+        # dedicated openai_house_input_fidelity/openai_house_image_quality
+        # settings (not the room tiers' equivalents) so raising this feature's
+        # fidelity/quality doesn't silently raise Economical's cost too.
+        return self._edit_image(
+            image_bytes,
+            prompt,
+            settings.openai_house_input_fidelity,
+            quality=settings.openai_house_image_quality,
+        )
 
-    def _edit_image(self, image_bytes: bytes, prompt: str, input_fidelity: str) -> bytes:
+    def _edit_image(self, image_bytes: bytes, prompt: str, input_fidelity: str, quality: str | None = None) -> bytes:
         response = httpx.post(
             IMAGES_EDITS_URL,
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
             data={
                 "model": settings.openai_image_model,
                 "prompt": prompt,
-                "quality": settings.openai_image_quality,
+                "quality": quality or settings.openai_image_quality,
                 "input_fidelity": input_fidelity,
             },
             files={"image": ("room.png", image_bytes, "image/png")},

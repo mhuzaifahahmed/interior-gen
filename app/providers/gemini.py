@@ -111,14 +111,35 @@ MATERIALS_PROMPT_TEMPLATE = (
 # layout algorithm (app/pipeline/floor_layout.py) always rescales these to
 # exactly fill the plot's real dimensions, so it doesn't matter whether the
 # model's absolute numbers are realistic, only their proportions to each other.
+#
+# Real user feedback this addresses: floor counts weren't reliably honoring
+# what the user actually asked for, and rooms weren't placed with real-world
+# common sense (e.g. a garage could land on an upper floor). Explicit
+# per-floor placement rules below are STILL only a prompt-level fix - Gemini
+# can ignore them - so generate_room_layout() below also deterministically
+# enforces the floor count (and fallback_room_layout()'s own defaults follow
+# the same ground/upper convention) as defense in depth, the same "prompt
+# fix + deterministic backstop" pattern used elsewhere in this codebase
+# (e.g. the structure_reminder + input_fidelity combo for room-redesign).
 ROOM_LAYOUT_PROMPT_TEMPLATE = (
     "You are planning a room layout for a building on a plot with dimensions "
     "{dims_text}.\n\n"
     "{context_block}"
     "The user's requirements: {prompt_text}\n\n"
-    "Determine how many floors this building should have (default to 1 floor if the "
-    "requirements don't specify a number), and for each floor list the rooms it should "
-    "contain with a relative area weight per room (bigger rooms get bigger numbers - the "
+    "Determine how many floors this building should have: if the requirements state an "
+    "exact number of floors/storeys, you MUST use EXACTLY that many floors - never invent "
+    "extra floors and never omit any. If no number is stated, default to 1 floor.\n\n"
+    "For each floor, list the rooms it should contain using real architectural common "
+    "sense for where each room type belongs:\n"
+    "- The GROUND FLOOR (floor_number 1) should hold entry/foyer, living room, kitchen, "
+    "dining room, a guest bathroom/WC, and - if it fits the requirements - a garage and/or "
+    "utility/laundry room.\n"
+    "- UPPER FLOORS should hold bedrooms, an ensuite or shared bathroom, and optionally a "
+    "study or family lounge.\n"
+    "- NEVER place a garage or a kitchen on any floor above the ground floor.\n"
+    "- Any floor that has one or more bedrooms must include at least one bathroom on that "
+    "same floor.\n\n"
+    "For each room, also give a relative area weight (bigger rooms get bigger numbers - the "
     "exact scale doesn't matter, only the proportions between rooms on the same floor).\n\n"
     'Respond with ONLY raw JSON, no markdown fences, in this exact shape: '
     '{{"floors": [{{"floor_number": 1, "rooms": [{{"name": "...", "area": 1}}]}}]}}'
@@ -387,11 +408,13 @@ class GeminiProvider(Provider):
             prompt_text=prompt.strip() if prompt else "no specific requirements given",
         )
 
+        explicit_floor_count = _explicit_floor_count(prompt)
+
         try:
             response = _generate_content_with_retry(self.client, settings.gemini_text_model, [formatted_prompt])
             parsed = parse_room_layout(response.text or "")
             if parsed is not None:
-                return parsed
+                return _enforce_floor_count(parsed, explicit_floor_count)
         except Exception:
             logger.exception("generate_room_layout failed for dimensions %s", dimensions)
 
@@ -659,32 +682,98 @@ def parse_room_layout(raw_text: str) -> dict | None:
     return {"floors": floors}
 
 
+# Ground/upper-floor generic room sets, shared by fallback_room_layout() below
+# and by _enforce_floor_count()'s padding path - both need the same
+# real-world-common-sense convention (garage/kitchen/living only on the
+# ground floor, bedrooms/bathrooms upstairs) so a padded/fallback floor never
+# contradicts the placement rules stated in ROOM_LAYOUT_PROMPT_TEMPLATE above.
+_GROUND_FLOOR_ROOMS = [
+    {"name": "Living Room", "area": 2},
+    {"name": "Kitchen", "area": 1.2},
+    {"name": "Dining Room", "area": 1},
+    {"name": "Guest Bathroom", "area": 0.5},
+    {"name": "Garage", "area": 1.3},
+]
+_UPPER_FLOOR_ROOMS = [
+    {"name": "Bedroom 1", "area": 1.5},
+    {"name": "Bedroom 2", "area": 1.5},
+    {"name": "Bathroom", "area": 0.8},
+    {"name": "Study", "area": 1},
+]
+_SINGLE_STOREY_ROOMS = [
+    {"name": "Living Room", "area": 2},
+    {"name": "Kitchen", "area": 1.2},
+    {"name": "Dining Room", "area": 1},
+    {"name": "Bedroom 1", "area": 1.5},
+    {"name": "Bedroom 2", "area": 1.5},
+    {"name": "Bathroom", "area": 0.8},
+]
+
+
 def fallback_room_layout(dimensions: dict, prompt: str) -> dict:
     """Never-empty room-layout fallback for when the Gemini call itself fails
     entirely (network/auth/quota/timeout) or returns unparseable JSON. Guesses
     the floor count from a plain 'N floor(s)' pattern in the user's free-text
-    prompt (defaulting to 1), and synthesizes the same fixed generic room list
-    per floor with equal area weights - always produces something the
-    blueprint step can draw, same never-empty guarantee as fallback_materials.
+    prompt (defaulting to 1 - a single-storey house needs no separate
+    ground/upper split), and synthesizes a floor-aware generic room list per
+    floor following the same real-world convention the live Gemini prompt
+    asks for (living/kitchen/garage only on the ground floor, bedrooms/
+    bathrooms on upper floors) - always produces something the blueprint step
+    can draw, same never-empty guarantee as fallback_materials.
     """
     floor_count = _guess_floor_count(prompt)
-    generic_rooms = [
-        {"name": "Living Room", "area": 2},
-        {"name": "Kitchen", "area": 1},
-        {"name": "Bedroom 1", "area": 1.5},
-        {"name": "Bedroom 2", "area": 1.5},
-        {"name": "Bathroom", "area": 1},
-    ]
-    return {
-        "floors": [{"floor_number": n, "rooms": generic_rooms} for n in range(1, floor_count + 1)]
-    }
+    if floor_count == 1:
+        return {"floors": [{"floor_number": 1, "rooms": _SINGLE_STOREY_ROOMS}]}
+
+    floors = []
+    for floor_number in range(1, floor_count + 1):
+        rooms = _GROUND_FLOOR_ROOMS if floor_number == 1 else _UPPER_FLOOR_ROOMS
+        floors.append({"floor_number": floor_number, "rooms": rooms})
+    return {"floors": floors}
 
 
-def _guess_floor_count(prompt: str) -> int:
+def _explicit_floor_count(prompt: str) -> int | None:
+    """Returns the floor count only when the user's prompt actually states
+    one (e.g. "2 floors"), else None - distinct from _guess_floor_count()'s
+    default-to-1 behavior, since a default is not something to enforce a
+    parsed Gemini result against."""
     match = re.search(r"(\d+)\s*(?:floor|floors|storey|storeys|story|stories)", prompt or "", re.IGNORECASE)
     if match:
         return max(1, min(int(match.group(1)), 10))
-    return 1
+    return None
+
+
+def _guess_floor_count(prompt: str) -> int:
+    return _explicit_floor_count(prompt) or 1
+
+
+def _enforce_floor_count(parsed: dict, explicit_floor_count: int | None) -> dict:
+    """Deterministic backstop for when the user's prompt explicitly names a
+    floor count but Gemini's parsed layout doesn't match it (a real risk -
+    prompt instructions aren't a hard guarantee, same lesson as the
+    structure-preservation issues documented for room-redesign). Renumbers
+    floors sequentially 1..N either way; truncates extra floors or pads
+    missing ones with the same ground/upper convention as
+    fallback_room_layout(). A no-op when the user didn't state a count, or
+    when Gemini already got it right."""
+    floors = sorted(parsed["floors"], key=lambda f: f.get("floor_number", 0))
+
+    if explicit_floor_count is None:
+        for i, floor in enumerate(floors, start=1):
+            floor["floor_number"] = i
+        return {"floors": floors}
+
+    if len(floors) > explicit_floor_count:
+        floors = floors[:explicit_floor_count]
+    while len(floors) < explicit_floor_count:
+        floor_number = len(floors) + 1
+        rooms = _GROUND_FLOOR_ROOMS if floor_number == 1 else _UPPER_FLOOR_ROOMS
+        floors.append({"floor_number": floor_number, "rooms": rooms})
+
+    for i, floor in enumerate(floors, start=1):
+        floor["floor_number"] = i
+
+    return {"floors": floors}
 
 
 def fallback_materials(tier_spec: dict[str, str], city: str) -> dict:

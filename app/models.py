@@ -85,6 +85,11 @@ class HouseProject(SQLModel, table=True):
     floor_plan_status: str = Field(default="idle")  # idle | running | not_configured | done | failed
 
     render_key: Optional[str] = None
+    # Secondary render, edited from the ground floor's drawn blueprint instead
+    # of the raw plot photo (render_key's source) - best-effort, may stay None
+    # if the blueprint step failed or that render call itself failed. See
+    # app/pipeline/generate_house.py's "generate both" render stage.
+    render_layout_key: Optional[str] = None
 
     # Free algorithmic blueprint step: Gemini's structured room list per floor
     # (app/providers/gemini.py's generate_room_layout), the computed room

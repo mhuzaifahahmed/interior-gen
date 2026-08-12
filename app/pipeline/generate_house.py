@@ -13,7 +13,8 @@ from app.storage.base import Storage
 
 logger = logging.getLogger(__name__)
 
-HOUSE_PROMPT_VERSION = "v2"  # v2: adds the free algorithmic blueprint stage + ground-floor render reference
+HOUSE_PROMPT_VERSION = "v3"  # v3: enriched photoreal/3D prompt vocabulary, floor-count hard constraint,
+# a researched negative-prompt block, and a second (blueprint-sourced) render alongside the original
 
 
 def run_house_pipeline(
@@ -127,23 +128,45 @@ def run_house_pipeline(
             session.add(house_project)
             session.commit()
 
-            # The render is NOT best-effort - it's the core paid deliverable of
-            # this feature, same treatment as the room-redesign image loop. A
-            # failure here propagates to the outer except and fails the project.
-            # Its reference image is the GROUND FLOOR's blueprint (index 0,
-            # per the confirmed design) when one was drawn; otherwise it falls
-            # back to the raw plot photo exactly like the original behavior.
-            using_blueprint_image = bool(blueprint_keys)
-            render_input_bytes = storage.get(blueprint_keys[0]) if using_blueprint_image else plot_bytes
-            house_prompt = build_house_prompt(
-                dimensions, prompt, plot_description, room_layout, using_blueprint_image
+            # PRIMARY render is NOT best-effort - it's the core paid deliverable
+            # of this feature, same treatment as the room-redesign image loop.
+            # A failure here propagates to the outer except and fails the
+            # project. Edited from the real plot photo (per the confirmed
+            # design - a photoreal "house on this actual land" picture reads
+            # far better than editing a flat blueprint drawing).
+            primary_prompt = build_house_prompt(
+                dimensions, prompt, plot_description, room_layout, using_blueprint_image=False
             )
-            render_bytes = provider.generate_house_render(render_input_bytes, house_prompt)
+            render_bytes = provider.generate_house_render(plot_bytes, primary_prompt)
             render_key = f"{key_prefix}/{house_project_id}/render.png"
             storage.put(render_key, render_bytes, content_type="image/png")
             house_project.render_key = render_key
             session.add(house_project)
             session.commit()
+
+            # SECONDARY render is best-effort - edited from the ground floor's
+            # drawn blueprint (index 0) when one exists, giving a second,
+            # layout-faithful 3D visualization alongside the primary photoreal
+            # one. A failure here must not take down the whole project, since
+            # the primary render above already satisfies the "core deliverable"
+            # contract.
+            if blueprint_keys:
+                try:
+                    layout_input_bytes = storage.get(blueprint_keys[0])
+                    layout_prompt = build_house_prompt(
+                        dimensions, prompt, plot_description, room_layout, using_blueprint_image=True
+                    )
+                    layout_render_bytes = provider.generate_house_render(layout_input_bytes, layout_prompt)
+                    render_layout_key = f"{key_prefix}/{house_project_id}/render_layout.png"
+                    storage.put(render_layout_key, layout_render_bytes, content_type="image/png")
+                    house_project.render_layout_key = render_layout_key
+                except Exception:
+                    logger.exception(
+                        "layout-based render failed for house project %s; continuing with the primary render only",
+                        house_project_id,
+                    )
+                session.add(house_project)
+                session.commit()
 
             house_project.status = "done"
             house_project.meta_json = json.dumps(
@@ -153,6 +176,7 @@ def run_house_pipeline(
                     "prompt": prompt,
                     "floor_plan_generated": house_project.floor_plan_status == "done",
                     "blueprint_generated": house_project.blueprint_status == "done",
+                    "layout_render_generated": house_project.render_layout_key is not None,
                     "floor_count": len(blueprint_keys) or (len(room_layout["floors"]) if room_layout else 0),
                 }
             )

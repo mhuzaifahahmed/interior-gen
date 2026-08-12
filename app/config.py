@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     # raise Economical's cost/fidelity too.
     openai_house_input_fidelity: str = "high"
 
+    # "Build a House" render quality - also kept separate from
+    # openai_image_quality (the room tiers' "low"). This feature only produces
+    # 1-2 renders per generation (vs 3 tiers), so the cost of "high" is small
+    # and worth paying for a genuinely good picture, per the user's explicit
+    # "results aren't good enough" feedback - unlike input_fidelity, this
+    # never silently raises room-redesign's cost since it's read by nobody
+    # else.
+    openai_house_image_quality: str = "high"
+
     # Room-redesign image backend selector: "openai" (default, gpt-image-1) or
     # "kaggle" (a user's own fine-tuned model - see app/providers/kaggle.py).
     # A toggle, not a hard swap, specifically so a dropped Kaggle tunnel can be

@@ -324,6 +324,72 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   `get_storage`), `tests/test_gemini_house.py`, `tests/test_floor_layout.py` (pure unit tests, no mocks),
   `tests/test_blueprint_svg.py` (asserts real decodable PNG output), plus a `generate_house_render` case
   added to `tests/test_openai_provider.py`.
+- **v3: two renders, a dedicated house render quality, a real CAD-look blueprint, and floor-count/
+  common-sense room placement** (2026-08-12, driven by direct user feedback that the results "aren't good
+  enough"). Four changes, all still behind the same best-effort/non-best-effort contracts above:
+  - **Generate BOTH renders, not one.** The confirmed design: a photoreal exterior/interior render edited
+    from the real **plot photo** is now always the primary, non-best-effort render (`render_key`) - a
+    photoreal "house on this actual land" picture reads far better than editing a flat blueprint drawing.
+    A second, best-effort render edited from the ground floor's drawn blueprint (`render_layout_key`, new
+    `HouseProject` column, migrated via `_NEW_COLUMNS_BY_TABLE["houseproject"]` same as every other
+    additive column here) is generated afterward whenever a blueprint exists, giving a second
+    layout-faithful 3D visualization - its failure never fails the project, since the primary render above
+    already satisfies the "core deliverable" contract. Exposed as `images.render_from_layout` in
+    `HouseProjectStatusResponse`; `static/app.js`'s `HOUSE_RESULT_TIERS` renders it as one more
+    `.result-card` (labeled "3D Layout Render") whenever present - no styling/layout change, deliberately
+    (see the deferred theme-parity plan below).
+  - **Dedicated house render quality** - `OPENAI_HOUSE_IMAGE_QUALITY` (default `high`, `app/config.py`),
+    separate from the room tiers' `OPENAI_IMAGE_QUALITY` (`low`) for the same reason
+    `OPENAI_HOUSE_INPUT_FIDELITY` is separate from `OPENAI_IMAGE_INPUT_FIDELITY` - this feature only
+    produces 1-2 renders/generation (vs. 3 tiers), so `high` is affordable and doesn't touch
+    room-redesign's cost. `OpenAIImageProvider._edit_image()` gained an optional `quality` param
+    (defaulting to the room setting when omitted) so `generate_house_render()` can pass its own.
+  - **`HOUSE_PROMPT_VERSION` bumped to `v3`** (`app/pipeline/house_prompts.py`): richer photoreal/3D
+    vocabulary for both branches; a **hard floor-count constraint** ("the building must have exactly N
+    stories") stated whenever there's real basis for one (a computed `room_layout`, or the user's prompt
+    explicitly naming a count - deliberately NOT a guessed default, since asserting a wrong guess is worse
+    than asserting nothing); and a new `HOUSE_NEGATIVE_PROMPT` constant - a "Do not include" sentence
+    grounded in researched, real AI-architecture-render failure modes (warped/misaligned windows, broken
+    roofline geometry, floating/impossible structure, wrong story count, duplicated buildings/openings,
+    smeared materials, inconsistent context, stray text/watermarks), always appended to both branches -
+    same "state exclusions in plain positive-prompt language" reasoning as room-redesign's
+    `NEGATIVE_ADDITIONS`.
+  - **Floor-count-aware, common-sense room layout** (`app/providers/gemini.py`): `ROOM_LAYOUT_PROMPT_TEMPLATE`
+    now explicitly instructs Gemini to use the user's exact stated floor count (never inventing extras) and
+    to place rooms by real-world convention - living/kitchen/dining/garage/utility only on the ground
+    floor, bedrooms/bathrooms/study on upper floors, never a garage or kitchen above ground, at least one
+    bathroom on any floor with bedrooms. Since prompt instructions aren't a hard guarantee (the same lesson
+    documented throughout this file for room-redesign's structure preservation), `generate_room_layout()`
+    also deterministically **enforces** an explicitly-stated floor count via `_enforce_floor_count()` -
+    truncates extra floors or pads missing ones using the same ground/upper room convention - as a
+    prompt-fix-plus-deterministic-backstop pair, not prompt wording alone. `fallback_room_layout()` (the
+    never-empty path for when the Gemini call itself fails) is now floor-aware too, using the same
+    ground/upper/single-storey room sets (`_GROUND_FLOOR_ROOMS`/`_UPPER_FLOOR_ROOMS`/`_SINGLE_STOREY_ROOMS`)
+    instead of repeating one generic 5-room list on every floor.
+  - **`app/pipeline/blueprint_svg.py` rewritten into a real CAD-style drawing**, not just a flat two-color
+    treemap. Still the exact same pure `render_floor_blueprint(floor_number, rects, dimensions) -> bytes`
+    signature (no caller change), still Pillow-only (see the module docstring for why, unchanged from v1).
+    Adds: double-line exterior walls (the plot boundary plus a parallel outward-offset line) and double-line
+    interior partitions (each room's own nested-rectangle boundary); door openings with a swing-arc symbol,
+    heuristically placed at each pair of adjacent rooms' shared-wall midpoint (`_shared_edge()`/
+    `_draw_door()` - a simple adjacency detector off the rectangles' shared boundaries, not a construction-
+    grade layout, matching the user's own "okayish accuracy... good representation" bar); window marks on
+    every room edge that lies on the exterior plot boundary; real dimension lines along the top and left
+    edges (per-segment measurements plus one overall length/width dimension, derived directly from the
+    rectangles' actual boundaries - always honest even though door/window placement is heuristic); a scale
+    bar and north arrow; and a title block. Uses `ImageFont.load_default(size=N)` (Pillow ≥10.4, already the
+    floor) for scalable text - no bundled font, no new dependency. **Real bug hit and fixed while building
+    this**: PIL's default bitmap font renders unsupported glyphs (em dash, the ≈ sign, superscript ²) as
+    visible tofu boxes - confirmed by actually rendering and inspecting the PNG, not assumed - so every
+    label uses plain ASCII (`-`, `~`, `sq {unit}`) instead. Also real: the background grid is drawn across
+    the **whole canvas**, not just the plot box - room rectangles always tile the plot completely
+    (`layout_floor()` never leaves gaps), so a plot-only grid would be entirely invisible; extending it into
+    the margins gives a visible "drafting sheet" backdrop instead of dead code.
+  - **Deferred, not part of this pass**: visual theme/style parity between the house tab and Room Redesign
+    (image hero, status chip, concept-preview shimmer tiles, results hierarchy). The house tab already
+    shares Room Redesign's exact tokens and component CSS, so this is pure polish-porting - parked at the
+    user's explicit request to get the core render/blueprint quality right first. See
+    `future-plans/build-a-house-theme-parity.md`.
 
 ## Architecture (big picture)
 
@@ -802,6 +868,16 @@ carries the preserve-structure instruction.
   (OpenAI). Localhost-only deployment is intentional for Phase 1.
 - `GEMINI_IMAGE_MODEL` env var / Gemini image path is dormant, not deleted — kept for a possible future
   billing-enabled fallback.
+
+## Future plans
+
+`future-plans/` (project root) holds parked/deferred plans - work that was scoped and intentionally set
+aside rather than dropped, usually to keep a change focused (e.g. "get the core output right before
+touching styling"). Check there before assuming an idea was never considered.
+
+- `future-plans/build-a-house-theme-parity.md` — porting Room Redesign's visual polish (image hero, status
+  chip, concept-preview shimmer tiles, results hierarchy) onto the Build a House tab. Deferred so the
+  house render/blueprint quality work (see "Build a House feature" above) could ship first.
 
 ## Git identity
 
