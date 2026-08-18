@@ -85,13 +85,13 @@ def test_run_house_pipeline_success_without_floor_plan_vendor(monkeypatch):
         assert house_project.floor_plan_key is None
         assert house_project.render_key == "local.output/h1/render.png"
         assert storage.get(house_project.render_key) == b"fake-render-bytes"
-        # FakeProvider's generate_room_layout always succeeds, so a blueprint
-        # is produced and a second (best-effort) render is generated from it.
-        assert house_project.render_layout_key == "local.output/h1/render_layout.png"
 
     assert len(provider.plot_calls) == 1
     assert len(provider.floor_plan_calls) == 1
-    assert len(provider.render_calls) == 2
+    # v5: exactly ONE generate_house_render call (the exterior photo render) -
+    # no second render, no AI-drawn floor-plan call of any kind. The floor
+    # plan itself is 100% deterministic (app/pipeline/blueprint_svg.py).
+    assert len(provider.render_calls) == 1
     assert "2 floors, modern style" in provider.render_calls[0][1]
 
 
@@ -199,11 +199,7 @@ def test_run_house_pipeline_stores_meta_json(monkeypatch):
         assert meta["floor_count"] == 1
 
 
-def test_run_house_pipeline_generates_blueprint_and_uses_it_as_render_reference(monkeypatch):
-    # Confirms the confirmed "generate both" design: the primary render is
-    # always edited from the real plot photo, and - whenever blueprint
-    # generation succeeds - a second, best-effort render is also generated
-    # using the GROUND FLOOR's drawn blueprint as its reference image.
+def test_run_house_pipeline_generates_blueprint_per_floor(monkeypatch):
     engine = make_test_engine()
     monkeypatch.setattr(generate_house_module, "engine", engine)
 
@@ -227,15 +223,11 @@ def test_run_house_pipeline_generates_blueprint_and_uses_it_as_render_reference(
         assert house_project.room_layout_json is not None
 
     assert len(provider.room_layout_calls) == 1
-    # PRIMARY render (index 0) is always edited from the real plot photo now,
-    # per the confirmed "generate both, primary = photo" design - the
-    # blueprint is instead the SECONDARY render's (index 1) reference image.
+    # The exterior render is always edited from the real plot photo - the
+    # blueprint is never used as an image-edit reference for anything.
     assert provider.render_calls[0][0] == b"plot-bytes"
-    layout_render_input = provider.render_calls[1][0]
-    assert layout_render_input == storage.get("local.output/h6/blueprint_floor1.png")
-    assert layout_render_input != b"plot-bytes"
-    # The blueprint is a real drawn PNG, not just an arbitrary byte string.
-    assert layout_render_input.startswith(b"\x89PNG")
+    blueprint_bytes = storage.get("local.output/h6/blueprint_floor1.png")
+    assert blueprint_bytes.startswith(b"\x89PNG")
 
 
 def test_run_house_pipeline_falls_back_to_plot_photo_when_blueprint_generation_fails(monkeypatch):

@@ -23,6 +23,30 @@ class Provider(ABC):
         """
         ...
 
+    def supports_batch(self) -> bool:
+        """True if generate_images_batch() does real batched GPU inference
+        instead of the default sequential fallback. app/pipeline/generate.py
+        checks this to decide whether to use a single batch call (Kaggle) or
+        its existing per-tier ThreadPoolExecutor concurrency (OpenAI, which
+        already parallelizes at the HTTP-request level and gets nothing extra
+        from this method's default sequential loop).
+        """
+        return False
+
+    def generate_images_batch(
+        self, image_bytes: bytes, tier_prompts: dict[str, str]
+    ) -> dict[str, bytes]:
+        """Generate 3 tier images in one batch call (if supported) or sequentially
+        (default). tier_prompts is {"economical": "...", "mid": "...", "premium": "..."}.
+
+        Returns {"economical": bytes, "mid": bytes, "premium": bytes}.
+
+        Default implementation calls generate_image() sequentially for each tier;
+        Kaggle overrides this with a true /generate_batch endpoint call.
+        """
+        return {tier: self.generate_image(image_bytes, prompt, tier)
+                for tier, prompt in tier_prompts.items()}
+
     @abstractmethod
     def describe_room(self, image_bytes: bytes) -> str:
         """Return a short structural description (walls/windows/layout/camera) of the room."""
@@ -143,3 +167,13 @@ class Provider(ABC):
         blueprint-drawing step needs real rooms to draw.
         """
         ...
+
+    # NOTE: an AI-drawn "generate_cad_plan" method briefly existed here (an
+    # image model redrawing the deterministic blueprint into a polished CAD
+    # presentation) and was removed - a real generation showed the image
+    # model hallucinating malformed dimension/area text ("18.4 x 522.59 ft")
+    # when asked to render technical content. Never committed to git, so
+    # cleanly removed rather than left dormant. The floor-plan image is
+    # 100% deterministic again (app/pipeline/blueprint_svg.py, now with
+    # furniture and staircase symbols) - see generate_house.py's
+    # HOUSE_PROMPT_VERSION docstring for the full history.

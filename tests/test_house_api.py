@@ -78,16 +78,15 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
         assert body["floor_plan_status"] == "not_configured"
         assert body["images"]["plot"] is not None
         assert body["images"]["render"] is not None
-        # Secondary render, edited from the computed blueprint - present
-        # whenever the blueprint step succeeds (it does here).
-        assert body["images"]["render_from_layout"] is not None
+        assert "render_from_layout" not in body["images"]
+        assert "cad_plan_urls" not in body
         assert body["images"]["floor_plan"] is None
         assert body["blueprint_status"] == "done"
         assert len(body["blueprint_urls"]) == 1
 
         assert f"users/{username}/input/" in body["images"]["plot"]
         assert f"users/{username}/output/" in body["images"]["render"]
-        assert f"users/{username}/output/" in body["images"]["render_from_layout"]
+        assert f"users/{username}/output/" in body["blueprint_urls"][0]
 
 
 def test_house_display_name_appended_to_storage_namespace(monkeypatch):
@@ -129,10 +128,10 @@ def test_house_prompt_reaches_the_render_call(monkeypatch):
         status_res = client.get(f"/api/house-projects/{house_project_id}")
         assert status_res.json()["status"] == "done"
 
-    # Two renders are generated now (primary from the photo, secondary from
-    # the blueprint) - the user's prompt must reach both.
-    assert len(provider.render_prompts) == 2
-    assert all("2 floors, 3 bedrooms, modern style" in p for p in provider.render_prompts)
+    # v5: exactly one exterior render call - the floor plan itself never
+    # involves an image-generation call at all.
+    assert len(provider.render_prompts) == 1
+    assert "2 floors, 3 bedrooms, modern style" in provider.render_prompts[0]
 
 
 def test_house_project_works_without_dimensions(monkeypatch):

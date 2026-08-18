@@ -327,17 +327,12 @@ pipeline module, and its own endpoints — deliberately not folded into the room
 - **v3: two renders, a dedicated house render quality, a real CAD-look blueprint, and floor-count/
   common-sense room placement** (2026-08-12, driven by direct user feedback that the results "aren't good
   enough"). Four changes, all still behind the same best-effort/non-best-effort contracts above:
-  - **Generate BOTH renders, not one.** The confirmed design: a photoreal exterior/interior render edited
-    from the real **plot photo** is now always the primary, non-best-effort render (`render_key`) - a
-    photoreal "house on this actual land" picture reads far better than editing a flat blueprint drawing.
-    A second, best-effort render edited from the ground floor's drawn blueprint (`render_layout_key`, new
-    `HouseProject` column, migrated via `_NEW_COLUMNS_BY_TABLE["houseproject"]` same as every other
-    additive column here) is generated afterward whenever a blueprint exists, giving a second
-    layout-faithful 3D visualization - its failure never fails the project, since the primary render above
-    already satisfies the "core deliverable" contract. Exposed as `images.render_from_layout` in
-    `HouseProjectStatusResponse`; `static/app.js`'s `HOUSE_RESULT_TIERS` renders it as one more
-    `.result-card` (labeled "3D Layout Render") whenever present - no styling/layout change, deliberately
-    (see the deferred theme-parity plan below).
+  - **Generate BOTH renders, not one** — **SUPERSEDED by v4 below.** This originally added a second,
+    blueprint-sourced 3D isometric render (`render_layout_key`) alongside the photoreal exterior render.
+    v4 removed that second render entirely (input, processing, storage column, schema field, frontend
+    card - all of it), replacing it with a per-floor 2D CAD plan instead. Left here only so the history
+    of what changed and why is traceable; the exterior render itself (`render_key`, edited from the real
+    plot photo) is unchanged and still the primary, non-best-effort deliverable.
   - **Dedicated house render quality** - `OPENAI_HOUSE_IMAGE_QUALITY` (default `high`, `app/config.py`),
     separate from the room tiers' `OPENAI_IMAGE_QUALITY` (`low`) for the same reason
     `OPENAI_HOUSE_INPUT_FIDELITY` is separate from `OPENAI_IMAGE_INPUT_FIDELITY` - this feature only
@@ -390,6 +385,74 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     shares Room Redesign's exact tokens and component CSS, so this is pure polish-porting - parked at the
     user's explicit request to get the core render/blueprint quality right first. See
     `future-plans/build-a-house-theme-parity.md`.
+- **v4: per-floor AI-drawn "CAD plan," replacing the 3D isometric render — TRIED, then REVERTED in v5
+  below.** (2026-08-13). Kept here as a real record of what was tried and why it didn't work, not
+  something to resurrect casually.
+  - **Premise correction that started this, worth keeping on record**: the user compared this project's
+    deterministic `blueprint_svg.py` output against another AI system's floor plan and initially believed
+    our blueprint images were already AI-generated (they're 100% Pillow-drawn geometry, zero model calls -
+    confirmed by matching the title text `"FLOOR {n} - COMPUTED LAYOUT"` back to `blueprint_svg.py`'s own
+    literal string). Once corrected, the agreed v4 approach was: keep geometry deterministic, but ask an
+    image model to REDRAW the accurate blueprint for presentation polish (furniture, door/window
+    craftsmanship, a staircase symbol) - one `gpt-image-1` edit call per floor
+    (`app/pipeline/cad_prompts.py`'s `build_cad_plan_prompt()`, a new `generate_cad_plan()` provider
+    method, `cad_plan_keys_json`/`cad_plan_urls` storage/schema, a "Verified Layout" (blueprint) +
+    "Architectural Plan" (AI) card pair in the UI).
+  - **Why it was reverted**: a real generation showed the image model hallucinating malformed dimension/
+    area text when asked to render technical content - e.g. `"18.4 x 522.59 ft"`, `"21.6 x 1 f0.0 ft"` -
+    confirming a well-documented image-model weakness (precise text rendering), not a prompt-wording
+    problem. The user's explicit instruction at that point: don't just make the prompt longer, separate
+    architectural planning from image rendering, and treat any image the model produces with invented
+    room dimensions/areas as a hard failure regardless of how good the geometry looks. Compositing
+    accurate deterministic text onto the AI image afterward was considered and rejected too - there's no
+    guarantee an image-EDIT call preserves exact pixel alignment with its input, so overlaying
+    known-correct dimension lines/labels risked looking *more* obviously broken (misaligned) than the
+    hallucinated-text problem it was meant to fix, not less.
+  - **What was removed, cleanly** (this work was never committed to git, so no dangling history):
+    `app/pipeline/cad_prompts.py` deleted entirely; `Provider.generate_cad_plan()` and its
+    implementations in `OpenAIImageProvider`/`GeminiProvider`/`HybridProvider` removed;
+    `OPENAI_CAD_INPUT_FIDELITY`/`OPENAI_CAD_IMAGE_QUALITY` settings removed; `HouseProject.
+    cad_plan_keys_json`, `HouseProjectStatusResponse.cad_plan_urls`, and the CAD-plan frontend cards all
+    removed; `meta_json`'s `cad_plans_generated` reverted back to nothing (the per-floor blueprint step's
+    own `blueprint_generated` already covers it).
+  - **The 3D isometric render removal from v4 stands, independent of this revert**: `render_layout_key`
+    (which WAS briefly committed to git, so its DB column is an intentionally-orphaned artifact on any
+    install that ran that commit - additive migrations can't drop it, but nothing reads it),
+    `images.render_from_layout`, and the `using_blueprint_image` branch/param in `build_house_prompt()`
+    stay gone - that decision didn't depend on the CAD-plan experiment's outcome.
+- **v5: furniture and a staircase added directly to the deterministic renderer instead - no image model
+  touches the floor plan at all.** (2026-08-13, same day, immediate follow-up to the v4 revert). This is
+  the "even better implementation" the user's own architectural spec called out as the highest-accuracy
+  option: skip the image model for technical/geometric content entirely rather than trying to constrain
+  it via prompting or validation-and-retry.
+  - **`app/pipeline/blueprint_svg.py`'s `render_floor_blueprint()` gained a `total_floors: int = 1`
+    parameter** and now draws, deterministically: furniture symbols dispatched by a keyword match on each
+    room's name (bed/nightstands/wardrobe for bedrooms, sofa/coffee-table/chair for living/lounge/family/
+    drawing rooms, table+4 chairs for dining, counter/sink/fridge for kitchens, toilet/basin/tub for
+    bathrooms, desk/chair for study/office, a car outline for garages; entry/foyer/hallway/storage/utility/
+    unrecognized names get no furniture - restraint over a guessed icon); and a staircase symbol (steps +
+    an UP or DN arrow, `"UP"` when `floor_number < total_floors`, `"DN"` on the top floor) whenever
+    `total_floors > 1`, placed in the floor's largest room. Same "legible mark, not construction-grade"
+    precedent already established for door/window placement - not real circulation space, since none is
+    reserved by `floor_layout.py`'s algorithm.
+  - **Real bug hit and fixed while building this, worth the specific note**: an early version sized the
+    bed as a fraction of the room's own dimensions with a "stay below 58% height" margin that looked safe
+    on paper, but a real rendered small-plot test showed the bed's pillow line crossing directly through
+    the room label text. Root cause: the label's rendered height is a roughly FIXED pixel amount (driven
+    by font size), not proportional to room size, so a percentage-based margin doesn't scale correctly -
+    a tall room's label doesn't get taller. Fixed by computing the label's actual clearance band in
+    pixels (`_LABEL_CLEARANCE_PX = 26`) and clamping the bed - and skipping the wardrobe entirely when it
+    would still reach into that band - against it directly, confirmed by re-rendering the exact
+    reproducing case and visually inspecting the output before considering it fixed.
+  - **`app/pipeline/generate_house.py`** passes `total_floors=len(room_layout["floors"])` into
+    `render_floor_blueprint()` for each floor. `HOUSE_PROMPT_VERSION` is `v5`.
+  - **Verification**: rendered and visually inspected (not just unit-tested) single-floor, two-floor,
+    different room counts (including the exact "2 floors, 3 bedrooms each, kitchen each floor" case that
+    originally prompted this whole investigation), a small/constrained plot, and every recognized room
+    type - confirmed no furniture/label overlaps, correct UP/DN staircase direction per floor, and no
+    crashes. `tests/test_blueprint_svg.py` covers the `total_floors` param, the bed/label
+    non-overlap regression, and a smoke test across every recognized (and one unrecognized) room-name
+    keyword.
 
 ## Architecture (big picture)
 

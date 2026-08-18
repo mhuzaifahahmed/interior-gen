@@ -118,6 +118,16 @@ class Settings(BaseSettings):
     # each time the notebook is restarted.
     kaggle_api_url: str = ""
 
+    # Diffusion step count sent to the Kaggle endpoint's /generate call. The
+    # endpoint's own default (confirmed via its live /openapi.json schema) is
+    # 30, but kaggle.py never sent this param explicitly, so every call ran at
+    # 30 whether that was wanted or not. A real side-by-side timing+visual
+    # comparison (30 vs 20 vs 15, same input/prompt) showed 20 as the accepted
+    # middle ground - meaningfully faster than 30 (~22%) without the visible
+    # softness 15 started to show. Override per-deployment if that trade-off
+    # ever needs revisiting.
+    kaggle_num_inference_steps: int = 20
+
     # Set ONLY when the frontend is hosted on a different domain from this
     # backend (e.g. static/ deployed to Vercel, this FastAPI app deployed to
     # Render) - blank (the default) means same-origin, which is how local dev

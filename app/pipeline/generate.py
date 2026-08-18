@@ -17,6 +17,23 @@ logger = logging.getLogger(__name__)
 
 TIERS = ("economical", "mid", "premium")
 
+# Sniffs the real image format from magic bytes rather than assuming PNG -
+# OpenAI (gpt-image-1) returns PNG, but KaggleImageProvider's notebook was
+# switched to JPEG output (smaller payload over the Cloudflare tunnel), and
+# IMAGE_PROVIDER can point at either one. Storing the wrong extension/
+# content-type wouldn't break rendering (browsers use the real bytes, not
+# the extension) but would mislabel S3 objects and downloaded filenames.
+_JPEG_MAGIC = b"\xff\xd8\xff"
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _detect_image_format(image_bytes: bytes) -> tuple[str, str]:
+    """Returns (file_extension, content_type). Defaults to PNG for anything
+    unrecognized - matches this project's prior hardcoded-PNG behavior."""
+    if image_bytes.startswith(_JPEG_MAGIC):
+        return "jpg", "image/jpeg"
+    return "png", "image/png"
+
 # Generous timeout for a single tier's materials lookup. Bumped again (45->75
 # ->100) after adding a retry for Gemini's transient 503s (up to 3 attempts,
 # 2s apart - see gemini.py's MATERIALS_GEMINI_MAX_ATTEMPTS) plus a 30s (was
@@ -177,36 +194,65 @@ def run_pipeline(
                 for tier in TIERS
             }
             with timer.stage("generate_images+storage_upload(all tiers)"):
-                with (
-                    ThreadPoolExecutor(max_workers=3) as image_executor,
-                    ThreadPoolExecutor(max_workers=3) as upload_executor,
-                ):
 
-                    def _generate(tier: str) -> bytes:
-                        with timer.stage(f"generate_image:{tier}"):
-                            return provider.generate_image(original_bytes, tier_prompts[tier], tier)
+                def _upload(tier: str, image_bytes: bytes) -> str:
+                    key_prefix = f"users/{username}/output" if username else "local.output"
+                    ext, content_type = _detect_image_format(image_bytes)
+                    key = f"{key_prefix}/{project_id}/{tier}.{ext}"
+                    with timer.stage(f"storage.put:{tier}"):
+                        storage.put(key, image_bytes, content_type=content_type)
+                    return key
 
-                    def _upload(tier: str, image_bytes: bytes) -> str:
-                        key_prefix = f"users/{username}/output" if username else "local.output"
-                        key = f"{key_prefix}/{project_id}/{tier}.png"
-                        with timer.stage(f"storage.put:{tier}"):
-                            storage.put(key, image_bytes, content_type="image/png")
-                        return key
+                # getattr with a default rather than a direct call - some
+                # test fakes are plain duck-typed classes that don't inherit
+                # from Provider (and thus lack the base class's default
+                # implementation), so a missing attribute must mean "no batch
+                # support" rather than an AttributeError.
+                if getattr(provider, "supports_batch", lambda: False)():
+                    # True GPU-batched generation (currently only Kaggle) -
+                    # one call covering all 3 tiers, instead of N separate
+                    # HTTP requests. See Provider.supports_batch()'s docstring
+                    # for why OpenAI doesn't take this branch (it already
+                    # parallelizes at the per-tier request level below, and
+                    # gains nothing from a sequential-fallback batch loop).
+                    with timer.stage("generate_images_batch(all tiers)"):
+                        tier_images = provider.generate_images_batch(original_bytes, tier_prompts)
 
-                    image_futures = {image_executor.submit(_generate, tier): tier for tier in TIERS}
-                    upload_futures = {}
-                    for image_future in as_completed(image_futures):
-                        tier = image_futures[image_future]
-                        image_bytes = image_future.result()
-                        upload_future = upload_executor.submit(_upload, tier, image_bytes)
-                        upload_futures[upload_future] = tier
+                    with ThreadPoolExecutor(max_workers=3) as upload_executor:
+                        upload_futures = {
+                            upload_executor.submit(_upload, tier, image_bytes): tier
+                            for tier, image_bytes in tier_images.items()
+                        }
+                        for upload_future in as_completed(upload_futures):
+                            tier = upload_futures[upload_future]
+                            key = upload_future.result()
+                            setattr(project, f"{tier}_key", key)
+                            session.add(project)
+                            session.commit()
+                else:
+                    with (
+                        ThreadPoolExecutor(max_workers=3) as image_executor,
+                        ThreadPoolExecutor(max_workers=3) as upload_executor,
+                    ):
 
-                    for upload_future in as_completed(upload_futures):
-                        tier = upload_futures[upload_future]
-                        key = upload_future.result()
-                        setattr(project, f"{tier}_key", key)
-                        session.add(project)
-                        session.commit()
+                        def _generate(tier: str) -> bytes:
+                            with timer.stage(f"generate_image:{tier}"):
+                                return provider.generate_image(original_bytes, tier_prompts[tier], tier)
+
+                        image_futures = {image_executor.submit(_generate, tier): tier for tier in TIERS}
+                        upload_futures = {}
+                        for image_future in as_completed(image_futures):
+                            tier = image_futures[image_future]
+                            image_bytes = image_future.result()
+                            upload_future = upload_executor.submit(_upload, tier, image_bytes)
+                            upload_futures[upload_future] = tier
+
+                        for upload_future in as_completed(upload_futures):
+                            tier = upload_futures[upload_future]
+                            key = upload_future.result()
+                            setattr(project, f"{tier}_key", key)
+                            session.add(project)
+                            session.commit()
 
             if materials_futures is not None:
                 materials: dict[str, dict] = {}

@@ -4,6 +4,15 @@ const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)
 // (single FastAPI server serves this file + the API together) and
 // production (vercel.json proxies /api/:path* to the real Render backend
 // server-side).
+function downloadFilenameFor(key, url) {
+  // Tier images can now be PNG (OpenAI) or JPEG (Kaggle, if IMAGE_PROVIDER=kaggle) -
+  // derive the extension from the actual served URL instead of hardcoding
+  // ".png", so a JPEG file isn't downloaded with a mismatched extension.
+  const match = /\.(png|jpe?g|webp)(?:$|\?)/i.exec(url || "");
+  const ext = match ? match[1].toLowerCase() : "png";
+  return `${key}.${ext}`;
+}
+
 function apiUrl(path) {
   return path;
 }
@@ -1426,7 +1435,7 @@ function renderResults(data) {
     card.innerHTML = `
       <div class="img-wrap">
         <img src="${url}" alt="${tier.label} redesign" loading="lazy" />
-        <a class="download-btn" href="${url}" download="${tier.key}.png" aria-label="Download ${tier.label} image" title="Download image">
+        <a class="download-btn" href="${url}" download="${downloadFilenameFor(tier.key, url)}" aria-label="Download ${tier.label} image" title="Download image">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </a>
       </div>
@@ -1652,7 +1661,7 @@ houseForm.addEventListener("submit", async (e) => {
 // the render already existed.
 const HOUSE_STAGES = [
   { label: "Analyzing your plot…" },
-  { label: "Drawing your floor plan…" },
+  { label: "Drawing your floor plans…" },
   { label: "Generating your concept render…" },
 ];
 
@@ -1782,7 +1791,6 @@ async function pollHouseProject(houseProjectId) {
 const HOUSE_RESULT_TIERS = [
   { key: "plot", label: "Original Plot", desc: "Your uploaded plot photo." },
   { key: "render", label: "Concept Render", desc: "AI-generated exterior/interior concept." },
-  { key: "render_from_layout", label: "3D Layout Render", desc: "Rendered from your computed floor plan." },
 ];
 
 function renderHouseResults(data) {
@@ -1798,7 +1806,7 @@ function renderHouseResults(data) {
     card.innerHTML = `
       <div class="img-wrap">
         <img src="${url}" alt="${tier.label}" loading="lazy" />
-        <a class="download-btn" href="${url}" download="${tier.key}.png" aria-label="Download ${tier.label}" title="Download image">
+        <a class="download-btn" href="${url}" download="${downloadFilenameFor(tier.key, url)}" aria-label="Download ${tier.label}" title="Download image">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </a>
       </div>
@@ -1814,10 +1822,12 @@ function renderHouseResults(data) {
 
   // Free algorithmic blueprint step (app/pipeline/floor_layout.py +
   // blueprint_svg.py) - unrelated to floor_plan_status below, which stays
-  // reserved for a still-inert future paid vendor. Unlike that hypothetical
-  // AI-generated floor plan, these ARE dimensionally accurate: the room
-  // rectangles are computed directly from the stated plot dimensions, not
-  // guessed by an image model - hence the different, non-disclaiming label.
+  // reserved for a still-inert future paid vendor. This IS the floor-plan
+  // image - 100% deterministic (no AI model ever touches geometry/
+  // dimensions/text), with furniture and staircase symbols (v5) - hence the
+  // non-disclaiming label, unlike a hypothetical AI-generated floor plan. An
+  // earlier AI-drawn "CAD plan" enhancement was tried and reverted after a
+  // real generation showed hallucinated dimension text - see CLAUDE.md.
   if (data.blueprint_status === "done" && data.blueprint_urls && data.blueprint_urls.length) {
     data.blueprint_urls.forEach((url, i) => {
       const floorNumber = i + 1;

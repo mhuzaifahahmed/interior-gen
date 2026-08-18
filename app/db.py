@@ -47,7 +47,14 @@ _NEW_COLUMNS_BY_TABLE = {
         ("blueprint_keys_json", "TEXT"),
         ("blueprint_status", "TEXT NOT NULL DEFAULT 'idle'"),
         ("user_id", "TEXT"),
-        ("render_layout_key", "TEXT"),
+        # render_layout_key (the 3D isometric render) was added here, was
+        # briefly live (committed to git), then removed once that feature was
+        # dropped - deliberately NOT listed here anymore. A dev DB that ran
+        # that commit keeps the orphan column (this migration is
+        # additive-only, it can't drop columns), but nothing reads it -
+        # harmless. A later cad_plan_keys_json column (an AI-drawn "CAD
+        # plan" feature) was added and removed within the same uncommitted
+        # working session, so it never reached any real database at all.
     ],
 }
 

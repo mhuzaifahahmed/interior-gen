@@ -82,7 +82,9 @@ def test_build_house_prompt_omits_floor_count_constraint_when_unknown():
     assert "must have exactly" not in prompt
 
 
-def test_build_house_prompt_blueprint_branch_forbids_flat_blueprint_look():
-    prompt = build_house_prompt({"length": 40, "width": 60, "unit": "ft"}, using_blueprint_image=True)
-    assert "Edit this image" in prompt
-    assert "flat top-down blueprint" in prompt
+def test_build_house_prompt_always_edits_the_plot_photo():
+    # v4 removed the second, blueprint-sourced 3D render entirely - this
+    # function now only ever composes the photo-edit prompt (no
+    # using_blueprint_image branch/param anymore).
+    prompt = build_house_prompt({"length": 40, "width": 60, "unit": "ft"})
+    assert "Edit this photograph of a real building plot" in prompt

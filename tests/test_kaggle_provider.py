@@ -41,6 +41,27 @@ def test_generate_image_decodes_generated_image_base64(monkeypatch):
     assert result == b"decoded-png-bytes"
 
 
+def test_generate_image_always_sends_num_inference_steps(monkeypatch):
+    # Regression guard: the endpoint's own default is 30 (confirmed via its
+    # live /openapi.json schema), but a real side-by-side timing+visual
+    # comparison found 20 the accepted speed/quality middle ground - this
+    # must be sent explicitly on every call, not left to the endpoint default.
+    captured = {}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["payload"] = json
+        encoded = base64.b64encode(b"png-bytes").decode("ascii")
+        return FakeResponse(json_data={"status": "success", "generated_image_base64": encoded})
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_num_inference_steps", 20)
+
+    KaggleImageProvider().generate_image(b"input-bytes", "prompt")
+
+    assert captured["payload"]["num_inference_steps"] == 20
+
+
 def test_generate_image_raises_on_unexpected_response_shape(monkeypatch):
     def fake_post(url, json=None, timeout=None):
         return FakeResponse(json_data={"status": "error", "detail": "model not loaded"})

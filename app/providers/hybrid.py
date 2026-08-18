@@ -1,4 +1,5 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
 from app.providers import idealhouse
@@ -89,6 +90,29 @@ class HybridProvider(Provider):
                 tier,
             )
             return self._house_image_provider.generate_image(image_bytes, prompt, tier)
+
+    def supports_batch(self) -> bool:
+        return self._room_image_provider.supports_batch()
+
+    def generate_images_batch(
+        self, image_bytes: bytes, tier_prompts: dict[str, str]
+    ) -> dict[str, bytes]:
+        try:
+            return self._room_image_provider.generate_images_batch(image_bytes, tier_prompts)
+        except Exception:
+            if self._room_image_provider is self._house_image_provider:
+                raise  # already OpenAI (the fallback itself) - nothing left to try
+            logger.exception(
+                "room image provider %s batch generation failed - falling back to OpenAI "
+                "(per-tier concurrent, not batched)",
+                type(self._room_image_provider).__name__,
+            )
+            with ThreadPoolExecutor(max_workers=len(tier_prompts)) as pool:
+                futures = {
+                    tier: pool.submit(self._house_image_provider.generate_image, image_bytes, prompt, tier)
+                    for tier, prompt in tier_prompts.items()
+                }
+                return {tier: future.result() for tier, future in futures.items()}
 
     def generate_materials(
         self,

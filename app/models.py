@@ -85,18 +85,20 @@ class HouseProject(SQLModel, table=True):
     floor_plan_status: str = Field(default="idle")  # idle | running | not_configured | done | failed
 
     render_key: Optional[str] = None
-    # Secondary render, edited from the ground floor's drawn blueprint instead
-    # of the raw plot photo (render_key's source) - best-effort, may stay None
-    # if the blueprint step failed or that render call itself failed. See
-    # app/pipeline/generate_house.py's "generate both" render stage.
-    render_layout_key: Optional[str] = None
+    # A second, blueprint-sourced 3D isometric render (render_layout_key,
+    # briefly committed to git) and later a per-floor AI-drawn "CAD plan"
+    # (cad_plan_keys_json, never committed) both existed here and were both
+    # removed - the CAD plan after a real generation showed the image model
+    # hallucinating malformed dimension text. See generate_house.py's
+    # HOUSE_PROMPT_VERSION docstring for the full history.
 
     # Free algorithmic blueprint step: Gemini's structured room list per floor
     # (app/providers/gemini.py's generate_room_layout), the computed room
     # rectangles, and one drawn PNG key per floor (app/pipeline/floor_layout.py
     # + blueprint_svg.py). blueprint_keys_json is a JSON list of storage keys,
-    # floor-ordered (index 0 = ground floor - also the image fed to the paid
-    # AI render step as its reference).
+    # floor-ordered (index 0 = ground floor). This is THE floor-plan image -
+    # 100% deterministic (no AI model ever touches geometry/dimensions/text),
+    # now including furniture and staircase symbols (v5).
     room_layout_json: Optional[str] = None
     blueprint_keys_json: Optional[str] = None
     blueprint_status: str = Field(default="idle")  # idle | running | done | failed

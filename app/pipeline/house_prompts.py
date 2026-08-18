@@ -1,20 +1,28 @@
 """Prompt builder for the "Build a House" feature's exterior/interior concept
-render - mirrors app/pipeline/prompts.py's build_prompt() role and format
+render (the photoreal render_key deliverable, edited from the real plot
+photo) - mirrors app/pipeline/prompts.py's build_prompt() role and format
 lesson: a coherent natural-language EDIT instruction paragraph for gpt-image-1
 (an instruction-following editor), not comma-separated keyword soup - the same
 real failure (a keyword-soup format reading as a generation spec instead of an
 edit instruction) that drove that format for room-redesign applies here too.
 
-v3 adds: an explicit floor-count hard constraint (the render must show exactly
+v3 added: an explicit floor-count hard constraint (the render must show exactly
 the number of stories the layout/user actually specifies, not a guess), richer
-photoreal/architectural vocabulary for both branches, and HOUSE_NEGATIVE_PROMPT
-- a "Do not include" exclusion sentence grounded in real, researched failure
-modes of AI-generated architecture renders (warped/misaligned windows, broken
-roofline geometry, impossible/floating structure, wrong story count, smeared
-materials, duplicated buildings/openings, inconsistent context, stray text/
-watermarks). Same reasoning as prompts.py's NEGATIVE_ADDITIONS: instruction-
-following models are built to follow exclusions stated in plain positive-
-prompt language, so this is a sentence, not a separate API parameter.
+photoreal vocabulary, and HOUSE_NEGATIVE_PROMPT - a "Do not include" exclusion
+sentence grounded in real, researched failure modes of AI-generated
+architecture renders (warped/misaligned windows, broken roofline geometry,
+impossible/floating structure, wrong story count, smeared materials,
+duplicated buildings/openings, inconsistent context, stray text/watermarks).
+Same reasoning as prompts.py's NEGATIVE_ADDITIONS: instruction-following
+models are built to follow exclusions stated in plain positive-prompt
+language, so this is a sentence, not a separate API parameter.
+
+v4 REMOVED the second, blueprint-sourced "3D layout render" entirely (and with
+it, this module's using_blueprint_image branch) - a deliberate scope cut so
+"Build a House" produces exactly two deliverables: this photoreal exterior
+render, and a professional 2D CAD floor-plan image per floor (see
+app/pipeline/cad_prompts.py) instead of a 3D isometric visualization. This
+module now only ever composes the photo-edit prompt.
 """
 
 USER_PROMPT_MAX_CHARS = 200
@@ -39,9 +47,10 @@ def build_house_prompt(
     prompt: str | None = None,
     plot_description: str | None = None,
     room_layout: dict | None = None,
-    using_blueprint_image: bool = False,
 ) -> str:
-    """Compose a natural-language edit instruction for generate_house_render().
+    """Compose a natural-language edit instruction for generate_house_render()
+    - always edits the real plot photo (image_bytes passed by the caller is
+    always the plot photo now that the blueprint-sourced 3D render is gone).
 
     Sentence order: edit framing (incl. the hard floor-count constraint) ->
     plot_description (if given) -> dimensions context -> room_layout
@@ -50,40 +59,21 @@ def build_house_prompt(
     so they land right before the model generates, same ordering principle as
     the rest of this function and as room-redesign's build_prompt().
 
-    room_layout, when given, is GeminiProvider.generate_room_layout()'s output
-    (see app/pipeline/floor_layout.py + blueprint_svg.py for how it also
-    becomes the actual reference image passed as image_bytes to
-    generate_house_render() - only the ground floor's blueprint image is used
-    as the visual reference, so this text summary is what carries upper-floor
-    information to the model). Unrelated to the still-deferred, still-inert
+    room_layout, when given, is GeminiProvider.generate_room_layout()'s
+    output (see app/pipeline/floor_layout.py + blueprint_svg.py) - used here
+    only as a text summary so the render's floor/room count stays consistent
+    with what the CAD plans show. Unrelated to the still-deferred, still-inert
     floor-plan VENDOR slot (app/providers/idealhouse.py).
-
-    using_blueprint_image must match what the caller actually passes as
-    generate_house_render()'s image_bytes: True if it's the ground floor's
-    drawn blueprint, False if the blueprint step failed/was skipped and the
-    caller fell back to the raw plot photo - the opening sentence describes
-    whichever image is actually being edited, so it never contradicts what
-    the model is looking at.
     """
     floor_count = _resolve_floor_count(room_layout, prompt)
 
-    if using_blueprint_image:
-        opening = (
-            "Edit this image (a computed room-layout blueprint for the ground floor, drawn to "
-            "scale from the plot's real dimensions) to create a photorealistic 3D architectural "
-            "concept visualization of this exact layout - a furnished, fully rendered building, "
-            "not a flat top-down blueprint or orthographic drawing. Use realistic materials, "
-            "natural lighting, and a three-quarter or isometric exterior view (or interior, if "
-            "the prompt requests it). This is a concept visualization, not a precise blueprint."
-        )
-    else:
-        opening = (
-            "Edit this photograph of a real building plot/piece of land to place a "
-            "photorealistic, fully-built house on this exact plot, keeping the real ground, "
-            "boundaries, and surroundings visible. Use an eye-level three-quarter exterior view "
-            "(or interior, if the prompt requests it), natural daylight, realistic materials and "
-            "landscaping, and high detail. This is a concept visualization, not a precise blueprint."
-        )
+    opening = (
+        "Edit this photograph of a real building plot/piece of land to place a "
+        "photorealistic, fully-built house on this exact plot, keeping the real ground, "
+        "boundaries, and surroundings visible. Use an eye-level three-quarter exterior view "
+        "(or interior, if the prompt requests it), natural daylight, realistic materials and "
+        "landscaping, and high detail. This is a concept visualization, not a precise blueprint."
+    )
     sentences = [opening]
 
     if floor_count:

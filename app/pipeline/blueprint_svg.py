@@ -7,14 +7,27 @@ the gpt-image-1 edit call need), and avoids a new native-library dependency
 (cairosvg/Cairo) that's a real install risk on Windows, for a browser-crispness
 benefit this v1 (no client-side interactivity) doesn't need.
 
-v2 (this rewrite) upgrades the flat two-color treemap from v1 into a genuine
-CAD-look drawing per real user feedback ("a good AutoCAD map with okayish
+v2 upgraded the flat two-color treemap from v1 into a genuine CAD-look
+drawing per real user feedback ("a good AutoCAD map with okayish
 measurements... but a good representation") - double-line exterior/interior
 walls, door swings, window marks, dimension lines with real measurements,
 a scale bar, a north arrow, and a title block. Everything is still computed
 deterministically from the real plot dimensions and layout_floor()'s
 rectangles - no image model involved, so the numbers stay honest even though
 door/window placement is a simple heuristic, not a construction-grade layout.
+
+v5 adds furniture symbols (per room-type keyword match) and a staircase
+symbol for multi-floor buildings. This directly REPLACES a brief attempt to
+get "professional presentation" via an AI image model redrawing this same
+blueprint (app/pipeline/cad_prompts.py, since deleted) - a real generation
+showed the image model hallucinating malformed dimension/area text (e.g.
+"18.4 x 522.59 ft") when asked to render technical content, confirming a
+well-documented image-model weakness. The fix is architectural, not a
+prompt tweak: closing the "looks basic" gap by extending THIS deterministic
+renderer instead, so geometry/dimensions/labels can never be hallucinated -
+no image model is involved in producing the floor-plan image at all. See
+app/pipeline/generate_house.py's HOUSE_PROMPT_VERSION docstring for the
+full history of what was tried.
 """
 
 import math
@@ -46,11 +59,15 @@ INK_SOFT = (110, 108, 92)      # ~#6e6c5c on-surface-variant
 WALL_COLOR = INK
 DIM_LINE_COLOR = INK_SOFT
 WINDOW_COLOR = (143, 175, 158)  # ~#8faf9e tertiary sage
+FURNITURE_COLOR = INK_SOFT  # softer than WALL_COLOR - visually secondary to structure
 
 
-def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dict) -> bytes:
+def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dict, total_floors: int = 1) -> bytes:
     """rects: output of floor_layout.layout_floor - [{"name","x","y","w","h"}, ...]
-    in the same real-world unit as dimensions. Returns PNG bytes."""
+    in the same real-world unit as dimensions. total_floors: the building's
+    total floor count - a staircase symbol is drawn (in the largest room,
+    a heuristic placement like doors/windows above) only when > 1, since a
+    single-storey building has nothing to connect. Returns PNG bytes."""
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
     unit = dimensions.get("unit", "") or "units"
@@ -79,6 +96,13 @@ def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dic
 
     for rect in rects:
         _draw_room(draw, _room_bbox(rect, plot_x0, plot_y0, scale))
+
+    for rect in rects:
+        _draw_furniture(draw, rect, plot_x0, plot_y0, scale)
+
+    if total_floors > 1:
+        direction = "UP" if floor_number < total_floors else "DN"
+        _draw_staircase(draw, rects, plot_x0, plot_y0, scale, small_font, direction)
 
     door_len_px = max(10.0, min(26.0, 2.6 * scale))
     for a, b in combinations(rects, 2):
@@ -226,6 +250,191 @@ def _draw_windows(draw: ImageDraw.ImageDraw, rect: dict, plot_length: float, plo
             px0, px1 = plot_x0 + w_start_px * scale, plot_x0 + w_end_px * scale
             draw.line([(px0, py), (px1, py)], fill=PAPER, width=erase_width)
             draw.line([(px0, py), (px1, py)], fill=WINDOW_COLOR, width=3)
+
+
+# ---- Furniture ----
+# Dispatches on a simple keyword match against the room's name (the same
+# room-name vocabulary app/providers/gemini.py's ROOM_LAYOUT_PROMPT_TEMPLATE
+# and _GROUND_FLOOR_ROOMS/_UPPER_FLOOR_ROOMS already use). Outline-only
+# symbols in FURNITURE_COLOR (lighter than WALL_COLOR) so they read as
+# secondary to the structure, not competing with it - and are positioned
+# toward corners/edges, away from the room label's centered position, per
+# the "furniture must not obscure labels" principle. An unrecognized or
+# purely circulatory room name (entry/foyer/hallway/storage/utility) simply
+# gets no furniture rather than a guessed icon - restraint over decoration.
+
+_FURNITURE_MIN_BOX_W = 70
+_FURNITURE_MIN_BOX_H = 60
+# Half the room label's rendered block height (name + area lines), plus a
+# margin - the label is centered on the room's own cy in _draw_room_label().
+# Real value found by measuring an actual rendered label, not guessed: a
+# fraction-only margin (e.g. "keep furniture below 58% height") looked safe
+# on paper but still collided in a real render, because the clearance needed
+# is a roughly FIXED pixel amount (driven by font size), not proportional to
+# room size - a tall room's label doesn't get taller. Bottom-anchored
+# furniture (the bed) is clamped against this so its top edge can never
+# cross into the label's band, confirmed by re-rendering the exact case that
+# first showed the overlap.
+_LABEL_CLEARANCE_PX = 26
+
+
+def _draw_furniture(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_y0: float, scale: float) -> None:
+    x0, y0, x1, y1 = _room_bbox(rect, plot_x0, plot_y0, scale)
+    box_w, box_h = x1 - x0, y1 - y0
+    if box_w < _FURNITURE_MIN_BOX_W or box_h < _FURNITURE_MIN_BOX_H:
+        return
+
+    cy = (y0 + y1) / 2
+    pad = max(4.0, min(box_w, box_h) * 0.07)
+    ix0, iy0, ix1, iy1 = x0 + pad, y0 + pad, x1 - pad, y1 - pad
+    iw, ih = ix1 - ix0, iy1 - iy0
+    name = rect["name"].lower()
+
+    if "bath" in name or "wc" in name or "washroom" in name or "toilet" in name:
+        _furnish_bathroom(draw, ix0, iy0, ix1, iy1, iw, ih)
+    elif "bed" in name:
+        _furnish_bedroom(draw, ix0, iy0, ix1, iy1, iw, ih, cy)
+    elif "kitchen" in name:
+        _furnish_kitchen(draw, ix0, iy0, ix1, iy1, iw, ih)
+    elif "dining" in name:
+        _furnish_dining(draw, ix0, iy0, ix1, iy1, iw, ih)
+    elif any(k in name for k in ("living", "lounge", "family", "drawing")):
+        _furnish_living(draw, ix0, iy0, ix1, iy1, iw, ih)
+    elif "study" in name or "office" in name:
+        _furnish_study(draw, ix0, iy0, ix1, iy1, iw, ih)
+    elif "garage" in name:
+        _furnish_garage(draw, ix0, iy0, ix1, iy1, iw, ih)
+    # entry/foyer/hallway/storage/utility/unrecognized: no furniture symbol
+
+
+def _furnish_bedroom(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float, cy: float) -> None:
+    bed_w, bed_h = w * 0.42, h * 0.42
+    by0 = y1 - bed_h
+    # Real overlap hit and fixed via an actual rendered test (a bed's pillow
+    # line crossed straight through the label text) - a proportional-only
+    # margin wasn't enough, so this clamps the bed's top edge directly
+    # against the label's actual clearance band. See _LABEL_CLEARANCE_PX.
+    label_floor = cy + _LABEL_CLEARANCE_PX
+    if by0 < label_floor:
+        bed_h = y1 - label_floor
+    if bed_h < h * 0.2:
+        return  # too little vertical room left below the label to draw a legible bed
+    bx0, by0, bx1, by1 = x0, y1 - bed_h, x0 + bed_w, y1
+    draw.rectangle([bx0, by0, bx1, by1], outline=FURNITURE_COLOR, width=1)
+    draw.line([(bx0, by0 + bed_h * 0.22), (bx1, by0 + bed_h * 0.22)], fill=FURNITURE_COLOR, width=1)  # pillow line
+    nightstand = min(w, h) * 0.12
+    if bx1 + nightstand + 4 <= x1:
+        draw.rectangle([bx1 + 4, by0, bx1 + 4 + nightstand, by0 + nightstand], outline=FURNITURE_COLOR, width=1)
+    wardrobe_w = w * 0.32
+    if y0 + h * 0.14 < cy - _LABEL_CLEARANCE_PX:  # skip if it would reach into the label's upper band
+        draw.rectangle([x1 - wardrobe_w, y0, x1, y0 + h * 0.14], outline=FURNITURE_COLOR, width=1)
+
+
+def _furnish_living(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+    depth = min(w, h) * 0.18
+    draw.rectangle([x0, y0, x0 + w * 0.55, y0 + depth], outline=FURNITURE_COLOR, width=1)  # sofa back run
+    draw.rectangle([x0, y0, x0 + depth, y0 + h * 0.5], outline=FURNITURE_COLOR, width=1)  # sofa side arm
+    table = min(w, h) * 0.14
+    tx, ty = x0 + w * 0.35, y0 + h * 0.62
+    draw.rectangle([tx, ty, tx + table, ty + table], outline=FURNITURE_COLOR, width=1)
+    chair = min(w, h) * 0.12
+    draw.rectangle([x1 - chair, y1 - chair, x1, y1], outline=FURNITURE_COLOR, width=1)
+
+
+def _furnish_dining(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+    tw, th = w * 0.45, h * 0.3
+    tx0, ty0 = x0 + (w - tw) / 2, y0 + (h - th) / 2
+    tx1, ty1 = tx0 + tw, ty0 + th
+    draw.rectangle([tx0, ty0, tx1, ty1], outline=FURNITURE_COLOR, width=1)
+    chair = min(w, h) * 0.1
+    for cx in (tx0 + tw * 0.25, tx0 + tw * 0.75):
+        if ty0 - chair - 3 > y0:
+            draw.rectangle([cx - chair / 2, ty0 - chair - 3, cx + chair / 2, ty0 - 3], outline=FURNITURE_COLOR, width=1)
+        if ty1 + chair + 3 < y1:
+            draw.rectangle([cx - chair / 2, ty1 + 3, cx + chair / 2, ty1 + chair + 3], outline=FURNITURE_COLOR, width=1)
+
+
+def _furnish_kitchen(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+    depth = min(w, h) * 0.16
+    draw.rectangle([x0, y0, x1, y0 + depth], outline=FURNITURE_COLOR, width=1)  # counter run along the top wall
+    draw.rectangle([x1 - depth, y0, x1, y0 + h * 0.6], outline=FURNITURE_COLOR, width=1)  # counter run along the side wall
+    sink_r = depth * 0.3
+    scx = x0 + w * 0.3
+    draw.ellipse([scx - sink_r, y0 + depth * 0.2, scx + sink_r, y0 + depth * 0.8], outline=FURNITURE_COLOR, width=1)
+    fridge = depth * 1.4
+    draw.rectangle([x0, y1 - fridge, x0 + fridge * 0.7, y1], outline=FURNITURE_COLOR, width=1)
+
+
+def _furnish_bathroom(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+    toilet_w = min(w, h) * 0.24
+    draw.ellipse([x0, y1 - toilet_w * 1.3, x0 + toilet_w, y1], outline=FURNITURE_COLOR, width=1)
+    draw.rectangle([x0, y1 - toilet_w * 1.6, x0 + toilet_w, y1 - toilet_w * 1.3], outline=FURNITURE_COLOR, width=1)
+    basin_w = min(w, h) * 0.3
+    draw.rectangle([x1 - basin_w, y0, x1, y0 + basin_w * 0.55], outline=FURNITURE_COLOR, width=1)
+    tub = min(w, h) * 0.42
+    draw.rectangle([x0, y0, x0 + tub, y0 + tub * 0.6], outline=FURNITURE_COLOR, width=1)
+    draw.line([(x0, y0), (x0 + tub, y0 + tub * 0.6)], fill=FURNITURE_COLOR, width=1)
+    draw.line([(x0 + tub, y0), (x0, y0 + tub * 0.6)], fill=FURNITURE_COLOR, width=1)
+
+
+def _furnish_study(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+    desk_w, desk_h = w * 0.5, min(w, h) * 0.16
+    draw.rectangle([x0, y0, x0 + desk_w, y0 + desk_h], outline=FURNITURE_COLOR, width=1)
+    chair = desk_h * 0.9
+    cx0 = x0 + desk_w * 0.3
+    draw.rectangle([cx0, y0 + desk_h + 4, cx0 + chair, y0 + desk_h + 4 + chair], outline=FURNITURE_COLOR, width=1)
+
+
+def _furnish_garage(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+    car_w, car_h = w * 0.6, h * 0.7
+    cx0, cy0 = x0 + (w - car_w) / 2, y0 + (h - car_h) / 2
+    draw.rounded_rectangle(
+        [cx0, cy0, cx0 + car_w, cy0 + car_h], radius=min(car_w, car_h) * 0.15, outline=FURNITURE_COLOR, width=1
+    )
+
+
+# ---- Staircase ----
+
+
+def _draw_staircase(
+    draw: ImageDraw.ImageDraw,
+    rects: list[dict],
+    plot_x0: float,
+    plot_y0: float,
+    scale: float,
+    font: ImageFont.FreeTypeFont,
+    direction: str,
+) -> None:
+    """Heuristically placed in the largest room's corner - same "legible mark,
+    not a construction-grade layout" precedent as doors/windows above, since
+    there's no reserved circulation space to place it in exactly."""
+    if not rects:
+        return
+    largest = max(rects, key=lambda r: r["w"] * r["h"])
+    x0, y0, x1, y1 = _room_bbox(largest, plot_x0, plot_y0, scale)
+    box_w, box_h = x1 - x0, y1 - y0
+    if box_w < 90 or box_h < 90:
+        return
+
+    stair_w = min(box_w * 0.28, 70.0)
+    stair_h = min(box_h * 0.5, 140.0)
+    sx0, sy0 = x1 - stair_w - 8, y1 - stair_h - 8
+    sx1, sy1 = sx0 + stair_w, sy0 + stair_h
+
+    draw.rectangle([sx0, sy0, sx1, sy1], outline=WALL_COLOR, width=1)
+    steps = max(4, int(stair_h // 14))
+    for i in range(1, steps):
+        y = sy0 + stair_h * i / steps
+        draw.line([(sx0, y), (sx1, y)], fill=WALL_COLOR, width=1)
+
+    ax = (sx0 + sx1) / 2
+    if direction == "UP":
+        draw.line([(ax, sy1 - 8), (ax, sy0 + 10)], fill=WALL_COLOR, width=2)
+        draw.polygon([(ax, sy0 + 4), (ax - 5, sy0 + 12), (ax + 5, sy0 + 12)], fill=WALL_COLOR)
+    else:
+        draw.line([(ax, sy0 + 8), (ax, sy1 - 10)], fill=WALL_COLOR, width=2)
+        draw.polygon([(ax, sy1 - 4), (ax - 5, sy1 - 12), (ax + 5, sy1 - 12)], fill=WALL_COLOR)
+    _draw_centered_text(draw, (ax, sy0 - 10), direction, font, WALL_COLOR)
 
 
 # ---- Labels ----
