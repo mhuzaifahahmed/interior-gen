@@ -6,54 +6,76 @@ from app.providers import idealhouse
 from app.providers.base import Provider
 from app.providers.gemini import GeminiProvider
 from app.providers.kaggle import KaggleImageProvider
+from app.providers.modal_provider import ModalImageProvider
 from app.providers.openai import OpenAIImageProvider
 
 logger = logging.getLogger(__name__)
 
 
-def _default_room_image_provider(house_image_provider):
-    # IMAGE_PROVIDER=kaggle in .env swaps ONLY room-redesign image generation
-    # to a user's own fine-tuned model (see app/providers/kaggle.py) - a
-    # toggle, not a hard swap, so a dropped Kaggle tunnel can be reverted to
-    # OpenAI by editing one .env line, no code change needed. "Build a House"
-    # rendering is untouched by this setting on purpose (see HybridProvider's
-    # docstring).
+def _default_room_image_provider(fallback_provider):
+    # IMAGE_PROVIDER selects the room-redesign image backend: "modal"
+    # (default, self-hosted - see modal_provider.py), "kaggle" (the old
+    # Kaggle-notebook setup, kept dormant not deleted), or "openai" (falls
+    # through to fallback_provider, always OpenAI). A toggle, not a hard
+    # swap - reverting to OpenAI is one .env line. "Build a House" rendering
+    # is a SEPARATE toggle (house_image_provider) - see HybridProvider's
+    # docstring for why they're independent.
+    if settings.image_provider == "modal":
+        return ModalImageProvider()
     if settings.image_provider == "kaggle":
         return KaggleImageProvider()
-    return house_image_provider
+    return fallback_provider
+
+
+def _default_house_image_provider(openai_provider):
+    # house_image_provider selects the "Build a House" render backend -
+    # independent of image_provider above (room-redesign), following this
+    # codebase's established room-vs-house settings-isolation pattern. See
+    # app/config.py's house_image_provider comment for the default choice.
+    if settings.house_image_provider == "modal":
+        return ModalImageProvider()
+    return openai_provider
 
 
 class HybridProvider(Provider):
     """Room description + tier-notes analysis via Gemini (still free, separate
     quota from image gen). Image generation via injectable image backends -
-    OpenAI's gpt-image-1 by default for both room-redesign and "Build a
-    House" renders, unless a different one is passed in (mainly for tests).
-    Google removed free-tier Gemini image generation in Dec 2025, which is
-    why image gen isn't just Gemini too.
+    OpenAI's gpt-image-1 unless a different one is passed in (mainly for
+    tests) or a toggle setting swaps it. Google removed free-tier Gemini
+    image generation in Dec 2025, which is why image gen isn't just Gemini too.
 
-    Room-redesign image generation (generate_image) and "Build a House"
-    rendering (generate_house_render) are DELIBERATELY separate provider
-    instances (_room_image_provider vs _house_image_provider), not one shared
-    _image_provider - added when IMAGE_PROVIDER=kaggle first let room-redesign
-    swap to a user's own fine-tuned model. That model was trained on interior
-    redesign, not exterior/plot renders, so "Build a House" always keeps using
-    OpenAI regardless of IMAGE_PROVIDER; only generate_image() reads the toggle.
+    THREE separate concerns, three separate attributes - deliberately not
+    conflated, since house_image_provider becoming independently toggleable
+    (Modal or OpenAI, see app/config.py) means "the house render backend"
+    and "the guaranteed-reliable fallback for a failed room provider" are no
+    longer always the same thing, and must not be treated as if they were:
+    - _openai: ALWAYS a real (or injected, for tests) OpenAI-shaped provider.
+      This is the universal, always-available reliability fallback for room-
+      redesign failures - see RUNTIME FALLBACK below. Never swapped by any
+      toggle, so a failing experimental backend always has something solid
+      to land on.
+    - _house_image_provider: resolved from house_image_provider ("modal" or
+      "openai") via _default_house_image_provider() - used ONLY for
+      generate_house_render(), never as a fallback target for room-redesign.
+    - _room_image_provider: resolved from image_provider ("modal", "kaggle",
+      or "openai") via _default_room_image_provider() - used for
+      generate_image()/generate_images_batch() (room-redesign).
 
-    RUNTIME FALLBACK: generate_image() automatically retries via OpenAI
-    (_house_image_provider, which is always OpenAI regardless of the toggle)
-    if _room_image_provider raises for any reason - a dead Kaggle tunnel,
-    a timeout, a malformed response, anything. This matters specifically
-    because the Kaggle model is an ephemeral, dev-hosted endpoint (a
-    Cloudflare quick tunnel tied to a live notebook session) that can and has
-    gone offline mid-testing - without this, one dead tunnel fails the whole
-    generation instead of degrading to the paid-but-reliable backend. Each of
-    the 3 tiers' generate_image() calls falls back independently (see
+    RUNTIME FALLBACK: generate_image() automatically retries via _openai if
+    _room_image_provider raises for any reason - a dead Kaggle tunnel, a
+    Modal error, a timeout, a malformed response, anything. This matters
+    specifically because both Kaggle and Modal room backends are
+    experimental/self-hosted (Kaggle's Cloudflare tunnel has gone offline
+    mid-testing in the past) - without this, one dead backend fails the
+    whole generation instead of degrading to the paid-but-reliable one. Each
+    of the 3 tiers' generate_image() calls falls back independently (see
     app/pipeline/generate.py's per-tier ThreadPoolExecutor), so a transient
     failure on only one tier doesn't drag the other two down with it. No
-    fallback loop when IMAGE_PROVIDER=openai (the default) - in that case
-    _room_image_provider IS _house_image_provider, so there's nothing further
-    to fall back to and a failure just raises directly, exactly as before this
-    existed.
+    fallback loop when IMAGE_PROVIDER=openai (the default toggle value for
+    this specific setting is "modal", but explicitly setting it to "openai"
+    still works this way) - in that case _room_image_provider IS _openai
+    (the same object), so there's nothing further to fall back to and a
+    failure just raises directly.
 
     floor_plan_provider defaults to the app.providers.idealhouse MODULE itself
     (not an instance - its generate_floor_plan is a plain function, same style
@@ -65,10 +87,9 @@ class HybridProvider(Provider):
         self, image_provider=None, room_image_provider=None, floor_plan_provider=None
     ) -> None:
         self._gemini = GeminiProvider()
-        self._house_image_provider = image_provider or OpenAIImageProvider()
-        self._room_image_provider = room_image_provider or _default_room_image_provider(
-            self._house_image_provider
-        )
+        self._openai = image_provider or OpenAIImageProvider()
+        self._house_image_provider = _default_house_image_provider(self._openai)
+        self._room_image_provider = room_image_provider or _default_room_image_provider(self._openai)
         self._floor_plan_provider = floor_plan_provider or idealhouse
 
     def describe_room(self, image_bytes: bytes) -> str:
@@ -81,7 +102,7 @@ class HybridProvider(Provider):
         try:
             return self._room_image_provider.generate_image(image_bytes, prompt, tier)
         except Exception:
-            if self._room_image_provider is self._house_image_provider:
+            if self._room_image_provider is self._openai:
                 raise  # already OpenAI (the fallback itself) - nothing left to try
             logger.exception(
                 "room image provider %s failed for tier %s - falling back to OpenAI "
@@ -89,7 +110,7 @@ class HybridProvider(Provider):
                 type(self._room_image_provider).__name__,
                 tier,
             )
-            return self._house_image_provider.generate_image(image_bytes, prompt, tier)
+            return self._openai.generate_image(image_bytes, prompt, tier)
 
     def supports_batch(self) -> bool:
         return self._room_image_provider.supports_batch()
@@ -100,7 +121,7 @@ class HybridProvider(Provider):
         try:
             return self._room_image_provider.generate_images_batch(image_bytes, tier_prompts)
         except Exception:
-            if self._room_image_provider is self._house_image_provider:
+            if self._room_image_provider is self._openai:
                 raise  # already OpenAI (the fallback itself) - nothing left to try
             logger.exception(
                 "room image provider %s batch generation failed - falling back to OpenAI "
@@ -109,7 +130,7 @@ class HybridProvider(Provider):
             )
             with ThreadPoolExecutor(max_workers=len(tier_prompts)) as pool:
                 futures = {
-                    tier: pool.submit(self._house_image_provider.generate_image, image_bytes, prompt, tier)
+                    tier: pool.submit(self._openai.generate_image, image_bytes, prompt, tier)
                     for tier, prompt in tier_prompts.items()
                 }
                 return {tier: future.result() for tier, future in futures.items()}

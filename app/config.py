@@ -102,14 +102,32 @@ class Settings(BaseSettings):
     # else.
     openai_house_image_quality: str = "high"
 
-    # Room-redesign image backend selector: "openai" (default, gpt-image-1) or
-    # "kaggle" (a user's own fine-tuned model - see app/providers/kaggle.py).
-    # A toggle, not a hard swap, specifically so a dropped Kaggle tunnel can be
-    # reverted to OpenAI by changing one .env line, no code edit needed. Only
-    # affects room-redesign generate_image() - "Build a House" renders always
-    # stay on OpenAI (see HybridProvider), since a fine-tuned interior-redesign
-    # model wasn't trained for exterior/plot renders.
-    image_provider: str = "openai"
+    # Room-redesign image backend selector: "openai" (default, gpt-image-1),
+    # "modal" (self-hosted RealVisXL+ControlNet on Modal - see
+    # app/providers/modal_provider.py), or "kaggle" (the same model on a
+    # Kaggle notebook + Cloudflare tunnel - see app/providers/kaggle.py,
+    # kept dormant, not deleted, in case Modal's account/quota ever needs a
+    # fallback). A toggle, not a hard swap - reverting to OpenAI is one .env
+    # line, no code change needed.
+    #
+    # MODAL REPLACED KAGGLE (2026-08) for a real, live-hit reason: Kaggle's
+    # phone-verification step for a SECOND account rejected every number
+    # tried (including via VPN) - later confirmed as a genuine regional gap,
+    # not a user error (multiple platforms, including NVIDIA's own dev
+    # forums, show Pakistan (+92) missing entirely from their SMS-OTP
+    # country dropdown). Modal's signup is GitHub/Google OAuth only, no
+    # phone step at all, which is what actually unblocked hosting a second
+    # model. Modal also has no free-tier equivalent of Kaggle's Cloudflare
+    # quick-tunnel ~100s response timeout (the thing that forced the
+    # submit-then-poll job pattern in kaggle.py) - a Modal deployment gets a
+    # permanent HTTPS URL with no tunnel/session to keep alive, so the
+    # equivalent Modal endpoint (modal_provider.py) uses one plain blocking
+    # call for both single-image and batch generation, simpler than
+    # kaggle.py's job+poll code. The GPU-memory lessons (attention/VAE
+    # slicing, 768x768 for the 3-tier batch call, OOM-safe sequential
+    # fallback) carry over unchanged - those were T4-VRAM-driven, not
+    # platform-driven, and Modal's T4 has the identical 16GB ceiling.
+    image_provider: str = "modal"
 
     # KaggleImageProvider's endpoint - a Cloudflare quick-tunnel URL pointing at
     # a live Kaggle notebook session running the user's own fine-tuned SD-style
@@ -127,6 +145,49 @@ class Settings(BaseSettings):
     # softness 15 started to show. Override per-deployment if that trade-off
     # ever needs revisiting.
     kaggle_num_inference_steps: int = 20
+
+    # Resolution used ONLY for the 3-tier /generate_batch call (lower than
+    # the single-image /generate endpoint's fixed 1024x1024) - a real batch-
+    # of-3 test at 1024x1024 hit CUDA OOM during VAE decode even with
+    # attention/VAE slicing enabled. 768 cuts both compute and peak VRAM
+    # meaningfully (~44% fewer pixels) since SDXL's cost scales with
+    # resolution - see app/providers/kaggle.py's generate_images_batch()
+    # docstring for the full story.
+    kaggle_batch_resolution: int = 768
+
+    # ---- Modal (app/providers/modal_provider.py) - the active room-redesign
+    # and (optionally) house-render backend as of 2026-08. See image_provider's
+    # comment above for the full Kaggle-to-Modal migration story. Both are
+    # permanent HTTPS URLs printed by `modal deploy` - unlike Kaggle's
+    # ephemeral tunnel URL, these don't change on their own; only redeploy
+    # under a different app name, or Modal account changes, would rotate them.
+
+    # RoomRedesigner's two web endpoints (modal_room_redesign.py) - single-image
+    # and 3-tier-batch are separate Modal Functions with separate URLs, since
+    # Modal gives each @modal.fastapi_endpoint its own route.
+    modal_room_redesign_url: str = ""
+    modal_room_redesign_batch_url: str = ""
+
+    # Same speed/quality middle ground already validated on Kaggle - the
+    # underlying model and GPU class are identical, so the same numbers apply.
+    modal_num_inference_steps: int = 20
+    modal_batch_resolution: int = 768
+
+    # HouseGenerator's endpoint (modal_house_generation.py) - independent
+    # Modal app/deployment from room-redesign, mirroring the existing
+    # room-vs-house provider separation elsewhere in this file.
+    modal_house_url: str = ""
+
+    # "Build a House" render backend selector: "modal" (default, self-hosted
+    # RealVisXL+ControlNet, same stack as room-redesign - see
+    # modal_house_generation.py) or "openai" (gpt-image-1, the original
+    # backend - kept available as a fallback toggle, not deleted). Kept as
+    # its OWN setting, separate from image_provider above, following this
+    # file's established room-vs-house settings-isolation pattern (e.g.
+    # openai_house_input_fidelity vs openai_image_input_fidelity) - so
+    # switching the house backend never silently changes room-redesign's
+    # behavior or vice versa.
+    house_image_provider: str = "modal"
 
     # Set ONLY when the frontend is hosted on a different domain from this
     # backend (e.g. static/ deployed to Vercel, this FastAPI app deployed to

@@ -82,6 +82,58 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
 - `get_provider()` (`app/providers/__init__.py`) returns `HybridProvider` — this is the composition root.
   `GeminiProvider.generate_image` still exists but is unused/dormant (would work again if billing is ever
   enabled on the Gemini project) — don't delete it without checking with the user first.
+- **Self-hosted models: Kaggle → Modal (2026-08).** A parallel, free/self-hosted alternate image backend
+  (`RealVisXL_V5.0` + `xinsir/controlnet-depth-sdxl-1.0`, classic SD-style img2img with
+  `negative_prompt`/`num_inference_steps`/`guidance_scale` — NOT the instruction-following OpenAI shape)
+  was first hosted on a **Kaggle notebook + Cloudflare quick tunnel** (`app/providers/kaggle.py`), then
+  migrated to **Modal** (`app/providers/modal_provider.py`) — both still exist in the codebase, Kaggle kept
+  dormant not deleted, selected via `IMAGE_PROVIDER`/`HOUSE_IMAGE_PROVIDER` toggles in `app/config.py`.
+  - **Why Modal replaced Kaggle as the default**: hosting a SECOND model (for "Build a House") needed a
+    second Kaggle account, and its phone-verification step rejected every number tried, including via
+    VPN — later confirmed as a genuine **regional gap, not user error**: several platforms (NVIDIA's own
+    developer forums have many threads on this) are missing Pakistan (+92) from their SMS-OTP country
+    dropdown entirely, so no number could ever have worked. Modal's signup is GitHub/Google OAuth only,
+    no phone step anywhere in the flow — that's what actually unblocked hosting more than one model.
+  - **`IMAGE_PROVIDER`** (room-redesign backend): `"modal"` (default) → `ModalImageProvider`, `"kaggle"` →
+    `KaggleImageProvider` (dormant), `"openai"` → falls through to the always-real OpenAI fallback.
+    **`HOUSE_IMAGE_PROVIDER`** (Build a House backend): `"modal"` (default) or `"openai"` — a SEPARATE
+    toggle from `IMAGE_PROVIDER`, following this file's established room-vs-house settings-isolation
+    pattern, so switching one never silently changes the other. Kaggle was NEVER wired into house
+    rendering (its model was trained on interior redesign only) — Modal is the first self-hosted option
+    for house renders.
+  - **`HybridProvider`'s three-way provider split, a real bug avoided by design**: `_openai` (ALWAYS a
+    real `OpenAIImageProvider`, never swapped by any toggle — the universal reliability fallback for a
+    failing room provider), `_house_image_provider` (resolved from `HOUSE_IMAGE_PROVIDER`, used ONLY for
+    `generate_house_render`), `_room_image_provider` (resolved from `IMAGE_PROVIDER`, used for
+    `generate_image`/`generate_images_batch`). These were previously conflated (`_house_image_provider`
+    doubled as the room-redesign fallback target) — that broke the moment `HOUSE_IMAGE_PROVIDER` could
+    also be `"modal"`: a failing Modal room provider would have fallen back to a *also potentially
+    failing* Modal house provider, defeating the whole point of the fallback. Fixed by keeping `_openai`
+    as its own always-real attribute, independent of either toggle.
+    `test_generate_image_falls_back_to_openai_not_to_the_house_provider_when_room_fails` guards this.
+  - **What actually changed technically, not just the hosting provider**: Modal has no free-tier
+    equivalent of Kaggle's Cloudflare quick-tunnel ~100s response timeout (the real, live-hit constraint
+    that forced `kaggle.py`'s submit-then-poll job pattern — a plain blocking batch call was timing out
+    at the tunnel's edge even when the GPU work itself was succeeding). `modal_provider.py`'s
+    `generate_images_batch()` is therefore simpler: ONE blocking HTTP call to a Modal web endpoint, no
+    job-status polling. The GPU-memory lessons carry over unchanged, since they were T4-VRAM-driven, not
+    platform-driven — Modal's T4 has the identical 16GB ceiling: `attention_slicing` + `vae_slicing`
+    enabled, 768×768 (not 1024) for the 3-tier batch call specifically (a real batch-of-3 test OOM'd
+    during VAE decode at 1024×1024 even with slicing enabled), and an OOM-safe sequential fallback inside
+    the Modal deployment itself if the batched call still exceeds VRAM.
+  - **Deployment shape**: Modal has no notebook UI at all (unlike Kaggle) — the model-loading + generation
+    code lives in plain `.py` files (`modal_room_redesign.py`, `modal_house_generation.py`, not currently
+    checked into this repo — recreate from this section's description if needed), run once via
+    `modal deploy <file>.py` from a local terminal, which prints a **permanent** HTTPS URL (unlike
+    Kaggle's tunnel URL, this doesn't rotate on its own — no more "update `.env` every time the notebook
+    restarts"). Two separate Modal apps (`room-redesign`, `house-generation`), matching the existing
+    room-vs-house provider separation — each with its own model instance/cache Volume, so a change to one
+    never risks the other. Model weights are cached in a `modal.Volume` so only the first cold start pays
+    the ~14GB Hugging Face download.
+  - **Cost**: Modal's free tier is $30/month compute credit (GitHub/Google OAuth, no card required to
+    start) billed per-second — on a T4 (same GPU class Kaggle gave), a ~90s 3-tier batch generation costs
+    roughly $0.02, i.e. **~1,500 full generations/month free**, with zero idle cost between requests
+    (unlike a Kaggle session, which burns its weekly quota just sitting open).
 - **User style prompt**: `static/index.html`'s style-prompt `<input>` (above the Generate button) lets the
   user type free text (e.g. "modern, blue accents") that's sent as `style_notes` form data on
   `POST /api/projects`, stored on `Project.user_style_notes`, and threaded through

@@ -3,13 +3,14 @@ from app.providers.gemini import GeminiProvider
 from app.providers.openai import OpenAIImageProvider
 
 
-def test_get_provider_uses_openai_for_house_renders():
-    # "Build a House" rendering always stays on OpenAI regardless of
-    # IMAGE_PROVIDER (see HybridProvider's docstring) - unlike room-redesign
-    # image generation (_room_image_provider), which is environment-dependent
-    # by design once IMAGE_PROVIDER=kaggle is set, so it's not asserted here.
+def test_get_provider_always_builds_a_real_openai_fallback():
+    # _openai is the universal, always-real reliability fallback for a
+    # failing room-redesign backend - unlike _house_image_provider and
+    # _room_image_provider, which are BOTH environment-dependent by design
+    # (house_image_provider/image_provider toggles - see HybridProvider's
+    # docstring), _openai is never swapped by any toggle.
     provider = get_provider()
-    assert isinstance(provider._house_image_provider, OpenAIImageProvider)
+    assert isinstance(provider._openai, OpenAIImageProvider)
 
 
 def test_get_provider_uses_gemini_for_text():

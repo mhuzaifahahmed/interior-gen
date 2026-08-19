@@ -1,6 +1,7 @@
 import base64
 import logging
 import threading
+import time
 
 import httpx
 
@@ -59,9 +60,31 @@ def _generate_batch_url(base_url: str) -> str:
     return f"{trimmed}/generate_batch"
 
 
-# Batched requests do 3x the work of a single-tier call - generous headroom
-# over REQUEST_TIMEOUT_SECONDS accordingly.
-BATCH_REQUEST_TIMEOUT_SECONDS = 300
+def _generate_batch_status_url(base_url: str, job_id: str) -> str:
+    trimmed = base_url.rstrip("/")
+    if trimmed.endswith("/generate_batch"):
+        trimmed = trimmed[: -len("/generate_batch")]
+    elif trimmed.endswith("/generate"):
+        trimmed = trimmed[: -len("/generate")]
+    return f"{trimmed}/generate_batch/status/{job_id}"
+
+
+# The job-submit and each status-poll call are both near-instant server-side
+# (a dict write/lookup) - short timeout is enough; a slow response to either
+# of these specifically would indicate the tunnel/notebook is actually down,
+# not just busy generating.
+BATCH_SUBMIT_TIMEOUT_SECONDS = 20
+BATCH_POLL_TIMEOUT_SECONDS = 20
+BATCH_POLL_INTERVAL_SECONDS = 3
+
+# Generous ceiling on total wall-clock time spent polling for one batch job
+# before giving up and raising - a real batch-of-3 at 1024x1024 took ~98s for
+# denoising alone plus a possible OOM-triggered sequential fallback on top;
+# 768x768 (see settings.kaggle_batch_resolution) should be meaningfully
+# faster, but this stays generous rather than tight since going over this
+# ceiling just raises (falls back to OpenAI via HybridProvider), it doesn't
+# fail silently.
+BATCH_POLL_MAX_SECONDS = 420
 
 
 class KaggleImageProvider:
@@ -159,18 +182,30 @@ class KaggleImageProvider:
         separate serialized calls, so tiers are no longer purely additive in
         wall-clock time - real GPU batching, not 3x request serialization.
 
+        SUBMIT-THEN-POLL, not one blocking call - a real live test showed the
+        free Cloudflare quick tunnel (trycloudflare.com) hard-kills any
+        request still open past ~100s with a 524, independent of whether the
+        GPU work itself succeeds (a batch-of-3 at 1024x1024 took ~98s for
+        denoising ALONE). Blocking on one HTTP call for the whole job would
+        always be at risk of losing a real, in-progress result to the
+        tunnel's own timeout. Instead: POST /generate_batch registers a job
+        and returns almost instantly ({"status": "started", "job_id": str}),
+        then GET /generate_batch/status/{job_id} is polled every
+        BATCH_POLL_INTERVAL_SECONDS - each poll is also near-instant (a dict
+        lookup server-side) - until the job reports "done" (with
+        "generated_images_base64") or "failed" (with "detail"). No single
+        request in this flow is ever open long enough to risk the tunnel's
+        timeout, regardless of how long generation actually takes.
+
         tier_prompts is {tier: full_build_prompt_output} for each of the 3
         tiers - each is independently shortened via _prepare_kaggle_prompt()
         exactly as generate_image() does for a single tier, preserving the
         existing CLIP-token-limit and per-tier negative-prompt behavior.
 
-        Contract: POST {kaggle_api_url}/generate_batch, JSON body
-        {"items": [{"image_base64", "prompt", "negative_prompt"?}, ...],
-        "num_inference_steps": int}. Response:
-        {"status": "success", "generated_images_base64": [<bare base64 PNG>, ...]}
-        - list order matches the request's items order, so tiers are tracked
-        by index locally (dict insertion order of tier_prompts) rather than
-        the endpoint echoing tier names back.
+        Sent at settings.kaggle_batch_resolution (768, not the single-image
+        endpoint's 1024) - a real batch-of-3 test OOM'd during VAE decode at
+        1024x1024 even with attention/VAE slicing enabled; 768 cuts both
+        compute and peak VRAM meaningfully.
         """
         image_b64 = base64.b64encode(image_bytes).decode()
         tiers = list(tier_prompts.keys())
@@ -186,30 +221,57 @@ class KaggleImageProvider:
         payload = {
             "items": items,
             "num_inference_steps": settings.kaggle_num_inference_steps,
+            "resolution": settings.kaggle_batch_resolution,
         }
 
         # No _request_lock needed here - the notebook's own generation_lock
-        # serializes GPU access server-side, and this is a single HTTP call
-        # covering all 3 tiers anyway (nothing left to serialize client-side).
-        response = httpx.post(
+        # serializes GPU access server-side, and this submit call is
+        # near-instant anyway (nothing left to serialize client-side).
+        submit_response = httpx.post(
             _generate_batch_url(settings.kaggle_api_url),
             json=payload,
-            timeout=BATCH_REQUEST_TIMEOUT_SECONDS,
+            timeout=BATCH_SUBMIT_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
+        submit_response.raise_for_status()
 
-        data = response.json()
-        images_b64_out = data.get("generated_images_base64")
-        if not images_b64_out or len(images_b64_out) != len(tiers):
-            logger.error(
-                "unexpected Kaggle batch response shape: keys=%s, count=%s (expected %s)",
-                list(data.keys()),
-                len(images_b64_out) if images_b64_out else 0,
-                len(tiers),
-            )
-            raise RuntimeError(f"unexpected Kaggle batch response shape: {data}")
+        submit_data = submit_response.json()
+        job_id = submit_data.get("job_id")
+        if not job_id:
+            logger.error("unexpected Kaggle batch submit response shape: %s", submit_data)
+            raise RuntimeError(f"unexpected Kaggle batch submit response shape: {submit_data}")
 
-        return {tier: base64.b64decode(b64) for tier, b64 in zip(tiers, images_b64_out)}
+        status_url = _generate_batch_status_url(settings.kaggle_api_url, job_id)
+        deadline = time.monotonic() + BATCH_POLL_MAX_SECONDS
+
+        while True:
+            if time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"Kaggle batch job {job_id} did not complete within {BATCH_POLL_MAX_SECONDS}s"
+                )
+
+            time.sleep(BATCH_POLL_INTERVAL_SECONDS)
+
+            poll_response = httpx.get(status_url, timeout=BATCH_POLL_TIMEOUT_SECONDS)
+            poll_response.raise_for_status()
+            job = poll_response.json()
+            status = job.get("status")
+
+            if status == "done":
+                images_b64_out = job.get("generated_images_base64")
+                if not images_b64_out or len(images_b64_out) != len(tiers):
+                    logger.error(
+                        "unexpected Kaggle batch job result shape: keys=%s, count=%s (expected %s)",
+                        list(job.keys()),
+                        len(images_b64_out) if images_b64_out else 0,
+                        len(tiers),
+                    )
+                    raise RuntimeError(f"unexpected Kaggle batch job result shape: {job}")
+                return {tier: base64.b64decode(b64) for tier, b64 in zip(tiers, images_b64_out)}
+
+            if status == "failed":
+                raise RuntimeError(f"Kaggle batch job {job_id} failed: {job.get('detail')}")
+
+            # status == "running" (or any other in-progress value) - keep polling.
 
 
 def _prepare_kaggle_prompt(full_prompt: str, tier: str | None) -> tuple[str, str | None]:

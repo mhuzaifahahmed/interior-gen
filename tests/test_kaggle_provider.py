@@ -213,3 +213,107 @@ def test_prepare_kaggle_prompt_falls_back_to_truncation_for_unrecognized_text():
 
     assert len(short_prompt.split()) == KAGGLE_PROMPT_MAX_WORDS
     assert negative_prompt is None
+
+
+# ---- generate_images_batch: submit-then-poll, not one blocking call - see
+# the method's own docstring for why (a real live test showed the free
+# Cloudflare quick tunnel hard-kills any single request open past ~100s,
+# independent of whether the GPU work itself succeeds). ----
+
+
+def test_generate_images_batch_submits_and_polls_until_done(monkeypatch):
+    monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_batch_resolution", 768)
+
+    encoded = [
+        base64.b64encode(b"economical-bytes").decode("ascii"),
+        base64.b64encode(b"mid-bytes").decode("ascii"),
+        base64.b64encode(b"premium-bytes").decode("ascii"),
+    ]
+    poll_responses = [
+        {"status": "running"},
+        {"status": "running"},
+        {"status": "done", "generated_images_base64": encoded},
+    ]
+    submit_calls = []
+    poll_calls = []
+
+    def fake_post(url, json=None, timeout=None):
+        assert url == "https://example.trycloudflare.com/generate_batch"
+        assert json["resolution"] == 768
+        assert len(json["items"]) == 3
+        submit_calls.append(json)
+        return FakeResponse(json_data={"status": "started", "job_id": "job-123"})
+
+    def fake_get(url, timeout=None):
+        assert url == "https://example.trycloudflare.com/generate_batch/status/job-123"
+        poll_calls.append(url)
+        return FakeResponse(json_data=poll_responses[len(poll_calls) - 1])
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+
+    provider = KaggleImageProvider()
+    result = provider.generate_images_batch(
+        b"input-bytes",
+        {"economical": "econ prompt", "mid": "mid prompt", "premium": "premium prompt"},
+    )
+
+    assert result == {
+        "economical": b"economical-bytes",
+        "mid": b"mid-bytes",
+        "premium": b"premium-bytes",
+    }
+    assert len(submit_calls) == 1
+    assert len(poll_calls) == 3
+
+
+def test_generate_images_batch_raises_on_job_failed(monkeypatch):
+    monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(json_data={"status": "started", "job_id": "job-456"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(json_data={"status": "failed", "detail": "CUDA out of memory"})
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+
+    provider = KaggleImageProvider()
+    with pytest.raises(RuntimeError, match="CUDA out of memory"):
+        provider.generate_images_batch(b"input-bytes", {"economical": "prompt"})
+
+
+def test_generate_images_batch_raises_when_polling_exceeds_deadline(monkeypatch):
+    monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_module, "BATCH_POLL_MAX_SECONDS", 0)
+
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(json_data={"status": "started", "job_id": "job-789"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(json_data={"status": "running"})
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+
+    provider = KaggleImageProvider()
+    with pytest.raises(RuntimeError, match="did not complete within"):
+        provider.generate_images_batch(b"input-bytes", {"economical": "prompt"})
+
+
+def test_generate_images_batch_raises_on_missing_job_id(monkeypatch):
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(json_data={"status": "started"})  # no job_id
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+
+    provider = KaggleImageProvider()
+    with pytest.raises(RuntimeError, match="unexpected Kaggle batch submit response shape"):
+        provider.generate_images_batch(b"input-bytes", {"economical": "prompt"})
