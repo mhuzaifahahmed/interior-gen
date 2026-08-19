@@ -122,18 +122,45 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
     during VAE decode at 1024×1024 even with slicing enabled), and an OOM-safe sequential fallback inside
     the Modal deployment itself if the batched call still exceeds VRAM.
   - **Deployment shape**: Modal has no notebook UI at all (unlike Kaggle) — the model-loading + generation
-    code lives in plain `.py` files (`modal_room_redesign.py`, `modal_house_generation.py`, not currently
-    checked into this repo — recreate from this section's description if needed), run once via
-    `modal deploy <file>.py` from a local terminal, which prints a **permanent** HTTPS URL (unlike
-    Kaggle's tunnel URL, this doesn't rotate on its own — no more "update `.env` every time the notebook
-    restarts"). Two separate Modal apps (`room-redesign`, `house-generation`), matching the existing
-    room-vs-house provider separation — each with its own model instance/cache Volume, so a change to one
-    never risks the other. Model weights are cached in a `modal.Volume` so only the first cold start pays
-    the ~14GB Hugging Face download.
+    code lives in plain `.py` files, checked into this repo under `modal/` (`modal/modal_room_redesign.py`,
+    `modal/modal_house_generation.py` — unlike the old Kaggle notebook, which was only ever pasted by hand
+    into Kaggle's UI and never version-controlled, these ARE real source files, since a Modal deployment is
+    meant to be reproducible via a plain CLI command). Deploy/redeploy with
+    `modal deploy modal/modal_room_redesign.py` (or the house one) from a local terminal, which prints a
+    **permanent** HTTPS URL (unlike Kaggle's tunnel URL, this doesn't rotate on its own — no more "update
+    `.env` every time the notebook restarts", only redeploy when the code itself changes). Two separate
+    Modal apps (`room-redesign`, `house-generation`), matching the existing room-vs-house provider
+    separation — each with its own model instance/cache Volume, so a change to one never risks the other.
+    Model weights are cached in a `modal.Volume` so only the first cold start pays the ~14GB Hugging Face
+    download.
   - **Cost**: Modal's free tier is $30/month compute credit (GitHub/Google OAuth, no card required to
     start) billed per-second — on a T4 (same GPU class Kaggle gave), a ~90s 3-tier batch generation costs
     roughly $0.02, i.e. **~1,500 full generations/month free**, with zero idle cost between requests
     (unlike a Kaggle session, which burns its weekly quota just sitting open).
+  - **Cold starts are the real, inherent trade-off of any scale-to-zero serverless GPU platform** — not a
+    Modal-specific defect, and not fixable by raising `timeout` (that only controls how long Modal waits
+    before killing a slow function; it does not reduce actual wall-clock time). `scaledown_window=120` on
+    both `@app.cls` decorators is what actually controls this: after 2 minutes with no requests (a value
+    WE chose, not something Modal does automatically on a fixed timer), the container shuts down, and the
+    next request pays the cost of reloading the ~14GB model onto the GPU from scratch. Real, live-measured
+    numbers: a fully cold container (house-generation, single image) took **~274s**; a warm one, **~90-135s**.
+    **GPU memory snapshots** (`enable_memory_snapshot=True` + `experimental_options={"enable_gpu_snapshot":
+    True}` + `@modal.enter(snap=True)`) — an ALPHA Modal feature that snapshots the container's memory
+    (including the model already loaded onto the GPU) after the first successful start, so future cold
+    starts restore from that snapshot instead of reloading from scratch — cut this roughly in half in real
+    testing: house-generation cold start dropped from ~274s to **~120s**; room-redesign's 3-tier batch cold
+    start came in at **~137s**, landing within the normal warm-request range (89-186s) rather than clearly
+    separate from it. Real risk, stated directly in Modal's own docs: alpha status, can behave
+    unpredictably (multi-GPU setups, `torch.compile` interactions) — kept enabled anyway since it's free
+    and the measured benefit was real, but if generations start failing in ways that look snapshot-related,
+    this is the first thing to try disabling. `startup_timeout=300` is also set explicitly on both deployments
+    (separate from the regular `timeout=600`, which otherwise covers both container-startup AND
+    execution time combined per Modal's docs) — pure headroom, not something that's actually been hit.
+    Genuinely eliminating cold starts (not just shortening them) would mean keeping a container always
+    warm (`min_containers=1` or a scheduled keep-alive ping) — real money on Modal's per-second billing
+    (a T4 kept warm 24/7 would burn through the entire $30/month free credit in about 50 hours), so this
+    was deliberately not done; the accepted trade-off is "free, but the first request after ~2 minutes
+    idle costs an extra ~2 minutes" rather than "always instant, but costs real money every month."
 - **User style prompt**: `static/index.html`'s style-prompt `<input>` (above the Generate button) lets the
   user type free text (e.g. "modern, blue accents") that's sent as `style_notes` form data on
   `POST /api/projects`, stored on `Project.user_style_notes`, and threaded through
