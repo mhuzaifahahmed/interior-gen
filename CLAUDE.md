@@ -650,11 +650,32 @@ Three deliberate seams keep the free/solo build swappable — respect them when 
    directory.
 2. **Storage seam** (`app/storage/`): image **bytes** go through a `Storage` interface — `local.py`
    (filesystem, dev default) or `s3.py` (boto3, S3-compatible → currently a real **AWS S3** bucket in
-   `.env`, R2 still viable). SQLite stores **metadata + storage keys only**, never image blobs. Keys are
-   namespaced by purpose: uploads under `local.input/{project_id}/original.png`, generated tiers under
-   `local.output/{project_id}/{tier}.png` (`app/main.py` and `app/pipeline/generate.py` respectively) -
-   keeps "things the user gave us" separate from "things we generated" instead of one flat pile of UUID
-   folders.
+   `.env`, R2 still viable). SQLite stores **metadata + storage keys only**, never image blobs.
+   **Real key structure** (as of the 2026-08-20 per-feature-folder reorg, see below):
+   `users/{namespace}/roomRedesign/input/{project_id}/...` /
+   `users/{namespace}/roomRedesign/output/{project_id}/...` for Room Redesign, and
+   `users/{namespace}/buildAHouse/input/{house_project_id}/...` /
+   `users/{namespace}/buildAHouse/output/{house_project_id}/...` for Build a House
+   (`app/main.py`, `app/pipeline/generate.py`, `app/pipeline/generate_house.py`) - `local.input/...`/
+   `local.output/...` (no `users/` prefix at all) is only the PRE-AUTH FALLBACK when `username` is
+   `None` (`key_prefix = ... if username else "local.output"` - never actually hit in the real
+   authenticated app, since every generator endpoint requires a logged-in user; kept only so
+   `run_pipeline`/`run_house_pipeline` don't hard-crash if ever called without one, e.g. in older tests).
+   **Per-user-then-per-feature folders (`users/{namespace}/roomRedesign/...` /
+   `.../buildAHouse/...`), not per-feature-then-per-user** - a deliberate choice: it keeps everything one
+   user ever generated, across both tools, under a single browsable S3 prefix (`users/{namespace}/`) -
+   easier to audit/delete one user's data or just browse the bucket by person - rather than splitting the
+   same user's files across two disconnected top-level trees. This was **additive**: existing projects'
+   already-stored keys (from before this reorg) are untouched and keep resolving correctly, since every
+   `Project`/`HouseProject` row stores its own exact keys at creation time and nothing reconstructs them
+   later - only NEW generations after the reorg land under the new `roomRedesign`/`buildAHouse` segment.
+   Both features also now write an input **`metadata.json`** next to the upload (`interior_style`/
+   `color_palette`/`additional_instructions`/`city`/`room_dimensions` for Room Redesign;
+   `dimensions`/`house_inputs` for Build a House) - best-effort, wrapped in try/except, never blocks
+   project creation - so a user's full input history is browsable directly from S3, not just via the DB.
+   Build a House previously wrote NO metadata JSON to S3 at all (only Room Redesign did) - this closed
+   that parity gap. Neither feature writes a RESULT-side JSON to S3 (materials/room_layout/etc. stay
+   DB-only, in `materials_json`/`room_layout_json`/`meta_json`) - only the input-side mirror exists.
    **Test isolation, hard-learned**: `get_storage()` reads `settings.storage_backend` from `.env` - which
    has been `s3` for real local dev use for a while. Any test that exercises the real app
    (`TestClient(app)`) but only mocks `get_provider()` without also mocking `get_storage()` will silently

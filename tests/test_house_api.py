@@ -1,4 +1,5 @@
 import io
+import json
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -84,9 +85,9 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
         assert body["blueprint_status"] == "done"
         assert len(body["blueprint_urls"]) == 1
 
-        assert f"users/{username}/input/" in body["images"]["plot"]
-        assert f"users/{username}/output/" in body["images"]["render"]
-        assert f"users/{username}/output/" in body["blueprint_urls"][0]
+        assert f"users/{username}/buildAHouse/input/" in body["images"]["plot"]
+        assert f"users/{username}/buildAHouse/output/" in body["images"]["render"]
+        assert f"users/{username}/buildAHouse/output/" in body["blueprint_urls"][0]
 
 
 def test_compose_house_requirements_combines_all_fields():
@@ -179,6 +180,46 @@ def test_house_floor_count_out_of_range_is_clamped(monkeypatch):
         assert status_res.json()["house_inputs"]["floor_count"] == 10
 
 
+def test_house_input_metadata_json_written_to_storage(monkeypatch):
+    # Parity with Room Redesign's input metadata.json (test_api.py's
+    # test_input_metadata_json_written_to_storage) - Build a House previously
+    # wrote no JSON metadata to S3 at all, only DB columns.
+    storage = FakeStorage()
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: storage)
+
+    with TestClient(app) as client:
+        username = _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        data = {
+            "length": "40",
+            "width": "60",
+            "unit": "ft",
+            "floor_count": "2",
+            "bedrooms": "3",
+            "bathrooms": "2",
+            "garage": "true",
+            "kitchen_each_floor": "false",
+            "extras": "modern style",
+        }
+        create_res = client.post("/api/house-projects", files=files, data=data)
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        metadata_key = f"users/{username}/buildAHouse/input/{house_project_id}/metadata.json"
+        assert metadata_key in storage.objects
+        saved = json.loads(storage.objects[metadata_key])
+        assert saved["dimensions"] == {"length": 40.0, "width": 60.0, "unit": "ft"}
+        assert saved["house_inputs"] == {
+            "floor_count": 2,
+            "bedrooms": 3,
+            "bathrooms": 2,
+            "garage": True,
+            "kitchen_each_floor": False,
+            "extras": "modern style",
+        }
+
+
 def test_house_display_name_appended_to_storage_namespace(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
@@ -195,7 +236,7 @@ def test_house_display_name_appended_to_storage_namespace(monkeypatch):
         assert create_res.status_code == 200
         house_project_id = create_res.json()["house_project_id"]
 
-        expected_key = f"users/{user_id}_jane_doe/input/{house_project_id}/plot.png"
+        expected_key = f"users/{user_id}_jane_doe/buildAHouse/input/{house_project_id}/plot.png"
         assert expected_key in storage.objects
 
 

@@ -69,10 +69,10 @@ def run_pipeline(
     Instructions" textarea) - see prompts.py for exactly how it's incorporated.
 
     username namespaces every generated-image storage key under
-    users/{username}/output/... (see app/main.py's create_project) - required
-    in practice (the endpoint always has a logged-in user), optional here only
-    so this function's signature doesn't force every caller/test to pass it;
-    None falls back to the pre-auth flat key layout.
+    users/{username}/roomRedesign/output/... (see app/main.py's create_project) -
+    required in practice (the endpoint always has a logged-in user), optional
+    here only so this function's signature doesn't force every caller/test to
+    pass it; None falls back to the pre-auth flat key layout.
 
     city is optional (empty/None means the user chose images-only - see
     static/app.js's empty-city confirm dialog). When present, a materials/pricing
@@ -215,7 +215,7 @@ def run_pipeline(
             with timer.stage("generate_images+storage_upload(all tiers)"):
 
                 def _upload(tier: str, image_bytes: bytes) -> str:
-                    key_prefix = f"users/{username}/output" if username else "local.output"
+                    key_prefix = f"users/{username}/roomRedesign/output" if username else "local.output"
                     ext, content_type = _detect_image_format(image_bytes)
                     key = f"{key_prefix}/{project_id}/{tier}.{ext}"
                     with timer.stage(f"storage.put:{tier}"):

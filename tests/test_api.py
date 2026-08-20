@@ -102,14 +102,15 @@ def test_full_upload_and_poll_flow(monkeypatch):
         for key in ("original", "economical", "mid", "premium"):
             assert body["images"][key] is not None
 
-        # Storage layout: uploads live under users/{username}/input/, generated
-        # tiers under users/{username}/output/ - namespaces every user's files
-        # under their own prefix (see CLAUDE.md's "Authentication & per-user
-        # storage" section) while still separating "things the user gave us"
-        # from "things we generated".
-        assert f"users/{username}/input/" in body["images"]["original"]
+        # Storage layout: uploads live under users/{username}/roomRedesign/input/,
+        # generated tiers under users/{username}/roomRedesign/output/ -
+        # namespaces every user's files under their own prefix (see CLAUDE.md's
+        # "Authentication & per-user storage" section) while still separating
+        # "things the user gave us" from "things we generated", AND separating
+        # Room Redesign's files from Build a House's under a per-feature folder.
+        assert f"users/{username}/roomRedesign/input/" in body["images"]["original"]
         for tier in ("economical", "mid", "premium"):
-            assert f"users/{username}/output/" in body["images"][tier]
+            assert f"users/{username}/roomRedesign/output/" in body["images"][tier]
 
         # No city was submitted - images-only path, no materials/pricing calls.
         assert body["materials_status"] == "skipped"
@@ -134,7 +135,7 @@ def test_input_metadata_json_written_to_storage(monkeypatch):
         assert create_res.status_code == 200
         project_id = create_res.json()["project_id"]
 
-        metadata_key = f"users/{username}/input/{project_id}/metadata.json"
+        metadata_key = f"users/{username}/roomRedesign/input/{project_id}/metadata.json"
         assert metadata_key in storage.objects
         saved = json.loads(storage.objects[metadata_key])
         assert saved == {
@@ -169,7 +170,7 @@ def test_display_name_appended_to_storage_namespace(monkeypatch):
         assert create_res.status_code == 200
         project_id = create_res.json()["project_id"]
 
-        expected_key = f"users/{user_id}_jane_doe/input/{project_id}/original.png"
+        expected_key = f"users/{user_id}_jane_doe/roomRedesign/input/{project_id}/original.png"
         assert expected_key in storage.objects
 
 
@@ -185,7 +186,7 @@ def test_no_display_name_falls_back_to_bare_user_id(monkeypatch):
         assert create_res.status_code == 200
         project_id = create_res.json()["project_id"]
 
-        expected_key = f"users/{user_id}/input/{project_id}/original.png"
+        expected_key = f"users/{user_id}/roomRedesign/input/{project_id}/original.png"
         assert expected_key in storage.objects
 
 

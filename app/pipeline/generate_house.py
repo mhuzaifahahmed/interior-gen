@@ -64,11 +64,11 @@ def run_house_pipeline(
     the structured "Floors" dropdown - passed straight to
     provider.generate_room_layout() so it skips regex-guessing the floor
     count from prompt text entirely. username namespaces every generated-image
-    key under users/{username}/output/... - see run_pipeline's docstring in
-    generate.py for why it's optional here despite the endpoint always
-    supplying it.
+    key under users/{username}/buildAHouse/output/... - see run_pipeline's
+    docstring in generate.py for why it's optional here despite the endpoint
+    always supplying it.
     """
-    key_prefix = f"users/{username}/output" if username else "local.output"
+    key_prefix = f"users/{username}/buildAHouse/output" if username else "local.output"
     with Session(engine) as session:
         house_project = session.get(HouseProject, house_project_id)
         if house_project is None:

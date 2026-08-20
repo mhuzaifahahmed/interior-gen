@@ -194,7 +194,7 @@ async def create_project(
     # name when browsing the bucket - see CLAUDE.md's "Authentication"
     # section.
     storage_namespace = _storage_namespace(user.id, display_name)
-    original_key = f"users/{storage_namespace}/input/{project.id}/original.png"
+    original_key = f"users/{storage_namespace}/roomRedesign/input/{project.id}/original.png"
     storage.put(original_key, data, content_type=file.content_type)
     project.original_key = original_key
     session.add(project)
@@ -205,7 +205,7 @@ async def create_project(
     # history is browsable directly from their own S3 prefix, not just via
     # the DB. Never blocks/fails project creation if storage write hiccups -
     # the SQLite row remains the source of truth either way.
-    metadata_key = f"users/{storage_namespace}/input/{project.id}/metadata.json"
+    metadata_key = f"users/{storage_namespace}/roomRedesign/input/{project.id}/metadata.json"
     metadata = {
         "interior_style": interior_style,
         "color_palette": color_palette,
@@ -437,11 +437,25 @@ async def create_house_project(
     session.refresh(house_project)
 
     storage_namespace = _storage_namespace(user.id, display_name)
-    plot_image_key = f"users/{storage_namespace}/input/{house_project.id}/plot.png"
+    plot_image_key = f"users/{storage_namespace}/buildAHouse/input/{house_project.id}/plot.png"
     storage.put(plot_image_key, data, content_type=file.content_type)
     house_project.plot_image_key = plot_image_key
     session.add(house_project)
     session.commit()
+
+    # Best-effort: mirror the chosen inputs into S3 next to the plot upload,
+    # same parity/reasoning as Room Redesign's input metadata.json above -
+    # never blocks/fails house-project creation if storage write hiccups.
+    house_metadata_key = f"users/{storage_namespace}/buildAHouse/input/{house_project.id}/metadata.json"
+    house_metadata = {"dimensions": dimensions, "house_inputs": house_inputs}
+    try:
+        storage.put(
+            house_metadata_key, json.dumps(house_metadata).encode("utf-8"), content_type="application/json"
+        )
+    except Exception:
+        logger.exception(
+            "failed to write input metadata.json for house project %s - continuing", house_project.id
+        )
 
     background_tasks.add_task(
         run_house_pipeline,
