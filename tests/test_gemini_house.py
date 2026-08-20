@@ -138,6 +138,51 @@ def test_generate_room_layout_returns_parsed_json(monkeypatch):
     }
 
 
+def test_generate_room_layout_explicit_floor_count_overrides_prompt_text(monkeypatch):
+    # A real explicit value from the "Floors" dropdown must win even when the
+    # free-text prompt says something different (or nothing at all) - see
+    # app/main.py's create_house_project/_compose_house_requirements().
+    class FakeResponse:
+        text = '{"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}]}]}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    # Gemini's response only has 1 floor, and the prompt text mentions no
+    # floor count at all - but floor_count=3 is passed explicitly.
+    result = GeminiProvider().generate_room_layout(
+        {"length": 40, "width": 60, "unit": "ft"}, "modern style", floor_count=3
+    )
+    assert len(result["floors"]) == 3
+
+
+def test_generate_room_layout_falls_back_to_regex_when_floor_count_not_given(monkeypatch):
+    class FakeResponse:
+        text = '{"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}]}]}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    result = GeminiProvider().generate_room_layout(
+        {"length": 40, "width": 60, "unit": "ft"}, "I want 2 floors", floor_count=None
+    )
+    assert len(result["floors"]) == 2
+
+
 def test_generate_room_layout_falls_back_on_unparseable_response(monkeypatch):
     class FakeResponse:
         text = "not json at all"

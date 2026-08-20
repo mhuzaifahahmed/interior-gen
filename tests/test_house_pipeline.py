@@ -23,8 +23,8 @@ class FakeProvider:
         self.floor_plan_calls.append((plot_description, dimensions, prompt))
         return self._floor_plan_bytes
 
-    def generate_room_layout(self, dimensions, prompt, plot_description=None):
-        self.room_layout_calls.append((dimensions, prompt, plot_description))
+    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
             "floors": [
                 {
@@ -246,7 +246,7 @@ def test_run_house_pipeline_falls_back_to_plot_photo_when_blueprint_generation_f
         session.commit()
 
     class FailingRoomLayoutProvider(FakeProvider):
-        def generate_room_layout(self, dimensions, prompt, plot_description=None):
+        def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
             raise RuntimeError("Gemini quota exceeded")
 
     provider = FailingRoomLayoutProvider()

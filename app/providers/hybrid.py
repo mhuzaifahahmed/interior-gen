@@ -170,6 +170,10 @@ class HybridProvider(Provider):
         return self._house_image_provider.generate_house_render(image_bytes, prompt)
 
     def generate_room_layout(
-        self, dimensions: dict, prompt: str, plot_description: str | None = None
+        self,
+        dimensions: dict,
+        prompt: str,
+        plot_description: str | None = None,
+        floor_count: int | None = None,
     ) -> dict:
-        return self._gemini.generate_room_layout(dimensions, prompt, plot_description)
+        return self._gemini.generate_room_layout(dimensions, prompt, plot_description, floor_count)

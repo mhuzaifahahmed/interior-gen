@@ -546,7 +546,12 @@ const houseRemovePhotoBtn = document.getElementById("house-remove-photo-btn");
 const houseLengthInput = document.getElementById("house-length");
 const houseWidthInput = document.getElementById("house-width");
 const houseUnitInput = document.getElementById("house-unit");
-const housePromptInput = document.getElementById("house-prompt");
+const houseFloorCountInput = document.getElementById("house-floor-count");
+const houseBedroomsInput = document.getElementById("house-bedrooms");
+const houseBathroomsInput = document.getElementById("house-bathrooms");
+const houseGarageInput = document.getElementById("house-garage");
+const houseKitchenEachFloorInput = document.getElementById("house-kitchen-each-floor");
+const houseExtrasInput = document.getElementById("house-extras");
 
 const houseProgressCard = document.getElementById("house-progress-card");
 const houseProgressMessageEl = document.getElementById("house-progress-message");
@@ -730,7 +735,12 @@ async function restorePendingGeneration() {
     houseLengthInput.value = pending.length || "";
     houseWidthInput.value = pending.width || "";
     houseUnitInput.value = pending.unit || "ft";
-    housePromptInput.value = pending.prompt || "";
+    houseFloorCountInput.value = pending.floorCount || "1";
+    houseBedroomsInput.value = pending.bedrooms || "3";
+    houseBathroomsInput.value = pending.bathrooms || "2";
+    houseGarageInput.checked = !!pending.garage;
+    houseKitchenEachFloorInput.checked = !!pending.kitchenEachFloor;
+    houseExtrasInput.value = pending.extras || "";
   }
 
   if (!pending.fileDataUrl) return;
@@ -1633,7 +1643,12 @@ houseForm.addEventListener("submit", async (e) => {
   if (houseLengthInput.value) formData.append("length", houseLengthInput.value);
   if (houseWidthInput.value) formData.append("width", houseWidthInput.value);
   formData.append("unit", houseUnitInput.value);
-  formData.append("prompt", housePromptInput.value.trim());
+  formData.append("floor_count", houseFloorCountInput.value);
+  formData.append("bedrooms", houseBedroomsInput.value);
+  formData.append("bathrooms", houseBathroomsInput.value);
+  formData.append("garage", houseGarageInput.checked ? "true" : "false");
+  formData.append("kitchen_each_floor", houseKitchenEachFloorInput.checked ? "true" : "false");
+  formData.append("extras", houseExtrasInput.value.trim());
   formData.append("display_name", await currentUserDisplayName());
 
   let houseProjectId;
@@ -1650,7 +1665,12 @@ houseForm.addEventListener("submit", async (e) => {
         length: houseLengthInput.value,
         width: houseWidthInput.value,
         unit: houseUnitInput.value,
-        prompt: housePromptInput.value,
+        floorCount: houseFloorCountInput.value,
+        bedrooms: houseBedroomsInput.value,
+        bathrooms: houseBathroomsInput.value,
+        garage: houseGarageInput.checked,
+        kitchenEachFloor: houseKitchenEachFloorInput.checked,
+        extras: houseExtrasInput.value,
       });
       window.location.href = "/static/login.html";
       return;
@@ -1912,7 +1932,7 @@ function resetToHouseUpload() {
   clearHouseSelectedFile();
   houseLengthInput.value = "";
   houseWidthInput.value = "";
-  housePromptInput.value = "";
+  houseExtrasInput.value = "";
   showHouseState("upload");
 }
 

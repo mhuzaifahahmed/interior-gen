@@ -414,8 +414,23 @@ class GeminiProvider(Provider):
         return fallback_materials(tier_spec, city)
 
     def generate_room_layout(
-        self, dimensions: dict, prompt: str, plot_description: str | None = None
+        self,
+        dimensions: dict,
+        prompt: str,
+        plot_description: str | None = None,
+        floor_count: int | None = None,
     ) -> dict:
+        """floor_count, when given, is a REAL explicit value (from the
+        structured "Floors" dropdown - see app/main.py's create_house_project)
+        rather than something regex-guessed from free text - it takes
+        priority over _explicit_floor_count(prompt)'s regex parse, which now
+        only runs as a fallback for callers that don't supply one (e.g. the
+        legacy free-text-only path, or a caller that never had a dropdown to
+        begin with). Either way, _enforce_floor_count() below is the same
+        deterministic backstop that actually guarantees the returned layout
+        has exactly that many floors, regardless of what Gemini's own
+        response contains.
+        """
         context_block = f"Context about the actual plot: {plot_description}\n\n" if plot_description else ""
         formatted_prompt = ROOM_LAYOUT_PROMPT_TEMPLATE.format(
             dims_text=_format_dimensions(dimensions),
@@ -423,7 +438,7 @@ class GeminiProvider(Provider):
             prompt_text=prompt.strip() if prompt else "no specific requirements given",
         )
 
-        explicit_floor_count = _explicit_floor_count(prompt)
+        explicit_floor_count = floor_count if floor_count is not None else _explicit_floor_count(prompt)
 
         try:
             response = _generate_content_with_retry(self.client, settings.gemini_text_model, [formatted_prompt])
@@ -433,7 +448,7 @@ class GeminiProvider(Provider):
         except Exception:
             logger.exception("generate_room_layout failed for dimensions %s", dimensions)
 
-        return fallback_room_layout(dimensions, prompt)
+        return fallback_room_layout(dimensions, prompt, floor_count=floor_count)
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -725,18 +740,20 @@ _SINGLE_STOREY_ROOMS = [
 ]
 
 
-def fallback_room_layout(dimensions: dict, prompt: str) -> dict:
+def fallback_room_layout(dimensions: dict, prompt: str, floor_count: int | None = None) -> dict:
     """Never-empty room-layout fallback for when the Gemini call itself fails
-    entirely (network/auth/quota/timeout) or returns unparseable JSON. Guesses
-    the floor count from a plain 'N floor(s)' pattern in the user's free-text
-    prompt (defaulting to 1 - a single-storey house needs no separate
-    ground/upper split), and synthesizes a floor-aware generic room list per
-    floor following the same real-world convention the live Gemini prompt
-    asks for (living/kitchen/garage only on the ground floor, bedrooms/
-    bathrooms on upper floors) - always produces something the blueprint step
-    can draw, same never-empty guarantee as fallback_materials.
+    entirely (network/auth/quota/timeout) or returns unparseable JSON.
+    floor_count, when given (a real explicit value from the "Floors" dropdown),
+    is used directly - otherwise falls back to guessing from a plain
+    'N floor(s)' pattern in the user's free-text prompt (defaulting to 1 - a
+    single-storey house needs no separate ground/upper split). Synthesizes a
+    floor-aware generic room list per floor following the same real-world
+    convention the live Gemini prompt asks for (living/kitchen/garage only on
+    the ground floor, bedrooms/bathrooms on upper floors) - always produces
+    something the blueprint step can draw, same never-empty guarantee as
+    fallback_materials.
     """
-    floor_count = _guess_floor_count(prompt)
+    floor_count = floor_count if floor_count is not None else _guess_floor_count(prompt)
     if floor_count == 1:
         return {"floors": [{"floor_number": 1, "rooms": _SINGLE_STOREY_ROOMS}]}
 

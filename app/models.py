@@ -82,7 +82,20 @@ class HouseProject(SQLModel, table=True):
     # {"length": float, "width": float, "unit": str} as JSON text - same
     # JSON-as-text convention as Project.materials_json/meta_json.
     dimensions_json: Optional[str] = None
+    # The final requirements string used throughout the pipeline (analyze_plot,
+    # generate_room_layout, build_house_prompt, meta_json) - since the
+    # structured-input feature below, this is normally SERVER-COMPOSED from
+    # house_inputs_json's selections (see app/main.py's
+    # _compose_house_requirements()), not raw user free text. Kept as the
+    # single column every downstream consumer already reads, rather than
+    # threading a second field through the whole pipeline.
     prompt: Optional[str] = None
+    # {"floor_count", "bedrooms", "bathrooms", "garage", "kitchen_each_floor",
+    # "extras"} as JSON text - the structured "Plot Parameters" selections
+    # that replaced the old single free-text prompt input (still composed
+    # into `prompt` above for backward compatibility with every pipeline
+    # call that reads it). None for projects created before this feature.
+    house_inputs_json: Optional[str] = None
 
     plot_description: Optional[str] = None
 

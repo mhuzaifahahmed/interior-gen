@@ -159,7 +159,11 @@ class Provider(ABC):
 
     @abstractmethod
     def generate_room_layout(
-        self, dimensions: dict, prompt: str, plot_description: str | None = None
+        self,
+        dimensions: dict,
+        prompt: str,
+        plot_description: str | None = None,
+        floor_count: int | None = None,
     ) -> dict:
         """Return a structured room list per floor for the free algorithmic
         blueprint step (app/pipeline/floor_layout.py + blueprint_svg.py) - NOT
@@ -170,6 +174,14 @@ class Provider(ABC):
         Shape: {"floors": [{"floor_number": int, "rooms": [{"name": str,
         "area": number}]}]}. "area" is a relative weight, not literal square
         footage - the layout algorithm rescales it to the real plot dimensions.
+
+        floor_count, when given, is a REAL explicit value from the "Build a
+        House" form's structured Floors dropdown (see app/main.py's
+        create_house_project) and takes priority over any floor-count
+        guess/regex-parse implementations might otherwise derive from the
+        free-text prompt. None means no explicit value was given (the legacy
+        free-text-only path) - implementations should fall back to their
+        prior guessing behavior in that case.
 
         Must NEVER leave a floor without at least one room and must NEVER
         raise - this is a harder guarantee than analyze_plot's "best effort,

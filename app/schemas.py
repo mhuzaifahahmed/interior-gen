@@ -47,3 +47,10 @@ class HouseProjectStatusResponse(BaseModel):
     # Same history-dropdown addition as ProjectStatusResponse above.
     created_at: Optional[str] = None
     prompt: Optional[str] = None
+    # {"length", "width", "unit"} - None when neither length nor width was given.
+    dimensions: Optional[dict] = None
+    # {"floor_count", "bedrooms", "bathrooms", "garage", "kitchen_each_floor",
+    # "extras"} - the structured "Plot Parameters" selections that composed
+    # `prompt` above. None for projects created before this feature, or via a
+    # direct API call that only supplied the legacy free-text `prompt` field.
+    house_inputs: Optional[dict] = None

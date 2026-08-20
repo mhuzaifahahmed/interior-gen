@@ -618,9 +618,52 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 </select>
 </div>
 </div>
+<div class="flex gap-4">
+<div class="flex-1">
+<label for="house-floor-count" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Floors</label>
+<select id="house-floor-count" name="floor_count" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<option value="1" selected>1</option>
+<option value="2">2</option>
+<option value="3">3</option>
+<option value="4">4</option>
+<option value="5">5</option>
+</select>
+</div>
+<div class="flex-1">
+<label for="house-bedrooms" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bedrooms</label>
+<select id="house-bedrooms" name="bedrooms" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<option value="1">1</option>
+<option value="2">2</option>
+<option value="3" selected>3</option>
+<option value="4">4</option>
+<option value="5">5</option>
+<option value="6">6</option>
+</select>
+</div>
+<div class="flex-1">
+<label for="house-bathrooms" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bathrooms</label>
+<select id="house-bathrooms" name="bathrooms" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<option value="1">1</option>
+<option value="2" selected>2</option>
+<option value="3">3</option>
+<option value="4">4</option>
+<option value="5">5</option>
+</select>
+</div>
+</div>
+<div class="flex gap-6">
+<label for="house-garage" class="flex items-center gap-2 font-body-md text-on-surface cursor-pointer">
+<input type="checkbox" id="house-garage" name="garage" class="w-4 h-4 accent-primary"/>
+Garage
+</label>
+<label for="house-kitchen-each-floor" class="flex items-center gap-2 font-body-md text-on-surface cursor-pointer">
+<input type="checkbox" id="house-kitchen-each-floor" name="kitchen_each_floor" class="w-4 h-4 accent-primary"/>
+Kitchen on every floor
+</label>
+</div>
 <div>
-<label for="house-prompt" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Requirements (optional)</label>
-<input type="text" id="house-prompt" name="prompt" maxlength="200" placeholder="e.g. 2 floors, 3 bedrooms, modern style" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200"/>
+<label for="house-extras" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Anything else? (optional)</label>
+<input type="text" id="house-extras" name="extras" maxlength="200" placeholder="e.g. dirty kitchen every floor, modern style" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200"/>
 </div>
 <div class="pt-2">
 <button type="submit" id="house-generate-btn" disabled class="group relative w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 overflow-hidden disabled:opacity-35 disabled:cursor-not-allowed enabled:hover:-translate-y-0.5 enabled:hover:shadow-[0_8px_28px_rgba(122,71,18,0.35)] transition-all duration-300 shadow-md">

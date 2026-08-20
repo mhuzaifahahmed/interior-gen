@@ -48,6 +48,7 @@ _NEW_COLUMNS_BY_TABLE = {
         ("blueprint_keys_json", "TEXT"),
         ("blueprint_status", "TEXT NOT NULL DEFAULT 'idle'"),
         ("user_id", "TEXT"),
+        ("house_inputs_json", "TEXT"),
         # render_layout_key (the 3D isometric render) was added here, was
         # briefly live (committed to git), then removed once that feature was
         # dropped - deliberately NOT listed here anymore. A dev DB that ran

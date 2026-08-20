@@ -21,7 +21,7 @@ class FakeProvider:
     def generate_floor_plan(self, plot_description, dimensions, prompt):
         return None
 
-    def generate_room_layout(self, dimensions, prompt, plot_description=None):
+    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
         return {"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]}]}
 
     def generate_house_render(self, image_bytes, prompt):
@@ -87,6 +87,96 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
         assert f"users/{username}/input/" in body["images"]["plot"]
         assert f"users/{username}/output/" in body["images"]["render"]
         assert f"users/{username}/output/" in body["blueprint_urls"][0]
+
+
+def test_compose_house_requirements_combines_all_fields():
+    from app.main import _compose_house_requirements
+
+    result = _compose_house_requirements(2, 3, 2, True, True, "dirty kitchen each floor")
+    assert result == (
+        "2 floors, 3 bedrooms, 2 bathrooms, an attached garage, a kitchen on every floor. "
+        "Extras: dirty kitchen each floor"
+    )
+
+
+def test_compose_house_requirements_uses_singular_for_one():
+    from app.main import _compose_house_requirements
+
+    result = _compose_house_requirements(1, 1, 1, False, False, "")
+    assert result == "1 floor, 1 bedroom, 1 bathroom"
+
+
+def test_compose_house_requirements_returns_none_when_everything_empty():
+    from app.main import _compose_house_requirements
+
+    assert _compose_house_requirements(None, None, None, False, False, "") is None
+
+
+def test_compose_house_requirements_extras_only():
+    from app.main import _compose_house_requirements
+
+    assert _compose_house_requirements(None, None, None, False, False, "modern style") == "modern style"
+
+
+def test_structured_house_inputs_compose_the_prompt_and_persist(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={
+                "length": "40",
+                "width": "60",
+                "unit": "ft",
+                "floor_count": "2",
+                "bedrooms": "3",
+                "bathrooms": "2",
+                "garage": "true",
+                "kitchen_each_floor": "true",
+                "extras": "dirty kitchen each floor",
+            },
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        status_res = client.get(f"/api/house-projects/{house_project_id}")
+        body = status_res.json()
+        assert body["prompt"] == (
+            "2 floors, 3 bedrooms, 2 bathrooms, an attached garage, a kitchen on every floor. "
+            "Extras: dirty kitchen each floor"
+        )
+        assert body["house_inputs"] == {
+            "floor_count": 2,
+            "bedrooms": 3,
+            "bathrooms": 2,
+            "garage": True,
+            "kitchen_each_floor": True,
+            "extras": "dirty kitchen each floor",
+        }
+        assert body["dimensions"] == {"length": 40.0, "width": 60.0, "unit": "ft"}
+
+
+def test_house_floor_count_out_of_range_is_clamped(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"floor_count": "99"},
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        status_res = client.get(f"/api/house-projects/{house_project_id}")
+        assert status_res.json()["house_inputs"]["floor_count"] == 10
 
 
 def test_house_display_name_appended_to_storage_namespace(monkeypatch):

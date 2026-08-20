@@ -30,7 +30,15 @@ logger = logging.getLogger(__name__)
 # dimensions" principle from a professional floor-plan generation spec the
 # user supplied, taken to its most literal conclusion: skip the image model
 # for the floor plan entirely, not just for the numbers.
-HOUSE_PROMPT_VERSION = "v5"
+# v6: the free-text-only prompt input was replaced with structured dropdowns
+# (Floors, Bedrooms, Bathrooms, Garage, Kitchen-each-floor toggles) plus a
+# small free-text "extras" box - see app/main.py's create_house_project. The
+# server now composes a natural-language requirements string from those
+# selections (still stored as `prompt`, for backward compatibility with
+# every downstream consumer of it), and passes the real, explicit floor
+# count straight into generate_room_layout() instead of relying on regex-
+# guessing it back out of that composed text.
+HOUSE_PROMPT_VERSION = "v6"
 
 
 def run_house_pipeline(
@@ -40,6 +48,7 @@ def run_house_pipeline(
     dimensions: dict,
     prompt: str | None = None,
     username: str | None = None,
+    floor_count: int | None = None,
 ) -> None:
     """Runs the "Build a House" pipeline for one HouseProject. Mirrors
     app/pipeline/generate.py's run_pipeline shape: its own DB session (runs as
@@ -48,10 +57,14 @@ def run_house_pipeline(
     for the analysis/floor-plan steps, and a top-level catch-all that marks
     the whole project failed.
 
-    dimensions: {"length": float, "width": float, "unit": str}. prompt is the
-    user's optional free-text style/requirements input (e.g. "2 floors, 3
-    bedrooms, modern style"). username namespaces every generated-image key
-    under users/{username}/output/... - see run_pipeline's docstring in
+    dimensions: {"length": float, "width": float, "unit": str}. prompt is a
+    composed requirements string (structured selections + free-text extras -
+    see app/main.py's create_house_project) or, for backward compatibility,
+    raw free text. floor_count, when given, is the REAL explicit value from
+    the structured "Floors" dropdown - passed straight to
+    provider.generate_room_layout() so it skips regex-guessing the floor
+    count from prompt text entirely. username namespaces every generated-image
+    key under users/{username}/output/... - see run_pipeline's docstring in
     generate.py for why it's optional here despite the endpoint always
     supplying it.
     """
@@ -122,7 +135,9 @@ def run_house_pipeline(
             room_layout: dict | None = None
             blueprint_keys: list[str] = []
             try:
-                room_layout = provider.generate_room_layout(dimensions, prompt or "", plot_description)
+                room_layout = provider.generate_room_layout(
+                    dimensions, prompt or "", plot_description, floor_count
+                )
                 total_floors = len(room_layout["floors"])
                 for floor in room_layout["floors"]:
                     rects = layout_floor(floor["rooms"], dimensions)

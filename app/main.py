@@ -355,6 +355,12 @@ async def create_house_project(
     unit: str = Form("m"),
     prompt: str = Form(""),
     display_name: str = Form(""),
+    floor_count: int | None = Form(None),
+    bedrooms: int | None = Form(None),
+    bathrooms: int | None = Form(None),
+    garage: bool = Form(False),
+    kitchen_each_floor: bool = Form(False),
+    extras: str = Form(""),
     session: Session = Depends(get_session),
     user: AuthUser = Depends(require_user),
 ):
@@ -363,6 +369,17 @@ async def create_house_project(
     are optional (a plot photo alone is still a valid, if less useful,
     submission) - dimensions.json degrades to an empty dict rather than
     rejecting the request.
+
+    floor_count/bedrooms/bathrooms/garage/kitchen_each_floor/extras are the
+    structured inputs that replaced the old single free-text `prompt` field
+    (see static/index.html's "Plot Parameters" panel) - _compose_house_requirements()
+    turns them into a natural-language requirements string, stored as
+    `prompt` for full backward compatibility with every downstream consumer
+    (run_house_pipeline, build_house_prompt, meta_json, etc. all still just
+    read `prompt`). The raw `prompt` Form field is kept as a fallback for
+    direct API callers that don't supply any structured field at all - a
+    request with neither is simply "no specific requirements", same as
+    before this feature existed.
     """
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(400, f"unsupported file type: {file.content_type}")
@@ -371,9 +388,35 @@ async def create_house_project(
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, "file too large (max 15MB)")
 
+    # Sanity-clamp, same "silently correct obvious nonsense rather than
+    # error the whole request" treatment as _compute_room_dimensions() above.
+    # 1-10 floors matches the existing regex-guess's own clamp
+    # (app/providers/gemini.py's _explicit_floor_count) so behavior stays
+    # consistent whichever path derives the count.
+    if floor_count is not None:
+        floor_count = max(1, min(floor_count, 10))
+    if bedrooms is not None:
+        bedrooms = max(0, min(bedrooms, 20))
+    if bathrooms is not None:
+        bathrooms = max(0, min(bathrooms, 20))
+    extras = extras.strip()[:USER_PROMPT_MAX_CHARS]
+
+    house_inputs = {
+        "floor_count": floor_count,
+        "bedrooms": bedrooms,
+        "bathrooms": bathrooms,
+        "garage": garage,
+        "kitchen_each_floor": kitchen_each_floor,
+        "extras": extras or None,
+    }
+    composed_requirements = _compose_house_requirements(
+        floor_count, bedrooms, bathrooms, garage, kitchen_each_floor, extras
+    )
     # Defensive re-truncation, same reasoning as style_notes/city above - the
     # frontend's <input maxlength> is trivially bypassable by a direct API call.
-    prompt = prompt.strip()[:USER_PROMPT_MAX_CHARS] or None
+    # Falls back to the raw legacy `prompt` field only when NO structured
+    # input was given at all (a direct API call that predates this feature).
+    prompt = composed_requirements or (prompt.strip()[:USER_PROMPT_MAX_CHARS] or None)
 
     dimensions: dict = {}
     if length and width:
@@ -383,7 +426,11 @@ async def create_house_project(
     provider = get_provider()
 
     house_project = HouseProject(
-        status="queued", dimensions_json=json.dumps(dimensions), prompt=prompt, user_id=user.id
+        status="queued",
+        dimensions_json=json.dumps(dimensions),
+        prompt=prompt,
+        user_id=user.id,
+        house_inputs_json=json.dumps(house_inputs),
     )
     session.add(house_project)
     session.commit()
@@ -397,10 +444,61 @@ async def create_house_project(
     session.commit()
 
     background_tasks.add_task(
-        run_house_pipeline, house_project.id, provider, storage, dimensions, prompt, storage_namespace
+        run_house_pipeline,
+        house_project.id,
+        provider,
+        storage,
+        dimensions,
+        prompt,
+        storage_namespace,
+        floor_count,
     )
 
     return HouseProjectCreateResponse(house_project_id=house_project.id)
+
+
+def _compose_house_requirements(
+    floor_count: int | None,
+    bedrooms: int | None,
+    bathrooms: int | None,
+    garage: bool,
+    kitchen_each_floor: bool,
+    extras: str,
+) -> str | None:
+    """Turns the structured "Plot Parameters" selections into one natural-
+    language requirements sentence, stored as HouseProject.prompt (see
+    create_house_project's docstring for why that column is reused rather
+    than added-to). Deliberately includes the literal word "floor(s)" next
+    to the number (e.g. "2 floors") - app/pipeline/house_prompts.py's
+    _resolve_floor_count() falls back to regex-parsing this exact text
+    pattern when room_layout is unavailable (e.g. the blueprint step
+    failed), so this composed sentence must stay parseable by that regex
+    even though floor_count is ALSO passed as a real int elsewhere
+    (run_house_pipeline -> generate_room_layout) - belt and suspenders,
+    not redundant.
+
+    Returns None (not "") when every field is empty/False - the pipeline
+    already treats an empty/None prompt as "no specific requirements",
+    identical to today's behavior when a user left the old free-text field
+    blank.
+    """
+    parts = []
+    if floor_count:
+        parts.append(f"{floor_count} floor{'s' if floor_count != 1 else ''}")
+    if bedrooms:
+        parts.append(f"{bedrooms} bedroom{'s' if bedrooms != 1 else ''}")
+    if bathrooms:
+        parts.append(f"{bathrooms} bathroom{'s' if bathrooms != 1 else ''}")
+    if garage:
+        parts.append("an attached garage")
+    if kitchen_each_floor:
+        parts.append("a kitchen on every floor")
+
+    requirements = ", ".join(parts)
+    if extras:
+        requirements = f"{requirements}. Extras: {extras}" if requirements else extras
+
+    return requirements or None
 
 
 def _house_project_to_response(house_project: HouseProject, storage) -> HouseProjectStatusResponse:
@@ -413,6 +511,9 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
     blueprint_keys = json.loads(house_project.blueprint_keys_json) if house_project.blueprint_keys_json else []
     blueprint_urls = [storage.url(key) for key in blueprint_keys]
 
+    dimensions = json.loads(house_project.dimensions_json) if house_project.dimensions_json else None
+    house_inputs = json.loads(house_project.house_inputs_json) if house_project.house_inputs_json else None
+
     return HouseProjectStatusResponse(
         house_project_id=house_project.id,
         status=house_project.status,
@@ -424,6 +525,8 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
         blueprint_urls=blueprint_urls,
         created_at=house_project.created_at.isoformat(),
         prompt=house_project.prompt,
+        dimensions=dimensions,
+        house_inputs=house_inputs,
     )
 
 
