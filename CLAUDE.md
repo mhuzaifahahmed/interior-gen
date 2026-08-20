@@ -1108,6 +1108,37 @@ replaced the old system" below for the real incident that drove it.
   token) plus a couple of integration checks against the real app (401 without/with a bad token, 200 with
   a valid one). `tests/test_google_oauth.py` is deleted — there's no local Google OAuth code left to test.
 
+## Honest, real-signal-driven progress bar
+
+Previously (`static/app.js`'s `createSimulatedFill()`) the progress bar was a **hardcoded timer**: +0.6%
+every 150ms up to a `CAP = 92`, reached in ~23 seconds regardless of whether the actual generation took 1
+minute or 5 — then it sat frozen at 92% for however much longer the real work took, fully decoupled from
+reality. A real, reported bug. The stage *stepper* right next to it was never affected — it already derived
+its state from real poll-response fields (`deriveStageIndex`/`deriveHouseStageIndex`) — only the bar itself
+was fake.
+
+- **Replaced with `createSignalFill()`**, anchored to the SAME real signals the stepper already reads.
+  Each poll, `computeRoomProgressTarget(data)`/`computeHouseProgressTarget(data)` compute two numbers from
+  real response fields (room: `room_description` presence, each tier image presence, `materials_status`;
+  house: `plot_description`, `blueprint_status`, `images.render` presence) — `confirmed` (the percent
+  actually justified by data that has arrived) and `ceiling` (a soft cap just below the next expected
+  milestone). Both are monotonic (`Math.max` against the previous value) — a later poll can never move the
+  bar backward.
+  - **No hardcoded time assumption anywhere** — `createSignalFill()`'s `requestAnimationFrame` loop only
+    ever eases `current` toward `Math.max(confirmed, ceiling)`, decelerating as it approaches (so it's
+    never visibly frozen between the 3s polls) but never overtaking a milestone that hasn't actually been
+    confirmed by real data yet. A 1-minute and a 5-minute generation both pace correctly, since the bar's
+    motion is driven entirely by which poll responses have arrived, never by elapsed wall-clock time.
+  - Room milestone weights sum to 92% at "materials settled" (mirroring the old 92% cap's role, but now
+    reached only when genuinely justified, not by a timer), leaving the final jump to 100% for the real
+    `done` response. House: 92% at `images.render` present.
+  - `finish()` is still the ONLY path to 100%, called solely from the real completion callback
+    (`finishProgress`/`finishHouseProgress`) — unchanged from before. `start()`/`finish()` method names are
+    also unchanged, so `startProgressMessages()`/`finishProgress()` (room) and
+    `startHouseProgress()`/`finishHouseProgress()` (house) needed zero call-site changes — only
+    `applyPollUpdate()`/`applyHousePollUpdate()` gained one `setProgress(confirmed, ceiling)` call each,
+    computed fresh every poll.
+
 ## Resilient loading (reconnect on reload/navigation) + Cancel generating…
 
 Generation was already a server-side FastAPI `BackgroundTask` (`app/main.py`'s `create_project`/

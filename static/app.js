@@ -901,67 +901,141 @@ const CONCEPT_PREVIEW_TIERS = [
 // leaving a bare spinner with no text.
 const STALL_REASSURANCE_MS = 15000;
 
-/* ---------- Simulated progress-bar fill ---------- */
-/* The bar itself fills continuously rather than sitting still between the
-   stage-stepper's real 25/50/75% checkpoints and jumping ahead each time one
-   lands (which read as "loading point by point"). It's still gated on the
-   real "done" signal - finish() is only ever called from the real completion
-   callback, so the bar can never show 100% before the result actually is.
-   The motion in between is simulated: a smooth decelerating creep up to a
-   soft cap, with one randomized brief pause partway through so it reads as a
-   real process working on something rather than a perfectly linear bar. The
-   stage stepper/labels are untouched by this - they still only ever reflect
-   real signals (deriveStageIndex/deriveHouseStageIndex), only the bar's own
-   fill motion is simulated. */
-function createSimulatedFill(barEl) {
-  const CAP = 92; // never auto-reach 100% - only finish() does that
-  let timer = null;
-  let percent = 0;
-  let stallUntil = null;
-  let stallScheduled = false;
+/* ---------- Real-signal-driven progress-bar fill ---------- */
+/* Previously a hardcoded timer (0.6%/150ms up to a 92% cap - reached in ~23s
+   regardless of how long the actual generation took, then sat frozen there
+   for the remaining 1-5 minutes, completely decoupled from real progress - a
+   real, reported bug). Replaced with a fill anchored to the SAME real signals
+   the stage stepper already uses (deriveStageIndex/deriveHouseStageIndex) via
+   setProgress(confirmed, ceiling), called every poll:
+     - `confirmed` is the percent JUSTIFIED by data that has actually arrived
+       (e.g. all 3 tier images present) - the bar is allowed to sit at this
+       value indefinitely, monotonically non-decreasing.
+     - `ceiling` is a soft cap just below the NEXT expected milestone - between
+       polls (a 3s gap) the bar gently creeps from `confirmed` toward `ceiling`
+       via requestAnimationFrame, decelerating as it approaches, so it's never
+       visibly frozen but also never overtakes a milestone it hasn't actually
+       confirmed yet.
+   No wall-clock/timer assumption anywhere - a 1-minute and a 5-minute
+   generation both pace correctly, since the bar only ever moves in response
+   to (or in anticipation of, within the soft ceiling) a real poll response.
+   finish() is still the only path to 100%, called solely from the real
+   completion callback. */
+function createSignalFill(barEl) {
+  let current = 0;
+  let confirmed = 0;
+  let ceiling = 0;
+  let rafId = null;
+  let running = false;
+
+  function render() {
+    barEl.style.width = `${current}%`;
+  }
+
+  function tick() {
+    if (!running) return;
+    const cap = Math.max(confirmed, ceiling);
+    if (current < cap) {
+      // Decelerating step (proportional to remaining gap), with a small
+      // minimum so it never crawls to an imperceptible stop.
+      const gap = cap - current;
+      const step = Math.max(gap * 0.05, 0.08);
+      current = Math.min(cap, current + step);
+      render();
+    }
+    rafId = requestAnimationFrame(tick);
+  }
 
   function start() {
-    percent = 0;
-    stallScheduled = false;
-    stallUntil = null;
-    barEl.style.width = "0%";
+    current = 0;
+    confirmed = 0;
+    ceiling = 6; // small immediate trickle so it's not frozen at 0% pre-first-poll
+    running = true;
+    render();
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(tick);
+  }
 
-    const stallAtPercent = 35 + Math.random() * 30; // somewhere between 35-65%
-    const stallDurationMs = 900 + Math.random() * 1400; // 0.9-2.3s
-
-    clearInterval(timer);
-    timer = setInterval(() => {
-      const now = Date.now();
-      if (stallUntil !== null) {
-        if (now < stallUntil) return;
-        stallUntil = null; // stall over, resume filling
-      }
-      if (!stallScheduled && percent >= stallAtPercent) {
-        stallScheduled = true;
-        stallUntil = now + stallDurationMs;
-        return;
-      }
-      // Constant step rate - previously eased out (step shrank toward 0 as
-      // percent approached CAP), which visually read as the bar grinding to
-      // a halt near the end instead of finishing. A flat step keeps the fill
-      // moving at the same visible speed the whole way to CAP.
-      const STEP = 0.6;
-      percent = Math.min(CAP, percent + STEP);
-      barEl.style.width = `${percent}%`;
-    }, 150);
+  // Both values only ever move forward - a later poll can't un-confirm
+  // progress or lower the ceiling, even if (unexpectedly) a computed value
+  // came back smaller than before.
+  function setProgress(newConfirmed, newCeiling) {
+    confirmed = Math.max(confirmed, newConfirmed);
+    ceiling = Math.max(ceiling, Math.min(newCeiling, 99)); // trickle alone never reaches 100
   }
 
   function finish() {
-    clearInterval(timer);
-    timer = null;
-    barEl.style.width = "100%";
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    current = 100;
+    render();
   }
 
-  return { start, finish };
+  return { start, setProgress, finish };
 }
 
-const roomProgressFill = createSimulatedFill(progressBarFill);
-const houseProgressFill = createSimulatedFill(houseProgressBarFill);
+const roomProgressFill = createSignalFill(progressBarFill);
+const houseProgressFill = createSignalFill(houseProgressBarFill);
+
+// Milestone weights for the room-redesign bar (sum of the non-"done" values
+// tops out at 92%, leaving the final jump to 100% for the real "done"
+// response via finish() - see createSignalFill's docstring). Representative
+// weights, not measured timings: the point is monotonic real-signal
+// anchoring, not modeling exactly how long each stage takes.
+function computeRoomProgressTarget(data) {
+  let confirmed = 5; // polling at all means the pipeline has at least started
+  let ceiling = 15;
+
+  if (data.room_description) {
+    confirmed = 15;
+    ceiling = 15 + 21;
+  }
+
+  const tierCount = CONCEPT_PREVIEW_TIERS.filter(
+    (tier) => data.images && data.images[tier.key]
+  ).length;
+  if (tierCount > 0) {
+    confirmed = 15 + tierCount * 21;
+    ceiling = confirmed + (tierCount < 3 ? 21 : 14);
+  }
+
+  const materialsSettled = data.materials_status === "done" || data.materials_status === "skipped";
+  if (materialsSettled) {
+    confirmed = 92;
+    ceiling = 98;
+  }
+
+  return { confirmed, ceiling };
+}
+
+// Mirrors computeRoomProgressTarget()'s reasoning, scaled to the house
+// flow's 3-stage shape (plot analysis -> blueprint -> render).
+function computeHouseProgressTarget(data) {
+  let confirmed = 6;
+  let ceiling = 22;
+
+  if (data.plot_description) {
+    confirmed = 22;
+    ceiling = 45;
+  }
+
+  if (data.blueprint_status && data.blueprint_status !== "idle") {
+    if (data.blueprint_status === "done") {
+      confirmed = 70;
+      ceiling = 92;
+    } else {
+      confirmed = 45;
+      ceiling = 70;
+    }
+  }
+
+  if (data.images && data.images.render) {
+    confirmed = 92;
+    ceiling = 98;
+  }
+
+  return { confirmed, ceiling };
+}
 
 let selectedFile = null;
 let currentStageIndex = -1;
@@ -1229,6 +1303,9 @@ function deriveStageIndex(data) {
 }
 
 function applyPollUpdate(data) {
+  const { confirmed, ceiling } = computeRoomProgressTarget(data);
+  roomProgressFill.setProgress(confirmed, ceiling);
+
   for (const tier of CONCEPT_PREVIEW_TIERS) {
     const url = data.images && data.images[tier.key];
     if (url && !revealedConceptTiers.has(tier.key)) {
@@ -1914,6 +1991,9 @@ function deriveHouseStageIndex(data) {
 }
 
 function applyHousePollUpdate(data) {
+  const { confirmed, ceiling } = computeHouseProgressTarget(data);
+  houseProgressFill.setProgress(confirmed, ceiling);
+
   const derived = deriveHouseStageIndex(data);
   if (derived > houseCurrentStageIndex) {
     houseCurrentStageIndex = derived;
