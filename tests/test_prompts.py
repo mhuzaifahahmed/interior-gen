@@ -2,6 +2,9 @@ from app.pipeline.prompts import (
     ADDITIONAL_INSTRUCTIONS_MAX_CHARS,
     COLOR_PALETTES,
     COLOR_PROFILE,
+    INDUSTRIAL_TIER_CEILING,
+    INDUSTRIAL_TIER_FLOORING,
+    INDUSTRIAL_TIER_MATERIAL_QUALITY,
     KAGGLE_DEFAULT_NEGATIVE_PROMPT,
     KAGGLE_PROMPT_MAX_WORDS,
     NEGATIVE_ADDITIONS,
@@ -10,7 +13,9 @@ from app.pipeline.prompts import (
     STYLE_ELEMENT_POOLS,
     STYLE_OPTIONS,
     STYLE_PROFILES,
+    TIER_CEILING,
     TIER_FLOORING,
+    TIER_MATERIAL_QUALITY,
     TIER_STRUCTURE_REMINDER,
     build_kaggle_negative_prompt,
     build_kaggle_prompt,
@@ -73,6 +78,80 @@ def test_color_profiles_never_reference_furniture_or_style():
         lowered = text.lower()
         for word in banned:
             assert word not in lowered, f"color profile {palette!r} mentions {word!r}"
+
+
+def test_tier_ceiling_never_mentions_colors():
+    # Real bug regression guard (v11.3): TIER_CEILING["premium"] used to say
+    # "warm gold-lit trim" - a literal color word inside a Budget Tier
+    # sentence, violating this module's own "colors live only in
+    # COLOR_PROFILE" rule and fighting every non-gold palette (Earthy
+    # included) at the premium tier. Same banned-colors check
+    # test_style_profiles_never_mention_colors runs on STYLE_PROFILES, now
+    # also applied to TIER_CEILING since that's where the actual leak was.
+    import re
+
+    banned_colors = ("beige", "grey", "gray", "brown", "blue", "green", "red", "gold", "cream", "taupe", "navy")
+    for tier, text in TIER_CEILING.items():
+        words = set(re.findall(r"[a-z]+", text.lower()))
+        for color in banned_colors:
+            assert color not in words, f"TIER_CEILING[{tier!r}] mentions color word {color!r}"
+
+
+def test_industrial_premium_does_not_use_generic_luxury_materials():
+    # Real user report (v11.3): Industrial (raw concrete/metal/brick identity)
+    # rendered as generic luxury at the premium tier, since the generic tier
+    # vocabulary assumes polished marble/gold-cove/travertine - the opposite
+    # of Industrial's own character. INDUSTRIAL_TIER_* overrides must
+    # actually be wired into build_prompt()/build_tier_spec()/
+    # build_kaggle_prompt() for every tier, not just exist unused.
+    # Only checked at premium (economical/mid legitimately EXCLUDE marble/gold
+    # via NEGATIVE_ADDITIONS's "Do not include: ..." sentence - that mention
+    # is correct, not the bug being guarded against here).
+    conflicting_materials = ("marble", "travertine", "walnut")
+    prompt = build_prompt("premium", "Industrial", "Neutral")
+    lowered = prompt.lower()
+    for material in conflicting_materials:
+        assert material not in lowered, f"Industrial premium prompt still mentions {material!r}"
+    assert "gold" not in lowered
+
+    for tier in TIERS:
+        prompt = build_prompt(tier, "Industrial", "Neutral")
+        lowered = prompt.lower()
+        assert INDUSTRIAL_TIER_CEILING[tier].lower() in lowered
+        assert INDUSTRIAL_TIER_MATERIAL_QUALITY[tier].lower() in lowered
+
+
+def test_industrial_premium_flooring_is_concrete_not_marble():
+    for tier in TIERS:
+        prompt = build_prompt(tier, "Industrial", "Neutral")
+        assert any(flooring.lower() in prompt.lower() for flooring in INDUSTRIAL_TIER_FLOORING[tier])
+        assert not any(flooring.lower() in prompt.lower() for flooring in TIER_FLOORING[tier])
+
+
+def test_non_industrial_styles_keep_the_generic_tier_vocabulary():
+    # The Industrial override must be scoped to ONLY Industrial - every other
+    # style keeps using the exact same generic tier dicts as before.
+    prompt = build_prompt("premium", "Modern", "Neutral")
+    assert TIER_MATERIAL_QUALITY["premium"].lower() in prompt.lower()
+    assert TIER_CEILING["premium"].lower() in prompt.lower()
+
+
+def test_build_tier_spec_industrial_uses_concrete_not_marble():
+    for tier in TIERS:
+        spec = build_tier_spec(tier, "Industrial", "Neutral")
+        assert spec["flooring"] == INDUSTRIAL_TIER_FLOORING[tier][0]
+        assert spec["ceiling"] == INDUSTRIAL_TIER_CEILING[tier]
+        assert "marble" not in spec["flooring"].lower()
+        assert "gold" not in spec["ceiling"].lower()
+
+
+def test_build_kaggle_prompt_industrial_uses_concrete_not_marble():
+    for tier in TIERS:
+        # Random flooring choice - run several times to exercise the pool.
+        for _ in range(5):
+            prompt = build_kaggle_prompt(tier, "Industrial", "Neutral")
+            assert "marble" not in prompt.lower()
+            assert "travertine" not in prompt.lower()
 
 
 def test_build_prompt_unknown_tier_raises():

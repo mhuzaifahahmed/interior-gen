@@ -1251,8 +1251,33 @@ carries the preserve-structure instruction.
   upgrade if prompt-only fixes prove insufficient, but it requires direct access to a diffusion model's
   denoising loop (self-hosted, e.g. `diffusers` + a controlnet-depth checkpoint) - neither gpt-image-1 nor
   any previously-used hosted API exposes that, so it can't be bolted onto the current provider seam without
-  new self-hosted infrastructure. Current prompt version is `v9` (`PROMPT_VERSION` in `prompts.py`) - see
-  the Tier/prompt seam section above for the full v7/v8/v9 history.
+  new self-hosted infrastructure. Current prompt version is `v11.3` (`PROMPT_VERSION` in `prompts.py`) - see
+  the Tier/prompt seam section above for the v7/v8/v9 history, and prompts.py's own module docstring for
+  v11/v11.3.
+- **v11.3 (2026-08-20) fixed a real, user-reported "Industrial style / Earthy palette doesn't look right"
+  complaint** - two concrete, findable-in-text bugs (`app/pipeline/prompts.py`), not a rendering fluke:
+  (1) `TIER_CEILING["premium"]` said "warm gold-lit trim" - a literal COLOR word inside a Budget Tier
+  sentence, violating this module's own "colors live only in `COLOR_PROFILE`" rule, so it fought every
+  non-gold palette (Earthy included) at the premium tier specifically; fixed by describing only the
+  ceiling's structure/light-quality, no color. (2) The generic tier vocabulary
+  (`TIER_MATERIAL_QUALITY`/`TIER_CEILING`/`TIER_FLOORING`) assumes a "premium = polished marble, gold-cove
+  ceiling, travertine/walnut flooring" aesthetic that's the opposite of Industrial's raw-materials identity
+  (concrete, exposed metal, brick) - Budget Tier comes right after Interior Style in PROMPT PRIORITY, so it
+  was actively overriding the style the user chose. Fixed with `INDUSTRIAL_TIER_MATERIAL_QUALITY`/
+  `_CEILING`/`_FLOORING` overrides, wired into `build_prompt()`, `build_tier_spec()` (materials pricing -
+  so priced items match what's actually rendered), and `build_kaggle_prompt()` (the currently-active Kaggle
+  path) whenever `style == "Industrial"` - same quality ladder, materials congruent with the style instead
+  of fighting it. Deliberately scoped to ONLY Industrial, not a general per-style system - see
+  prompts.py's module docstring for why the other 8 styles didn't need this.
+  **Verification status: NOT YET confirmed against a real render** - the fix was validated via the
+  composed-prompt text (printed and reviewed - confirmed no more marble/gold/travertine/walnut mentions for
+  Industrial, correct earthy-tone reinforcement) and the automated test suite
+  (`tests/test_prompts.py`'s `test_tier_ceiling_never_mentions_colors`/
+  `test_industrial_premium_does_not_use_generic_luxury_materials`/etc.), but NOT against an actual paid
+  generation - no OpenAI credits were available at the time this shipped. Per this project's own repeated
+  lesson (documented throughout this Tier/prompt seam section), prompt-only reasoning has been wrong before
+  real renders more than once - **a real Industrial + Earthy generation should be run and visually
+  inspected the next time credits are available**, before treating this as fully verified.
 - Gemini text quota (room description) is free/separate from image gen; image generation is paid
   (OpenAI). Localhost-only deployment is intentional for Phase 1.
 - `GEMINI_IMAGE_MODEL` env var / Gemini image path is dormant, not deleted — kept for a possible future

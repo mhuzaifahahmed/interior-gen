@@ -45,13 +45,37 @@ regardless of which style it's paired with. This mirrors why TIER_FLOORING/
 TIER_LIGHTING_TEMP/NEGATIVE_ADDITIONS stayed tier-level rather than per-style: the
 combinatorial grid (9 styles x 8 palettes x 3 tiers = 216 combinations) only stays
 maintainable if each axis only ever encodes its own concern.
+
+v11.3: fixed a real, user-reported "Industrial style / Earthy palette doesn't look
+right" complaint - two concrete, findable-in-text bugs, not a rendering fluke.
+(1) TIER_CEILING["premium"] said "warm gold-lit trim" - a literal COLOR word
+inside a Budget Tier sentence, directly violating this module's own stated
+"colors live only in COLOR_PROFILE" rule above, so it fought every non-gold
+palette (Earthy included) at the premium tier specifically. Fixed by describing
+only the ceiling's structure/light-quality, no color. (2) The generic tier
+vocabulary (TIER_MATERIAL_QUALITY/TIER_CEILING/TIER_FLOORING) assumes a
+"premium = polished marble, gold-cove ceiling, travertine/walnut flooring"
+aesthetic that's the OPPOSITE of Industrial's raw-materials identity
+(STYLE_PROFILES["Industrial"]: concrete, exposed metal, brick) - Budget Tier
+comes right after Interior Style in PROMPT PRIORITY, so it was actively
+overriding the style the user chose. Fixed with INDUSTRIAL_TIER_MATERIAL_QUALITY/
+_CEILING/_FLOORING - Industrial-specific overrides used by build_prompt(),
+build_tier_spec() (materials pricing), AND build_kaggle_prompt() whenever
+style == "Industrial", keeping the identical quality LADDER (premium still
+reads as more expensive than mid) but expressed in materials congruent with
+Industrial's own character (polished/sealed concrete, blackened/brushed steel,
+exposed structural elements) instead of vocabulary that reads as a different
+style. Deliberately scoped to ONLY Industrial, not a general per-style system -
+it's the one style whose identity is fundamentally incompatible with the
+generic tier reading; the other 8 styles' "premium = refined/polished" doesn't
+contradict their own identity the way it does here.
 """
 
 import random
 import re
 from dataclasses import dataclass
 
-PROMPT_VERSION = "v11.2"
+PROMPT_VERSION = "v11.3"
 
 
 # ---------------------------------------------------------------------------
@@ -166,10 +190,21 @@ TIER_LIGHTING_TEMP = {
     "premium": "warm luxury lighting, 2700-3000K, layered recessed and cove fixtures",
 }
 
+# Real bug fixed here: "warm gold-lit trim" injected a literal COLOR word
+# (gold) into a Budget Tier sentence - this module's own stated design
+# principle (see the module docstring's "STYLE_PROFILES intentionally carry
+# NO color words - colors live only in COLOR_PROFILE" rule, which this
+# dict silently violated) means every palette's color instructions have to
+# fight that "gold" mention at the premium tier specifically, regardless of
+# which palette is chosen - a real, findable contributor to a user-reported
+# "Earthy doesn't look right" complaint (Earthy's clay/terracotta/olive
+# palette has nothing to do with gold). Fixed by describing the ceiling's
+# STRUCTURE/TREATMENT only (multi-layer cove, warm-toned trim as a light
+# quality, not a hue) and leaving the actual color entirely to COLOR_PROFILE.
 TIER_CEILING = {
     "economical": "a plain flat white ceiling, no false ceiling, a simple ceiling fan",
     "mid": "a false ceiling with a warm cove lighting strip",
-    "premium": "a designer multi-layer cove ceiling with warm gold-lit trim",
+    "premium": "a designer multi-layer cove ceiling with warm, richly-lit trim",
 }
 
 TIER_DENSITY = {
@@ -232,6 +267,61 @@ TIER_FLOORING = {
         "luxury travertine flooring",
         "high-end oak flooring",
         "premium walnut flooring",
+    ],
+}
+
+# Real user report: Industrial (a style whose entire identity - see
+# STYLE_PROFILES/STYLE_ELEMENT_POOLS above - is concrete, exposed metal,
+# brick, raw materials) "doesn't look right", especially at the premium
+# tier. Root cause: TIER_MATERIAL_QUALITY/TIER_CEILING/TIER_FLOORING above
+# assume a generic "premium = polished marble, gold-lit cove ceiling,
+# travertine/walnut flooring" aesthetic - the opposite of Industrial's raw
+# identity - so the Budget Tier section (which comes right after Style in
+# PROMPT PRIORITY) actively fights the style the user chose. These
+# Industrial-specific overrides keep the EXACT SAME quality ladder
+# (premium still reads as more expensive/refined than mid, mid more than
+# economical) but express it in materials congruent with Industrial's own
+# character - polished/sealed concrete, blackened or brushed steel, exposed
+# structural elements - instead of vocabulary that reads as a different
+# style entirely. Deliberately scoped to ONLY Industrial (not a general
+# per-style system for all 9 styles) since that's the one style whose
+# identity is fundamentally incompatible with the generic tier vocabulary -
+# the other 8 styles' generic "premium" reading (refined/polished
+# materials) doesn't contradict their own identity the way it does here.
+INDUSTRIAL_TIER_MATERIAL_QUALITY = {
+    "economical": (
+        "affordable, durable raw-industrial materials with simple, honest finishes - "
+        "painted metal, basic sealed concrete - no premium or luxury materials"
+    ),
+    "mid": "good-quality industrial materials with refined raw finishes - sealed concrete, brushed steel, reclaimed wood",
+    "premium": (
+        "premium industrial materials with meticulously finished raw surfaces - polished concrete, "
+        "blackened steel, sealed reclaimed wood - luxurious in quality and craftsmanship, not in ornament"
+    ),
+}
+
+INDUSTRIAL_TIER_CEILING = {
+    "economical": "a plain flat ceiling with visible conduit, a simple ceiling fan",
+    "mid": "an exposed structural ceiling with visible ductwork and track lighting",
+    "premium": (
+        "an intentionally exposed structural ceiling with blackened steel beams and visible ductwork, "
+        "softly uplit with designer track or pendant fixtures"
+    ),
+}
+
+INDUSTRIAL_TIER_FLOORING = {
+    "economical": [
+        "sealed basic concrete flooring",
+        "affordable polished-concrete-look vinyl flooring",
+    ],
+    "mid": [
+        "sealed concrete flooring",
+        "large-format concrete-look tile flooring",
+    ],
+    "premium": [
+        "premium polished concrete flooring",
+        "large-format honed concrete-look porcelain flooring",
+        "burnished concrete flooring with a high-end sealed finish",
     ],
 }
 
@@ -531,13 +621,24 @@ def build_prompt(
     )
 
     # ---- 3. Budget Tier ----
-    flooring = random.choice(TIER_FLOORING[tier])
-    sentences.append(
-        f"Materials and finishes should reflect a {label}: {TIER_MATERIAL_QUALITY[tier]}."
-    )
+    # Industrial gets its own tier vocabulary (material quality/ceiling/
+    # flooring) - see INDUSTRIAL_TIER_*'s module-level comment for why: the
+    # generic tier vocabulary assumes a polished/luxury aesthetic that
+    # directly fights Industrial's raw-materials identity.
+    if style == "Industrial":
+        material_quality = INDUSTRIAL_TIER_MATERIAL_QUALITY[tier]
+        ceiling = INDUSTRIAL_TIER_CEILING[tier]
+        flooring_options = INDUSTRIAL_TIER_FLOORING[tier]
+    else:
+        material_quality = TIER_MATERIAL_QUALITY[tier]
+        ceiling = TIER_CEILING[tier]
+        flooring_options = TIER_FLOORING[tier]
+
+    flooring = random.choice(flooring_options)
+    sentences.append(f"Materials and finishes should reflect a {label}: {material_quality}.")
     sentences.append(f"Install {flooring}.")
     sentences.append(f"Use {TIER_LIGHTING_TEMP[tier]} throughout the space.")
-    sentences.append(f"For the ceiling, use {TIER_CEILING[tier]}.")
+    sentences.append(f"For the ceiling, use {ceiling}.")
     if TIER_FEATURE_WALL_AVAILABLE[tier]:
         sentences.append(f"Include a feature wall styled to match the {style} design direction.")
     sentences.append(f"Furniture density: {TIER_DENSITY[tier]}.")
@@ -635,18 +736,32 @@ def build_tier_spec(tier: str, style: str, palette: str) -> dict[str, str]:
     pool = STYLE_ELEMENT_POOLS[style]
     palette_text = COLOR_PROFILE[palette]
 
+    # Same Industrial override as build_prompt() - see INDUSTRIAL_TIER_*'s
+    # module-level comment. Materials pricing must describe what's actually
+    # rendered (marble pricing for a room the image model was told to render
+    # in polished concrete would be actively wrong), not just what a generic
+    # tier would normally use.
+    if style == "Industrial":
+        ceiling = INDUSTRIAL_TIER_CEILING[tier]
+        materials_quality = INDUSTRIAL_TIER_MATERIAL_QUALITY[tier]
+        flooring = INDUSTRIAL_TIER_FLOORING[tier][0]
+    else:
+        ceiling = TIER_CEILING[tier]
+        materials_quality = TIER_MATERIAL_QUALITY[tier]
+        flooring = TIER_FLOORING[tier][0]
+
     return {
         "label": f"{TIER_LABELS[tier]}, {style} style",
         "lighting_temp": TIER_LIGHTING_TEMP[tier],
-        "ceiling": TIER_CEILING[tier],
+        "ceiling": ceiling,
         "feature_wall": (
             f"a {style} feature wall in {palette_text}" if TIER_FEATURE_WALL_AVAILABLE[tier] else ""
         ),
-        "materials": f"{TIER_MATERIAL_QUALITY[tier]}, {style} style",
+        "materials": f"{materials_quality}, {style} style",
         "density": TIER_DENSITY[tier],
         "structure_reminder": TIER_STRUCTURE_REMINDER[tier],
         "paint": palette_text,
-        "flooring": TIER_FLOORING[tier][0],
+        "flooring": flooring,
         "palette": palette_text,
         "decor": pool.accessories[0],
     }
@@ -749,13 +864,18 @@ def build_kaggle_prompt(tier: str, style: str, palette: str) -> str:
 
     pool = STYLE_ELEMENT_POOLS[style]
     furniture = random.choice(pool.seating)
+    # Same Industrial override as build_prompt()/build_tier_spec() - see
+    # INDUSTRIAL_TIER_*'s module-level comment. "premium marble flooring"
+    # for an Industrial room fights the style's raw-materials identity here
+    # too, in this completely independent prompt path.
+    flooring_options = INDUSTRIAL_TIER_FLOORING[tier] if style == "Industrial" else TIER_FLOORING[tier]
 
     parts = [
         f"{style} style {TIER_LABELS[tier]} interior",
         _short_style_keywords(style),
         TIER_QUALITY_TAG[tier],
         COLOR_PROFILE[palette],
-        random.choice(TIER_FLOORING[tier]),
+        random.choice(flooring_options),
         furniture,
         "bedroom: use a bed, never a table",
         "clean renovated interior, photorealistic",
