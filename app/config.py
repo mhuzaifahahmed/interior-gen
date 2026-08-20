@@ -102,32 +102,34 @@ class Settings(BaseSettings):
     # else.
     openai_house_image_quality: str = "high"
 
-    # Room-redesign image backend selector: "openai" (default, gpt-image-1),
-    # "modal" (self-hosted RealVisXL+ControlNet on Modal - see
-    # app/providers/modal_provider.py), or "kaggle" (the same model on a
-    # Kaggle notebook + Cloudflare tunnel - see app/providers/kaggle.py,
-    # kept dormant, not deleted, in case Modal's account/quota ever needs a
-    # fallback). A toggle, not a hard swap - reverting to OpenAI is one .env
-    # line, no code change needed.
+    # Room-redesign image backend selector: "openai" (gpt-image-1), "modal"
+    # (self-hosted RealVisXL+ControlNet on Modal - see
+    # app/providers/modal_provider.py, kept configured but dormant), or
+    # "kaggle" (default again as of 2026-08-20 - the same model on a Kaggle
+    # notebook + Cloudflare tunnel, see app/providers/kaggle.py). A toggle,
+    # not a hard swap - switching is one .env line, no code change needed.
     #
-    # MODAL REPLACED KAGGLE (2026-08) for a real, live-hit reason: Kaggle's
-    # phone-verification step for a SECOND account rejected every number
-    # tried (including via VPN) - later confirmed as a genuine regional gap,
-    # not a user error (multiple platforms, including NVIDIA's own dev
-    # forums, show Pakistan (+92) missing entirely from their SMS-OTP
-    # country dropdown). Modal's signup is GitHub/Google OAuth only, no
-    # phone step at all, which is what actually unblocked hosting a second
-    # model. Modal also has no free-tier equivalent of Kaggle's Cloudflare
-    # quick-tunnel ~100s response timeout (the thing that forced the
-    # submit-then-poll job pattern in kaggle.py) - a Modal deployment gets a
-    # permanent HTTPS URL with no tunnel/session to keep alive, so the
-    # equivalent Modal endpoint (modal_provider.py) uses one plain blocking
-    # call for both single-image and batch generation, simpler than
-    # kaggle.py's job+poll code. The GPU-memory lessons (attention/VAE
-    # slicing, 768x768 for the 3-tier batch call, OOM-safe sequential
-    # fallback) carry over unchanged - those were T4-VRAM-driven, not
-    # platform-driven, and Modal's T4 has the identical 16GB ceiling.
-    image_provider: str = "modal"
+    # MODAL REPLACED KAGGLE, THEN KAGGLE REPLACED MODAL BACK (both real,
+    # live-hit reasons, not preference swaps):
+    # - Kaggle -> Modal (first switch): Kaggle's phone-verification step for
+    #   a SECOND account rejected every number tried (including via VPN) -
+    #   later confirmed as a genuine regional gap (Pakistan/+92 missing from
+    #   several platforms' SMS-OTP dropdowns, not user error). Modal's
+    #   OAuth-only signup unblocked hosting a second model.
+    # - Modal -> Kaggle (this switch, 2026-08-20): Modal's cold starts (2-3
+    #   min after ~2 min idle, even with the GPU memory snapshot
+    #   optimization) were judged too slow for the user's real usage
+    #   pattern. The original phone-verification blocker was separately
+    #   worked around by getting 3 Kaggle accounts from different people, so
+    #   Kaggle became viable again. Real trade-off accepted going back:
+    #   Kaggle has no permanent URL (the notebook's Cloudflare tunnel URL
+    #   changes every session restart, requiring a fresh KAGGLE_API_URL each
+    #   time) and a 30 GPU-hr/week quota, vs Modal's permanent URL and
+    #   effectively unlimited pay-per-use quota but real cold-start latency.
+    # The GPU-memory lessons (attention/VAE slicing, 768x768 for the 3-tier
+    # batch call, OOM-safe sequential fallback) apply identically to both -
+    # T4-VRAM-driven, not platform-driven.
+    image_provider: str = "kaggle"
 
     # KaggleImageProvider's endpoint - a Cloudflare quick-tunnel URL pointing at
     # a live Kaggle notebook session running the user's own fine-tuned SD-style
@@ -187,7 +189,11 @@ class Settings(BaseSettings):
     # openai_house_input_fidelity vs openai_image_input_fidelity) - so
     # switching the house backend never silently changes room-redesign's
     # behavior or vice versa.
-    house_image_provider: str = "modal"
+    # No Kaggle model exists for house generation (only room-redesign has a
+    # working model, as of 2026-08-20) - KaggleImageProvider has no
+    # generate_house_render method at all, so "kaggle" is not a valid value
+    # here. Stays "openai" until a real house model is ready.
+    house_image_provider: str = "openai"
 
     # Set ONLY when the frontend is hosted on a different domain from this
     # backend (e.g. static/ deployed to Vercel, this FastAPI app deployed to

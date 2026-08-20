@@ -82,7 +82,37 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
 - `get_provider()` (`app/providers/__init__.py`) returns `HybridProvider` — this is the composition root.
   `GeminiProvider.generate_image` still exists but is unused/dormant (would work again if billing is ever
   enabled on the Gemini project) — don't delete it without checking with the user first.
-- **Self-hosted models: Kaggle → Modal (2026-08).** A parallel, free/self-hosted alternate image backend
+- **Self-hosted models: Kaggle → Modal → Kaggle again (2026-08).** Read this whole entry before touching
+  `IMAGE_PROVIDER`/`HOUSE_IMAGE_PROVIDER` — the default has flipped twice, for two different real reasons,
+  and could flip again.
+  - **Kaggle → Modal (first switch)**: see the "Why Modal replaced Kaggle" bullet below — a second Kaggle
+    account's phone verification rejected every number tried (confirmed regional gap, not user error).
+  - **Modal → Kaggle (second switch, 2026-08-20)**: Modal's cold starts (2-3 min after ~2 min idle, even
+    with the GPU memory snapshot optimization — see "Cold starts" below) were judged too slow for real
+    usage. Separately, the original phone-verification blocker was worked around by getting **3 Kaggle
+    accounts from 3 different people** — so Kaggle became viable again. `IMAGE_PROVIDER` is back to
+    `"kaggle"` (default in `app/config.py` and `.env`) for room-redesign. `HOUSE_IMAGE_PROVIDER` is
+    `"openai"` (NOT `"kaggle"`) — **no Kaggle model exists for house generation**, only room-redesign has
+    a working model as of this switch; `KaggleImageProvider` has no `generate_house_render` method at all.
+    The Modal house-render model was separately flagged by the user as "not ok at all" and is being
+    replaced with a different model later (not yet supplied) — Modal code stays in the repo, dormant, not
+    deleted, in case it's needed again. The user also floated a possible 3rd Kaggle account for an
+    AI-drawn "autocad map" (floor plan) — **not built**: this project already tried and reverted an
+    AI-image-model-drawn floor plan (see "v4" under Build a House below) because the image model
+    hallucinated dimension/area text; the free, deterministic Pillow-drawn blueprint (`blueprint_svg.py`,
+    "v5" below) replaced it and stays the only floor-plan renderer unless a specific model proven to avoid
+    that failure mode is confirmed first.
+  - **Real, recurring trade-off of Kaggle vs. Modal, worth remembering next time this flips**: Kaggle has
+    no permanent URL — its Cloudflare tunnel URL changes every time the notebook session restarts, so
+    `KAGGLE_API_URL` in `.env` needs manual updating each time — plus a 30 GPU-hr/week quota per account.
+    Modal has a permanent URL and effectively unlimited pay-per-use quota, but real cold-start latency
+    (2-3 min after ~2 min idle) unless paying for `min_containers=1` to stay warm continuously (a real,
+    large recurring cost — roughly $0.60/T4-hour, so ~$440/month for one model kept warm 24/7, not a
+    one-time "subscription" — Modal has no flat plan that removes cold starts, only pay-per-second
+    compute). Kaggle, in turn, has **no paid tier at all** — its GPU quota is a fixed platform limit with
+    no way to buy more, at any price, and no way to keep a session running indefinitely even if quota
+    remains (hard ~9-12hr session runtime cap regardless of payment).
+  - Original migration story, unchanged below. A parallel, free/self-hosted alternate image backend
   (`RealVisXL_V5.0` + `xinsir/controlnet-depth-sdxl-1.0`, classic SD-style img2img with
   `negative_prompt`/`num_inference_steps`/`guidance_scale` — NOT the instruction-following OpenAI shape)
   was first hosted on a **Kaggle notebook + Cloudflare quick tunnel** (`app/providers/kaggle.py`), then
@@ -94,9 +124,11 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
     developer forums have many threads on this) are missing Pakistan (+92) from their SMS-OTP country
     dropdown entirely, so no number could ever have worked. Modal's signup is GitHub/Google OAuth only,
     no phone step anywhere in the flow — that's what actually unblocked hosting more than one model.
-  - **`IMAGE_PROVIDER`** (room-redesign backend): `"modal"` (default) → `ModalImageProvider`, `"kaggle"` →
-    `KaggleImageProvider` (dormant), `"openai"` → falls through to the always-real OpenAI fallback.
-    **`HOUSE_IMAGE_PROVIDER`** (Build a House backend): `"modal"` (default) or `"openai"` — a SEPARATE
+  - **`IMAGE_PROVIDER`** (room-redesign backend): `"kaggle"` (default as of 2026-08-20) →
+    `KaggleImageProvider`, `"modal"` → `ModalImageProvider` (kept configured, dormant), `"openai"` → falls
+    through to the always-real OpenAI fallback.
+    **`HOUSE_IMAGE_PROVIDER`** (Build a House backend): `"openai"` (default as of 2026-08-20 — no Kaggle
+    house model exists) or `"modal"` (dormant) — a SEPARATE
     toggle from `IMAGE_PROVIDER`, following this file's established room-vs-house settings-isolation
     pattern, so switching one never silently changes the other. Kaggle was NEVER wired into house
     rendering (its model was trained on interior redesign only) — Modal is the first self-hosted option
