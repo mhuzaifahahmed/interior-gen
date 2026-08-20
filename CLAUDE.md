@@ -91,17 +91,31 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
     with the GPU memory snapshot optimization — see "Cold starts" below) were judged too slow for real
     usage. Separately, the original phone-verification blocker was worked around by getting **3 Kaggle
     accounts from 3 different people** — so Kaggle became viable again. `IMAGE_PROVIDER` is back to
-    `"kaggle"` (default in `app/config.py` and `.env`) for room-redesign. `HOUSE_IMAGE_PROVIDER` is
-    `"openai"` (NOT `"kaggle"`) — **no Kaggle model exists for house generation**, only room-redesign has
-    a working model as of this switch; `KaggleImageProvider` has no `generate_house_render` method at all.
-    The Modal house-render model was separately flagged by the user as "not ok at all" and is being
-    replaced with a different model later (not yet supplied) — Modal code stays in the repo, dormant, not
-    deleted, in case it's needed again. The user also floated a possible 3rd Kaggle account for an
-    AI-drawn "autocad map" (floor plan) — **not built**: this project already tried and reverted an
-    AI-image-model-drawn floor plan (see "v4" under Build a House below) because the image model
-    hallucinated dimension/area text; the free, deterministic Pillow-drawn blueprint (`blueprint_svg.py`,
-    "v5" below) replaced it and stays the only floor-plan renderer unless a specific model proven to avoid
-    that failure mode is confirmed first.
+    `"kaggle"` (default in `app/config.py` and `.env`) for room-redesign. `HOUSE_IMAGE_PROVIDER` stays
+    `"openai"` for now — no trained house model exists yet — but the plumbing for `"kaggle"` there is
+    ALREADY built in advance (2026-08-20 follow-up, before the model itself was ready, so wiring it in
+    later is a config change only): `KaggleImageProvider.generate_house_render()` exists, using its own
+    dedicated `settings.kaggle_house_api_url` (a separate Kaggle account/notebook from room-redesign's,
+    same room-vs-house URL split already established for Modal). Its request/response contract is an
+    ASSUMED, NOT YET CONFIRMED shape (same as `generate_image()`'s: `POST {url}/generate`,
+    `{"image_base64", "prompt"}` → `{"status", "generated_image_base64"}`) — every Kaggle notebook in this
+    project so far has used that exact shape, but if the real house model's endpoint differs (different
+    path, job-polling like the batch endpoint, different param/response keys), update only
+    `generate_house_render()` and `_generate_url()`'s house counterpart to match — nothing else in the
+    pipeline needs to change, since callers only ever invoke the generic `generate_house_render(image_bytes,
+    prompt)` shape regardless of backend. No prompt-shortening is applied yet either (unlike room's CLIP
+    77-token handling) since the house model's actual token-limit behavior isn't confirmed - add a
+    house-specific equivalent of `_prepare_kaggle_prompt()` if that turns out to be needed, don't reuse the
+    room one (it's built from `TIER_SPECS`, a room-redesign-only concept). `hybrid.py`'s
+    `_default_house_image_provider()` already routes `house_image_provider="kaggle"` to this. To activate:
+    set `KAGGLE_HOUSE_API_URL` + `HOUSE_IMAGE_PROVIDER=kaggle` in `.env` once the model is live — no code
+    change needed. The Modal house-render model was separately flagged by the user as "not ok at all" and
+    is being replaced with this Kaggle one — Modal code stays in the repo, dormant, not deleted, in case
+    it's needed again. The user also floated a possible 3rd Kaggle account for an AI-drawn "autocad map"
+    (floor plan) — **not built**: this project already tried and reverted an AI-image-model-drawn floor
+    plan (see "v4" under Build a House below) because the image model hallucinated dimension/area text; the
+    free, deterministic Pillow-drawn blueprint (`blueprint_svg.py`, "v5" below) replaced it and stays the
+    only floor-plan renderer unless a specific model proven to avoid that failure mode is confirmed first.
   - **Real, recurring trade-off of Kaggle vs. Modal, worth remembering next time this flips**: Kaggle has
     no permanent URL — its Cloudflare tunnel URL changes every time the notebook session restarts, so
     `KAGGLE_API_URL` in `.env` needs manual updating each time — plus a 30 GPU-hr/week quota per account.

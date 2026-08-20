@@ -157,6 +157,15 @@ class Settings(BaseSettings):
     # docstring for the full story.
     kaggle_batch_resolution: int = 768
 
+    # Build a House render endpoint - a SEPARATE Kaggle notebook/tunnel from
+    # kaggle_api_url above (own account, own model), mirroring the existing
+    # room-vs-house URL split already used for Modal (kaggle_api_url vs this
+    # one, same pattern as modal_room_redesign_url vs modal_house_url below).
+    # Blank/dormant until a real house model is trained and hosted - see
+    # house_image_provider's comment and KaggleImageProvider.generate_house_render()'s
+    # docstring for the assumed (not yet confirmed) request/response contract.
+    kaggle_house_api_url: str = ""
+
     # ---- Modal (app/providers/modal_provider.py) - the active room-redesign
     # and (optionally) house-render backend as of 2026-08. See image_provider's
     # comment above for the full Kaggle-to-Modal migration story. Both are
@@ -189,10 +198,11 @@ class Settings(BaseSettings):
     # openai_house_input_fidelity vs openai_image_input_fidelity) - so
     # switching the house backend never silently changes room-redesign's
     # behavior or vice versa.
-    # No Kaggle model exists for house generation (only room-redesign has a
-    # working model, as of 2026-08-20) - KaggleImageProvider has no
-    # generate_house_render method at all, so "kaggle" is not a valid value
-    # here. Stays "openai" until a real house model is ready.
+    # "kaggle" IS now a valid value (KaggleImageProvider.generate_house_render()
+    # exists, added in advance of a real trained house model being ready -
+    # see kaggle_house_api_url above) but stays "openai" as the default here
+    # until that model is actually trained/hosted and kaggle_house_api_url is
+    # set - flip this the moment it is, no code change needed.
     house_image_provider: str = "openai"
 
     # Set ONLY when the frontend is hosted on a different domain from this

@@ -273,6 +273,56 @@ class KaggleImageProvider:
 
             # status == "running" (or any other in-progress value) - keep polling.
 
+    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
+        """"Build a House" exterior/interior concept render, via a SEPARATE
+        Kaggle notebook/tunnel from room-redesign's (settings.kaggle_house_api_url,
+        its own account/model - see that setting's comment in config.py).
+
+        ASSUMED contract, not yet confirmed against a real deployed endpoint
+        (added in advance of the house model being ready, mirroring
+        ModalImageProvider.generate_house_render()'s shape and this same
+        class's own generate_image() contract, since every Kaggle notebook in
+        this project so far has used the identical POST {base_url}/generate,
+        {"image_base64", "prompt"} -> {"status", "generated_image_base64"}
+        shape): if the real endpoint differs (different path, param names,
+        response keys, or a submit-then-poll job pattern like
+        generate_images_batch() above), update this method and
+        _generate_url()/its own URL helper to match - nothing else in the
+        pipeline needs to change, since HybridProvider/generate_house.py only
+        ever call this same generate_house_render(image_bytes, prompt) shape
+        regardless of which provider backs it.
+
+        Prompt is passed through as-is (unlike generate_image, no CLIP-length
+        shortening) - house prompts are already length-capped upstream by
+        house_prompts.py, and this model's actual token-limit behavior isn't
+        confirmed yet. If the real house model turns out to need shortening
+        too (classic CLIP 77-token limit, same as the room model), add a
+        house-specific equivalent of _prepare_kaggle_prompt() here once that's
+        confirmed - don't reuse the room one as-is, since it's built from
+        TIER_SPECS (economical/mid/premium), a room-redesign-only concept
+        that doesn't apply to house prompts.
+
+        No _request_lock here (unlike generate_image) - this is a separate
+        Kaggle account/notebook/GPU from room-redesign's, so there's no shared
+        model instance for the two to contend over.
+        """
+        image_b64 = base64.b64encode(image_bytes).decode()
+        payload = {"image_base64": image_b64, "prompt": prompt}
+
+        response = httpx.post(
+            _generate_url(settings.kaggle_house_api_url),
+            json=payload,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+
+        data = response.json()
+        image_b64_out = data.get("generated_image_base64")
+        if not image_b64_out:
+            logger.error("unexpected Kaggle house-render response shape: keys=%s", list(data.keys()))
+            raise RuntimeError(f"unexpected Kaggle house-render response shape: {data}")
+        return base64.b64decode(image_b64_out)
+
 
 def _prepare_kaggle_prompt(full_prompt: str, tier: str | None) -> tuple[str, str | None]:
     """Shortens build_prompt()'s full output for this model's ~77-token CLIP

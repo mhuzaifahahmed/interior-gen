@@ -88,6 +88,22 @@ def test_house_image_provider_modal_toggle_only_swaps_house_rendering(monkeypatc
     assert provider.generate_house_render(b"x", "prompt") == b"modal:house"
 
 
+def test_house_image_provider_kaggle_toggle_only_swaps_house_rendering(monkeypatch):
+    # Same shape as the Modal house-toggle test above - house_image_provider=
+    # kaggle must swap ONLY generate_house_render, using a SEPARATE Kaggle
+    # account/notebook from room-redesign's (advance plumbing for a house
+    # model not yet trained - see KaggleImageProvider.generate_house_render()).
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "openai")
+    monkeypatch.setattr(hybrid_module.settings, "house_image_provider", "kaggle")
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: FakeImageProvider("kaggle"))
+    room_provider = FakeImageProvider("openai")
+
+    provider = HybridProvider(image_provider=room_provider)
+
+    assert provider.generate_image(b"x", "prompt") == b"openai:image"
+    assert provider.generate_house_render(b"x", "prompt") == b"kaggle:house"
+
+
 def test_generate_image_falls_back_to_openai_not_to_the_house_provider_when_room_fails(monkeypatch):
     # Real regression guard: if house_image_provider is ALSO an experimental
     # backend (e.g. both set to "modal"), a failing room provider must still

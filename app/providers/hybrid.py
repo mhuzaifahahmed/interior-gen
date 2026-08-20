@@ -32,8 +32,14 @@ def _default_house_image_provider(openai_provider):
     # independent of image_provider above (room-redesign), following this
     # codebase's established room-vs-house settings-isolation pattern. See
     # app/config.py's house_image_provider comment for the default choice.
+    # "kaggle" uses a SEPARATE Kaggle account/tunnel from room-redesign's
+    # (settings.kaggle_house_api_url) - added in advance of a real trained
+    # house model being ready; see KaggleImageProvider.generate_house_render()'s
+    # docstring for the assumed (not yet confirmed) request contract.
     if settings.house_image_provider == "modal":
         return ModalImageProvider()
+    if settings.house_image_provider == "kaggle":
+        return KaggleImageProvider()
     return openai_provider
 
 
@@ -54,9 +60,9 @@ class HybridProvider(Provider):
       redesign failures - see RUNTIME FALLBACK below. Never swapped by any
       toggle, so a failing experimental backend always has something solid
       to land on.
-    - _house_image_provider: resolved from house_image_provider ("modal" or
-      "openai") via _default_house_image_provider() - used ONLY for
-      generate_house_render(), never as a fallback target for room-redesign.
+    - _house_image_provider: resolved from house_image_provider ("modal",
+      "kaggle", or "openai") via _default_house_image_provider() - used ONLY
+      for generate_house_render(), never as a fallback target for room-redesign.
     - _room_image_provider: resolved from image_provider ("modal", "kaggle",
       or "openai") via _default_room_image_provider() - used for
       generate_image()/generate_images_batch() (room-redesign).
