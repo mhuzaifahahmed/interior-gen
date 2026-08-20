@@ -315,6 +315,7 @@ def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
         color_palette=project.color_palette,
         additional_instructions=project.additional_instructions,
         room_dimensions=room_dimensions,
+        image_model=project.image_model,
     )
 
 
@@ -541,6 +542,7 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
         prompt=house_project.prompt,
         dimensions=dimensions,
         house_inputs=house_inputs,
+        render_model=house_project.render_model,
     )
 
 

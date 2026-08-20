@@ -1108,6 +1108,40 @@ replaced the old system" below for the real incident that drove it.
   token) plus a couple of integration checks against the real app (401 without/with a bad token, 200 with
   a valid one). `tests/test_google_oauth.py` is deleted — there's no local Google OAuth code left to test.
 
+## Model attribution ("Generated with our model" / "Generated with OpenAI")
+
+After a generation completes, the results screen (both Room Redesign and Build a House) shows a short line
+naming which backend actually produced the images — **explicit user requirement: never mention "fallback"
+or imply one path is a backup for another**, even when the OpenAI reliability fallback (see "Provider
+split" above) is exactly what ran.
+
+- **The only place that knows which provider actually produced any bytes is inside `HybridProvider`**
+  (`app/providers/hybrid.py`) — its `generate_image`/`generate_images_batch`/`generate_house_render` are
+  the sole call sites where the success-vs-fallback branch is decided. `_PROVIDER_LABELS` maps class name →
+  a plain two-value label: `KaggleImageProvider`/`ModalImageProvider` → `"our model"` (both self-hosted —
+  the distinction that matters to the user is self-hosted vs. paid third-party API, not which self-hosted
+  platform happened to be configured), `OpenAIImageProvider` → `"OpenAI"`. Recorded via
+  `_record_tier_label()` (room, per-tier) or inline after a successful/fallback batch call, into
+  `self._tier_provider_labels: dict[str, str]` (keyed by tier) and `self._house_provider_label: str | None`
+  — guarded by a lock since the 3 room tiers run on separate threads
+  (`app/pipeline/generate.py`'s `ThreadPoolExecutor`).
+- **`get_image_model_label()`** returns `"our model"` if every recorded tier came from the self-hosted
+  backend, `"OpenAI"` if every tier came from OpenAI, `"our model + OpenAI"` if tiers genuinely diverged
+  (only possible on the per-tier, non-batch path, since each tier's fallback is independent — see
+  `HybridProvider`'s class docstring's "RUNTIME FALLBACK" section), or `None` before any tier completes.
+  **`get_house_render_model_label()`** is always a single value (no `"+"` case) since house rendering has
+  no runtime fallback.
+- **Pipeline**: `run_pipeline()`/`run_house_pipeline()` call these via
+  `getattr(provider, "get_image_model_label", lambda: None)()` (same optional-method pattern already used
+  for `supports_batch()`) — so a test `FakeProvider` that doesn't implement the method simply gets `None`,
+  no crash. The label is stored on a new nullable column (`Project.image_model` / `HouseProject.render_model`,
+  additive migration in `app/db.py`) AND inside the existing `meta_json` blob, and exposed on
+  `ProjectStatusResponse.image_model` / `HouseProjectStatusResponse.render_model`.
+- **Frontend**: `renderResults()`/`renderHouseResults()` (`static/app.js`) show `"Generated with {label}"`
+  in a small line under the room/plot description (`#image-model-note` / `#house-image-model-note` in
+  `static/index.html`) whenever the field is present; hidden otherwise (e.g. old projects generated before
+  this feature, where the column is `None`).
+
 ## Testing convention
 
 All provider calls in tests are **mocked** — no real Gemini, OpenAI, or SerpApi network calls in the test

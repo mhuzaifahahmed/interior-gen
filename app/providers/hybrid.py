@@ -1,4 +1,5 @@
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
@@ -10,6 +11,24 @@ from app.providers.modal_provider import ModalImageProvider
 from app.providers.openai import OpenAIImageProvider
 
 logger = logging.getLogger(__name__)
+
+# User-facing labels for "which model produced this" - deliberately just two
+# values, with NO "fallback"/"backup" wording anywhere, per explicit user
+# instruction: whichever provider actually produced the bytes gets its plain
+# label, regardless of whether it was the primary pick or the reliability
+# fallback that ran. Self-hosted backends (Kaggle notebook, Modal deployment)
+# are both "our model" from the user's perspective - the distinction that
+# matters to them is self-hosted vs. paid third-party API, not which of the
+# two self-hosted platforms happened to be configured.
+_PROVIDER_LABELS = {
+    "KaggleImageProvider": "our model",
+    "ModalImageProvider": "our model",
+    "OpenAIImageProvider": "OpenAI",
+}
+
+
+def _label_for(provider) -> str:
+    return _PROVIDER_LABELS.get(type(provider).__name__, "OpenAI")
 
 
 def _default_room_image_provider(fallback_provider):
@@ -98,6 +117,17 @@ class HybridProvider(Provider):
         self._room_image_provider = room_image_provider or _default_room_image_provider(self._openai)
         self._floor_plan_provider = floor_plan_provider or idealhouse
 
+        # Which provider actually produced each room tier's bytes this
+        # generation - recorded as each tier completes (see
+        # generate_image()/generate_images_batch()), since that's the only
+        # place that knows whether the primary pick succeeded or the OpenAI
+        # fallback ran. The 3 tiers run on separate threads
+        # (app/pipeline/generate.py's ThreadPoolExecutor), so writes are
+        # guarded by a lock even though each thread writes a distinct key.
+        self._tier_provider_labels: dict[str, str] = {}
+        self._house_provider_label: str | None = None
+        self._label_lock = threading.Lock()
+
     def describe_room(self, image_bytes: bytes) -> str:
         return self._gemini.describe_room(image_bytes)
 
@@ -106,7 +136,9 @@ class HybridProvider(Provider):
 
     def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
         try:
-            return self._room_image_provider.generate_image(image_bytes, prompt, tier)
+            result = self._room_image_provider.generate_image(image_bytes, prompt, tier)
+            self._record_tier_label(tier, self._room_image_provider)
+            return result
         except Exception:
             if self._room_image_provider is self._openai:
                 raise  # already OpenAI (the fallback itself) - nothing left to try
@@ -116,7 +148,15 @@ class HybridProvider(Provider):
                 type(self._room_image_provider).__name__,
                 tier,
             )
-            return self._openai.generate_image(image_bytes, prompt, tier)
+            result = self._openai.generate_image(image_bytes, prompt, tier)
+            self._record_tier_label(tier, self._openai)
+            return result
+
+    def _record_tier_label(self, tier: str | None, provider) -> None:
+        if tier is None:
+            return
+        with self._label_lock:
+            self._tier_provider_labels[tier] = _label_for(provider)
 
     def supports_batch(self) -> bool:
         return self._room_image_provider.supports_batch()
@@ -125,7 +165,12 @@ class HybridProvider(Provider):
         self, image_bytes: bytes, tier_prompts: dict[str, str]
     ) -> dict[str, bytes]:
         try:
-            return self._room_image_provider.generate_images_batch(image_bytes, tier_prompts)
+            result = self._room_image_provider.generate_images_batch(image_bytes, tier_prompts)
+            label = _label_for(self._room_image_provider)
+            with self._label_lock:
+                for tier in tier_prompts:
+                    self._tier_provider_labels[tier] = label
+            return result
         except Exception:
             if self._room_image_provider is self._openai:
                 raise  # already OpenAI (the fallback itself) - nothing left to try
@@ -139,7 +184,30 @@ class HybridProvider(Provider):
                     tier: pool.submit(self._openai.generate_image, image_bytes, prompt, tier)
                     for tier, prompt in tier_prompts.items()
                 }
-                return {tier: future.result() for tier, future in futures.items()}
+                result = {tier: future.result() for tier, future in futures.items()}
+            label = _label_for(self._openai)
+            with self._label_lock:
+                for tier in tier_prompts:
+                    self._tier_provider_labels[tier] = label
+            return result
+
+    def get_image_model_label(self) -> str | None:
+        """Single display label summarizing which provider(s) produced the
+        room-redesign tiers generated so far: "our model" if every recorded
+        tier came from the self-hosted backend, "OpenAI" if every tier came
+        from OpenAI, "our model + OpenAI" if tiers genuinely diverged (only
+        possible on the per-tier, non-batch path, where each tier's fallback
+        is independent - see generate_image()'s docstring in hybrid.py's
+        class docstring), or None if no tier has completed yet. Deliberately
+        never says "fallback" - see _PROVIDER_LABELS above.
+        """
+        with self._label_lock:
+            labels = set(self._tier_provider_labels.values())
+        if not labels:
+            return None
+        if len(labels) == 1:
+            return next(iter(labels))
+        return "our model + OpenAI"
 
     def generate_materials(
         self,
@@ -167,7 +235,17 @@ class HybridProvider(Provider):
         return self._floor_plan_provider.generate_floor_plan(plot_description, dimensions, prompt)
 
     def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
-        return self._house_image_provider.generate_house_render(image_bytes, prompt)
+        result = self._house_image_provider.generate_house_render(image_bytes, prompt)
+        self._house_provider_label = _label_for(self._house_image_provider)
+        return result
+
+    def get_house_render_model_label(self) -> str | None:
+        """The label for whichever provider produced the house render - see
+        get_image_model_label()'s docstring for the label semantics. Always a
+        single value (no "our model + OpenAI" case) since
+        generate_house_render() has no runtime fallback - see this class's
+        docstring."""
+        return self._house_provider_label
 
     def generate_room_layout(
         self,

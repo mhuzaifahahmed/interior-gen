@@ -119,6 +119,7 @@ const retryBtn = document.getElementById("retry-btn");
 
 const resultsSection = document.getElementById("results");
 const roomDescriptionEl = document.getElementById("room-description");
+const imageModelNoteEl = document.getElementById("image-model-note");
 const resultsGrid = document.getElementById("results-grid");
 const startOverBtn = document.getElementById("start-over-btn");
 
@@ -565,6 +566,7 @@ const houseRetryBtn = document.getElementById("house-retry-btn");
 
 const houseResultsSection = document.getElementById("house-results");
 const plotDescriptionEl = document.getElementById("plot-description");
+const houseImageModelNoteEl = document.getElementById("house-image-model-note");
 const houseResultsGrid = document.getElementById("house-results-grid");
 const houseStartOverBtn = document.getElementById("house-start-over-btn");
 
@@ -1451,6 +1453,12 @@ historyModalOverlay.addEventListener("click", (e) => {
 
 function renderResults(data) {
   roomDescriptionEl.textContent = data.room_description ? `"${data.room_description}"` : "";
+  if (data.image_model) {
+    imageModelNoteEl.textContent = `Generated with ${data.image_model}`;
+    imageModelNoteEl.hidden = false;
+  } else {
+    imageModelNoteEl.hidden = true;
+  }
   resultsGrid.innerHTML = "";
 
   for (const tier of TIERS) {
@@ -1834,6 +1842,12 @@ const HOUSE_RESULT_TIERS = [
 
 function renderHouseResults(data) {
   plotDescriptionEl.textContent = data.plot_description ? `"${data.plot_description}"` : "";
+  if (data.render_model) {
+    houseImageModelNoteEl.textContent = `Generated with ${data.render_model}`;
+    houseImageModelNoteEl.hidden = false;
+  } else {
+    houseImageModelNoteEl.hidden = true;
+  }
   houseResultsGrid.innerHTML = "";
 
   for (const tier of HOUSE_RESULT_TIERS) {

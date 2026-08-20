@@ -60,6 +60,14 @@ class Project(SQLModel, table=True):
     # height is also supplied.
     room_dimensions_json: Optional[str] = None
 
+    # "our model" (Kaggle/Modal, self-hosted), "OpenAI", or "our model + OpenAI"
+    # (only possible on the per-tier fallback path, if tiers genuinely
+    # diverged) - see app/providers/hybrid.py's get_image_model_label().
+    # None until the first tier completes; never says "fallback" anywhere,
+    # per explicit user instruction - whichever provider actually produced
+    # the bytes gets its plain label.
+    image_model: Optional[str] = None
+
     meta_json: Optional[str] = None
 
 
@@ -108,6 +116,12 @@ class HouseProject(SQLModel, table=True):
     floor_plan_status: str = Field(default="idle")  # idle | running | not_configured | done | failed
 
     render_key: Optional[str] = None
+    # Which provider produced render_key - "our model" or "OpenAI", see
+    # Project.image_model's comment above and
+    # app/providers/hybrid.py's get_house_render_model_label(). Always a
+    # single value here (never "our model + OpenAI") since house rendering
+    # has no runtime fallback.
+    render_model: Optional[str] = None
     # A second, blueprint-sourced 3D isometric render (render_layout_key,
     # briefly committed to git) and later a per-floor AI-drawn "CAD plan"
     # (cad_plan_keys_json, never committed) both existed here and were both

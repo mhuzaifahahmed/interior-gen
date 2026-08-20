@@ -291,7 +291,14 @@ def run_pipeline(
                 session.add(project)
                 session.commit()
 
+            # Which provider actually produced the tier images - "our model"/
+            # "OpenAI"/"our model + OpenAI", or None if the provider doesn't
+            # track this (e.g. a test FakeProvider). See
+            # app/providers/hybrid.py's get_image_model_label() docstring.
+            image_model = getattr(provider, "get_image_model_label", lambda: None)()
+
             project.status = "done"
+            project.image_model = image_model
             project.meta_json = json.dumps(
                 {
                     "prompt_version": PROMPT_VERSION,
@@ -300,6 +307,7 @@ def run_pipeline(
                     "interior_style": interior_style,
                     "color_palette": color_palette,
                     "additional_instructions": additional_instructions,
+                    "image_model": image_model,
                 }
             )
             session.add(project)

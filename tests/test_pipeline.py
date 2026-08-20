@@ -96,6 +96,55 @@ def test_run_pipeline_success(monkeypatch):
     assert "repaint over visible stains" in economical_prompt
 
 
+def test_run_pipeline_stores_image_model_label_when_provider_supports_it(monkeypatch):
+    # FakeProvider (the default in this file) has no get_image_model_label(),
+    # so project.image_model stays None - that's the normal/expected case
+    # for a provider that doesn't track this (asserted implicitly by every
+    # other test in this file still passing). This test covers the case
+    # where the provider DOES support it (the real HybridProvider).
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["p1c/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="p1c", status="queued", original_key="p1c/original.png")
+        session.add(project)
+        session.commit()
+
+    class LabeledProvider(FakeProvider):
+        def get_image_model_label(self):
+            return "our model"
+
+    run_pipeline("p1c", LabeledProvider(), storage, "Modern", "Neutral")
+
+    with Session(engine) as session:
+        project = session.get(Project, "p1c")
+        assert project.image_model == "our model"
+        meta = json.loads(project.meta_json)
+        assert meta["image_model"] == "our model"
+
+
+def test_run_pipeline_image_model_stays_none_when_provider_does_not_track_it(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["p1d/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="p1d", status="queued", original_key="p1d/original.png")
+        session.add(project)
+        session.commit()
+
+    run_pipeline("p1d", FakeProvider(), storage, "Modern", "Neutral")
+
+    with Session(engine) as session:
+        project = session.get(Project, "p1d")
+        assert project.image_model is None
+
+
 def test_run_pipeline_generates_tier_images_concurrently(monkeypatch):
     # Regression guard: the 3 tiers' generate_image calls used to run in a
     # plain sequential loop, so total wait time was ~3x a single call's -

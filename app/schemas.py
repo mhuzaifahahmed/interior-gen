@@ -26,6 +26,10 @@ class ProjectStatusResponse(BaseModel):
     # None when the user didn't supply measurements (materials pricing then
     # falls back to provider.estimate_room_area()'s Gemini vision guess).
     room_dimensions: Optional[dict] = None
+    # "our model", "OpenAI", or "our model + OpenAI" - which provider(s)
+    # actually produced the generated images. None until at least one tier
+    # completes. See app/providers/hybrid.py's get_image_model_label().
+    image_model: Optional[str] = None
 
 
 class HouseProjectCreateResponse(BaseModel):
@@ -54,3 +58,7 @@ class HouseProjectStatusResponse(BaseModel):
     # `prompt` above. None for projects created before this feature, or via a
     # direct API call that only supplied the legacy free-text `prompt` field.
     house_inputs: Optional[dict] = None
+    # "our model" or "OpenAI" - which provider produced the render. None
+    # until the render completes. See
+    # app/providers/hybrid.py's get_house_render_model_label().
+    render_model: Optional[str] = None

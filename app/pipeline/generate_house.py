@@ -172,6 +172,12 @@ def run_house_pipeline(
             render_key = f"{key_prefix}/{house_project_id}/render.png"
             storage.put(render_key, render_bytes, content_type="image/png")
             house_project.render_key = render_key
+            # Which provider produced the render - "our model"/"OpenAI", or
+            # None if the provider doesn't track this (e.g. a test
+            # FakeProvider). See app/providers/hybrid.py's
+            # get_house_render_model_label() docstring.
+            render_model = getattr(provider, "get_house_render_model_label", lambda: None)()
+            house_project.render_model = render_model
             session.add(house_project)
             session.commit()
 
@@ -184,6 +190,7 @@ def run_house_pipeline(
                     "floor_plan_generated": house_project.floor_plan_status == "done",
                     "blueprint_generated": house_project.blueprint_status == "done",
                     "floor_count": len(blueprint_keys) or (len(room_layout["floors"]) if room_layout else 0),
+                    "render_model": render_model,
                 }
             )
             session.add(house_project)

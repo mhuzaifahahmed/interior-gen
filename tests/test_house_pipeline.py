@@ -199,6 +199,52 @@ def test_run_house_pipeline_stores_meta_json(monkeypatch):
         assert meta["floor_count"] == 1
 
 
+def test_run_house_pipeline_stores_render_model_when_provider_supports_it(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["h5b/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="h5b", status="queued", plot_image_key="h5b/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    class LabeledProvider(FakeProvider):
+        def get_house_render_model_label(self):
+            return "our model"
+
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    run_house_pipeline("h5b", LabeledProvider(), storage, dimensions, prompt="modern style")
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "h5b")
+        assert house_project.render_model == "our model"
+        meta = json.loads(house_project.meta_json)
+        assert meta["render_model"] == "our model"
+
+
+def test_run_house_pipeline_render_model_stays_none_when_provider_does_not_track_it(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["h5c/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="h5c", status="queued", plot_image_key="h5c/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    run_house_pipeline("h5c", FakeProvider(), storage, dimensions, prompt="modern style")
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "h5c")
+        assert house_project.render_model is None
+
+
 def test_run_house_pipeline_generates_blueprint_per_floor(monkeypatch):
     engine = make_test_engine()
     monkeypatch.setattr(generate_house_module, "engine", engine)
