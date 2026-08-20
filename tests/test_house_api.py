@@ -1,11 +1,15 @@
 import io
 import json
+import uuid
 
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlmodel import Session
 
 import app.main as main_module
+from app.db import engine
 from app.main import app
+from app.models import HouseProject
 from tests.conftest import login_as
 
 # See tests/test_api.py's identical alias - Clerk owns signup/login now.
@@ -218,6 +222,76 @@ def test_house_input_metadata_json_written_to_storage(monkeypatch):
             "kitchen_each_floor": False,
             "extras": "modern style",
         }
+
+
+def test_cancel_house_project_flips_a_running_project_to_cancelled():
+    # See test_api.py's identical comment on test_cancel_project_flips_...
+    # for why a random id is used - no test-DB isolation in this app.
+    hid = f"hcancel-{uuid.uuid4().hex}"
+    with TestClient(app) as client:
+        user_id = login_as(client)
+        with Session(engine) as session:
+            house_project = HouseProject(id=hid, status="running", user_id=user_id)
+            session.add(house_project)
+            session.commit()
+
+        res = client.post(f"/api/house-projects/{hid}/cancel")
+        assert res.status_code == 200
+        assert res.json()["status"] == "cancelled"
+
+        with Session(engine) as session:
+            house_project = session.get(HouseProject, hid)
+            assert house_project.status == "cancelled"
+
+
+def test_cancel_house_project_is_a_noop_on_an_already_done_project():
+    hid = f"hcancel-{uuid.uuid4().hex}"
+    with TestClient(app) as client:
+        user_id = login_as(client)
+        with Session(engine) as session:
+            house_project = HouseProject(id=hid, status="done", user_id=user_id)
+            session.add(house_project)
+            session.commit()
+
+        res = client.post(f"/api/house-projects/{hid}/cancel")
+        assert res.status_code == 200
+        assert res.json()["status"] == "done"
+
+
+def test_cancel_house_project_404s_for_another_users_project():
+    hid = f"hcancel-{uuid.uuid4().hex}"
+    with TestClient(app) as client_a:
+        user_a = login_as(client_a)
+        with Session(engine) as session:
+            house_project = HouseProject(id=hid, status="running", user_id=user_a)
+            session.add(house_project)
+            session.commit()
+
+    with TestClient(app) as client_b:
+        login_as(client_b)
+        res = client_b.post(f"/api/house-projects/{hid}/cancel")
+        assert res.status_code == 404
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, hid)
+        assert house_project.status == "running"
+
+
+def test_cancelled_house_projects_excluded_from_list_house_projects():
+    hid_cancelled = f"hcancel-{uuid.uuid4().hex}"
+    hid_done = f"hcancel-{uuid.uuid4().hex}"
+    with TestClient(app) as client:
+        user_id = login_as(client)
+        with Session(engine) as session:
+            session.add(HouseProject(id=hid_cancelled, status="cancelled", user_id=user_id))
+            session.add(HouseProject(id=hid_done, status="done", user_id=user_id))
+            session.commit()
+
+        res = client.get("/api/house-projects")
+        assert res.status_code == 200
+        ids = {p["house_project_id"] for p in res.json()}
+        assert hid_cancelled not in ids
+        assert hid_done in ids
 
 
 def test_house_display_name_appended_to_storage_namespace(monkeypatch):

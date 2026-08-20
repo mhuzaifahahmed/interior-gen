@@ -333,15 +333,46 @@ def get_project(
     return _project_to_response(project, get_storage())
 
 
+@app.post("/api/projects/{project_id}/cancel", response_model=ProjectStatusResponse)
+def cancel_project(
+    project_id: str, session: Session = Depends(get_session), user: AuthUser = Depends(require_user)
+):
+    """Best-effort cancel-and-discard for an in-progress generation (the
+    "Cancel generating..." button on the progress screen). Generation itself
+    is a server-side BackgroundTask that can't be killed mid-request (an
+    image call already in flight finishes regardless) - this only flips
+    `status` to "cancelled", which run_pipeline/run_house_pipeline poll for
+    at the next stage boundary (see their `_is_cancelled()` checks) and stop
+    at, discarding whatever partial result exists. Idempotent and a no-op on
+    an already-terminal project (done/failed/cancelled) - only queued/running
+    projects actually change state. Same 404-not-403 owner scoping as
+    get_project.
+    """
+    project = session.get(Project, project_id)
+    if project is None or project.user_id != user.id:
+        raise HTTPException(404, "project not found")
+
+    if project.status in ("queued", "running"):
+        project.status = "cancelled"
+        session.add(project)
+        session.commit()
+
+    return _project_to_response(project, get_storage())
+
+
 @app.get("/api/projects", response_model=list[ProjectStatusResponse])
 def list_projects(session: Session = Depends(get_session), user: AuthUser = Depends(require_user)):
     """History dropdown (static/app.js's history modal) - every Room Redesign
     project this user has ever created, newest first. Same 404-not-403 owner
     scoping as get_project applies implicitly here since the query is already
     filtered to user.id - there's no way to see another user's rows at all.
+    Cancelled projects are excluded - a user explicitly discarded them, so
+    they shouldn't reappear in history (see cancel_project's docstring).
     """
     projects = session.exec(
-        select(Project).where(Project.user_id == user.id).order_by(Project.created_at.desc())
+        select(Project)
+        .where(Project.user_id == user.id, Project.status != "cancelled")
+        .order_by(Project.created_at.desc())
     ).all()
     storage = get_storage()
     return [_project_to_response(p, storage) for p in projects]
@@ -557,12 +588,33 @@ def get_house_project(
     return _house_project_to_response(house_project, get_storage())
 
 
+@app.post("/api/house-projects/{house_project_id}/cancel", response_model=HouseProjectStatusResponse)
+def cancel_house_project(
+    house_project_id: str, session: Session = Depends(get_session), user: AuthUser = Depends(require_user)
+):
+    """Mirrors cancel_project() above - see its docstring for the full
+    best-effort cancel-and-discard contract."""
+    house_project = session.get(HouseProject, house_project_id)
+    if house_project is None or house_project.user_id != user.id:
+        raise HTTPException(404, "house project not found")
+
+    if house_project.status in ("queued", "running"):
+        house_project.status = "cancelled"
+        session.add(house_project)
+        session.commit()
+
+    return _house_project_to_response(house_project, get_storage())
+
+
 @app.get("/api/house-projects", response_model=list[HouseProjectStatusResponse])
 def list_house_projects(session: Session = Depends(get_session), user: AuthUser = Depends(require_user)):
     """History dropdown - every Build a House project this user has ever
-    created, newest first. Mirrors list_projects() above."""
+    created, newest first. Mirrors list_projects() above. Cancelled projects
+    are excluded (see cancel_house_project's docstring)."""
     house_projects = session.exec(
-        select(HouseProject).where(HouseProject.user_id == user.id).order_by(HouseProject.created_at.desc())
+        select(HouseProject)
+        .where(HouseProject.user_id == user.id, HouseProject.status != "cancelled")
+        .order_by(HouseProject.created_at.desc())
     ).all()
     storage = get_storage()
     return [_house_project_to_response(hp, storage) for hp in house_projects]

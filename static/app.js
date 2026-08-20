@@ -96,6 +96,7 @@ const dropzonePreview = document.getElementById("dropzone-preview");
 const previewImg = document.getElementById("preview-img");
 const previewFilename = document.getElementById("preview-filename");
 const generateBtn = document.getElementById("generate-btn");
+const cancelGenerationBtn = document.getElementById("cancel-generation-btn");
 const removePhotoBtn = document.getElementById("remove-photo-btn");
 const interiorStyleSelect = document.getElementById("interior-style-select");
 const colorPaletteSelect = document.getElementById("color-palette-select");
@@ -543,6 +544,7 @@ const houseDropzonePreview = document.getElementById("house-dropzone-preview");
 const housePreviewImg = document.getElementById("house-preview-img");
 const housePreviewFilename = document.getElementById("house-preview-filename");
 const houseGenerateBtn = document.getElementById("house-generate-btn");
+const houseCancelGenerationBtn = document.getElementById("house-cancel-generation-btn");
 const houseRemovePhotoBtn = document.getElementById("house-remove-photo-btn");
 const houseLengthInput = document.getElementById("house-length");
 const houseWidthInput = document.getElementById("house-width");
@@ -690,6 +692,87 @@ homeToolsHouseRow.addEventListener("click", () => switchTab("house"));
 
 const PENDING_GENERATION_KEY = "interior-gen:pending-generation";
 
+/* ---------- Active generation (survive navigation/reload) ---------- */
+/* Generation itself is a server-side BackgroundTask (app/main.py) that
+   always runs to completion regardless of the client - but the poll loop
+   that shows live progress only lives in this page's memory, so a reload or
+   navigating away (e.g. to sign up) used to orphan the view: the generation
+   kept running, but the user landed back on a blank upload screen with no
+   indication anything was happening (only recoverable later via History).
+   localStorage (not sessionStorage - this SHOULD survive a full reload/new
+   tab, unlike the one-shot pending-generation handoff above) holds just
+   {tab, id} for whichever generation is currently in flight, cleared the
+   moment it reaches any terminal state (done/failed/cancelled) or the user
+   explicitly cancels it. */
+
+const ACTIVE_GENERATION_KEY = "interior-gen:active-generation";
+
+function saveActiveGeneration(tab, id) {
+  try {
+    localStorage.setItem(ACTIVE_GENERATION_KEY, JSON.stringify({ tab, id }));
+  } catch {
+    // localStorage full/unavailable - not fatal, reload-resume just won't work.
+  }
+}
+
+function clearActiveGeneration() {
+  try {
+    localStorage.removeItem(ACTIVE_GENERATION_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+// Per-tab poll state - a project id + a cancelled flag, so a stale poll
+// scheduled via setTimeout() before a Cancel click can recognize it's no
+// longer current and stop rescheduling itself instead of racing the UI
+// back into "progress" state.
+let activeRoomProjectId = null;
+let roomPollCancelled = false;
+let activeHouseProjectId = null;
+let housePollCancelled = false;
+
+async function resumeActiveGeneration() {
+  const raw = localStorage.getItem(ACTIVE_GENERATION_KEY);
+  if (!raw) return;
+
+  let active;
+  try {
+    active = JSON.parse(raw);
+  } catch {
+    clearActiveGeneration();
+    return;
+  }
+  if (!active || !active.id || (active.tab !== "room" && active.tab !== "house")) {
+    clearActiveGeneration();
+    return;
+  }
+
+  // Instant tab switch (page-load context, no GSAP transition needed - same
+  // reasoning as restorePendingGeneration() below).
+  homeTabPanel.hidden = true;
+  roomTabPanel.hidden = active.tab !== "room";
+  houseTabPanel.hidden = active.tab !== "house";
+  tabBtnHome.classList.remove("is-active");
+  tabBtnRoom.classList.toggle("is-active", active.tab === "room");
+  tabBtnHouse.classList.toggle("is-active", active.tab === "house");
+  currentTab = active.tab;
+
+  if (active.tab === "room") {
+    showState("progress");
+    startProgressMessages();
+    activeRoomProjectId = active.id;
+    roomPollCancelled = false;
+    pollProject(active.id);
+  } else {
+    showHouseState("progress");
+    startHouseProgress();
+    activeHouseProjectId = active.id;
+    housePollCancelled = false;
+    pollHouseProject(active.id);
+  }
+}
+
 function savePendingGeneration(tab, fields) {
   try {
     sessionStorage.setItem(PENDING_GENERATION_KEY, JSON.stringify({ tab, ...fields }));
@@ -766,7 +849,15 @@ async function restorePendingGeneration() {
   }
 }
 
-restorePendingGeneration();
+// A real in-flight generation takes priority over a merely-drafted form (the
+// two shouldn't normally coexist, but if they somehow do, resuming a
+// generation that's actually running beats restoring unsubmitted field
+// values).
+if (localStorage.getItem(ACTIVE_GENERATION_KEY)) {
+  resumeActiveGeneration();
+} else {
+  restorePendingGeneration();
+}
 
 const TIERS = [
   { key: "original", label: "Original", desc: "Your uploaded room." },
@@ -1022,7 +1113,28 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
+  activeRoomProjectId = projectId;
+  roomPollCancelled = false;
+  saveActiveGeneration("room", projectId);
   pollProject(projectId);
+});
+
+cancelGenerationBtn.addEventListener("click", async () => {
+  if (!activeRoomProjectId || roomPollCancelled) return;
+  if (!confirm("Cancel this generation? This can't be undone and won't be saved to History.")) return;
+
+  const idToCancel = activeRoomProjectId;
+  roomPollCancelled = true;
+  clearActiveGeneration();
+  showState("upload");
+
+  try {
+    await authFetch(apiUrl(`/api/projects/${idToCancel}/cancel`), { method: "POST" });
+  } catch {
+    // Best-effort - if this request fails, the generation just runs to
+    // completion server-side and lands in History normally instead of
+    // being discarded. Not worth surfacing an error for.
+  }
 });
 
 /* ---------- Progress engine ---------- */
@@ -1185,6 +1297,11 @@ function finishProgress(data, onDone) {
 }
 
 async function pollProject(projectId) {
+  // A stale poll scheduled before a Cancel click (or before a different
+  // generation started) recognizes it's no longer current and stops here,
+  // rather than racing the UI back into "progress" state.
+  if (roomPollCancelled || projectId !== activeRoomProjectId) return;
+
   let data;
   try {
     const res = await authFetch(apiUrl(`/api/projects/${projectId}`));
@@ -1196,6 +1313,8 @@ async function pollProject(projectId) {
       // already finished server-side. The session token can expire mid-poll
       // (long generations, or a Clerk token-refresh failure) well after the
       // initial authenticated POST that created this project succeeded.
+      // The active-generation record is deliberately KEPT here (not a
+      // terminal outcome) - reloading after logging back in resumes polling.
       showError(
         "Your session expired while this was generating. Please log in again - " +
           "the generation itself finished and will be in your History once you're back in."
@@ -1213,13 +1332,26 @@ async function pollProject(projectId) {
   }
 
   if (data.status === "failed") {
+    clearActiveGeneration();
     showError(data.error || "Unknown error during generation.");
+    return;
+  }
+
+  if (data.status === "cancelled") {
+    // Reached only via a resumed poll after reload finding a generation
+    // that was cancelled elsewhere (e.g. another tab/device) - a same-tab
+    // Cancel click already transitions the UI directly, before this branch
+    // could ever run for it (see cancelGenerationBtn's handler).
+    roomPollCancelled = true;
+    clearActiveGeneration();
+    showState("upload");
     return;
   }
 
   applyPollUpdate(data);
 
   if (data.status === "done") {
+    clearActiveGeneration();
     finishProgress(data, () => {
       renderResults(data);
       showState("results");
@@ -1541,6 +1673,8 @@ function showError(message) {
 
 function resetToUpload() {
   stopProgressMessages();
+  roomPollCancelled = true;
+  clearActiveGeneration();
   clearSelectedFile();
   interiorStyleDropdown.setValue("");
   colorPaletteDropdown.setValue("");
@@ -1690,7 +1824,26 @@ houseForm.addEventListener("submit", async (e) => {
     return;
   }
 
+  activeHouseProjectId = houseProjectId;
+  housePollCancelled = false;
+  saveActiveGeneration("house", houseProjectId);
   pollHouseProject(houseProjectId);
+});
+
+houseCancelGenerationBtn.addEventListener("click", async () => {
+  if (!activeHouseProjectId || housePollCancelled) return;
+  if (!confirm("Cancel this generation? This can't be undone and won't be saved to History.")) return;
+
+  const idToCancel = activeHouseProjectId;
+  housePollCancelled = true;
+  clearActiveGeneration();
+  showHouseState("upload");
+
+  try {
+    await authFetch(apiUrl(`/api/house-projects/${idToCancel}/cancel`), { method: "POST" });
+  } catch {
+    // Best-effort - see cancelGenerationBtn's identical comment above.
+  }
 });
 
 /* ---------- Progress engine ---------- */
@@ -1792,13 +1945,17 @@ function finishHouseProgress(onDone) {
 }
 
 async function pollHouseProject(houseProjectId) {
+  // See pollProject()'s identical guard above for why this matters.
+  if (housePollCancelled || houseProjectId !== activeHouseProjectId) return;
+
   let data;
   try {
     const res = await authFetch(apiUrl(`/api/house-projects/${houseProjectId}`));
     if (res.status === 401) {
       // Same fix as pollProject() above - see its comment for the full
       // explanation (a stale/expired session token mid-poll used to loop
-      // forever instead of surfacing an error).
+      // forever instead of surfacing an error). Active-generation record
+      // kept, same reasoning as pollProject()'s 401 branch.
       showHouseError(
         "Your session expired while this was generating. Please log in again - " +
           "the generation itself finished and will be in your History once you're back in."
@@ -1816,13 +1973,23 @@ async function pollHouseProject(houseProjectId) {
   }
 
   if (data.status === "failed") {
+    clearActiveGeneration();
     showHouseError(data.error || "Unknown error during generation.");
+    return;
+  }
+
+  if (data.status === "cancelled") {
+    // See pollProject()'s identical branch above for when this is reached.
+    housePollCancelled = true;
+    clearActiveGeneration();
+    showHouseState("upload");
     return;
   }
 
   applyHousePollUpdate(data);
 
   if (data.status === "done") {
+    clearActiveGeneration();
     finishHouseProgress(() => {
       renderHouseResults(data);
       showHouseState("results");
@@ -1943,6 +2110,8 @@ function showHouseError(message) {
 
 function resetToHouseUpload() {
   stopHouseProgress();
+  housePollCancelled = true;
+  clearActiveGeneration();
   clearHouseSelectedFile();
   houseLengthInput.value = "";
   houseWidthInput.value = "";

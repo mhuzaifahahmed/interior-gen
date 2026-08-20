@@ -1,6 +1,7 @@
 import json
 import time
 
+from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.models import Project
@@ -143,6 +144,87 @@ def test_run_pipeline_image_model_stays_none_when_provider_does_not_track_it(mon
     with Session(engine) as session:
         project = session.get(Project, "p1d")
         assert project.image_model is None
+
+
+def test_run_pipeline_stops_when_cancelled_before_image_generation(monkeypatch):
+    # Simulates a real cancel request (app/main.py's cancel_project) landing
+    # via a SEPARATE session while the pipeline is mid-run - the pipeline's
+    # own _is_cancelled() checkpoint must see it (via session.refresh(), not
+    # a stale in-memory read) and stop before the costly image-generation
+    # step, without overwriting the cancelled status.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["pcancel1/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="pcancel1", status="queued", original_key="pcancel1/original.png")
+        session.add(project)
+        session.commit()
+
+    class CancellingProvider(FakeProvider):
+        def generate_tier_notes(self, image_bytes):
+            with Session(engine) as cancel_session:
+                p = cancel_session.get(Project, "pcancel1")
+                p.status = "cancelled"
+                cancel_session.add(p)
+                cancel_session.commit()
+            return {}
+
+    provider = CancellingProvider()
+    run_pipeline("pcancel1", provider, storage, "Modern", "Neutral")
+
+    assert provider.image_calls == []
+
+    with Session(engine) as session:
+        project = session.get(Project, "pcancel1")
+        assert project.status == "cancelled"
+        for tier in TIERS:
+            assert getattr(project, f"{tier}_key") is None
+
+
+def test_run_pipeline_stops_when_cancelled_during_image_generation(monkeypatch):
+    # StaticPool (not make_test_engine()'s default pooling) is required here
+    # specifically because this test's fake provider opens a nested Session
+    # from INSIDE generate_image(), which runs on a worker thread (the
+    # per-tier ThreadPoolExecutor) - plain SQLite in-memory pooling gives
+    # each thread its own separate :memory: database, which would silently
+    # "lose" the project table. Real production code never does this (only
+    # the main pipeline thread ever touches the session - see run_pipeline's
+    # comment on that), this is purely a test-simulation need.
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["pcancel2/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="pcancel2", status="queued", original_key="pcancel2/original.png")
+        session.add(project)
+        session.commit()
+
+    class CancellingDuringImageProvider(FakeProvider):
+        def generate_image(self, image_bytes, prompt, tier=None):
+            if tier == "economical":
+                with Session(engine) as cancel_session:
+                    p = cancel_session.get(Project, "pcancel2")
+                    p.status = "cancelled"
+                    cancel_session.add(p)
+                    cancel_session.commit()
+            return super().generate_image(image_bytes, prompt, tier)
+
+    run_pipeline("pcancel2", CancellingDuringImageProvider(), storage, "Modern", "Neutral", city="Karachi")
+
+    with Session(engine) as session:
+        project = session.get(Project, "pcancel2")
+        assert project.status == "cancelled"
+        # Materials/final "done" write never happened - the checkpoint after
+        # image generation caught the cancellation first.
+        assert project.materials_json is None
 
 
 def test_run_pipeline_generates_tier_images_concurrently(monkeypatch):

@@ -245,6 +245,80 @@ def test_run_house_pipeline_render_model_stays_none_when_provider_does_not_track
         assert house_project.render_model is None
 
 
+def test_run_house_pipeline_stops_when_cancelled_before_blueprint_step(monkeypatch):
+    # Simulates a real cancel request (app/main.py's cancel_house_project)
+    # landing via a SEPARATE session while the pipeline is mid-run. No
+    # worker threads in this pipeline (unlike room redesign's per-tier
+    # executor), so a plain make_test_engine() (no StaticPool needed) works.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hcancel1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hcancel1", status="queued", plot_image_key="hcancel1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    class CancellingProvider(FakeProvider):
+        def generate_floor_plan(self, plot_description, dimensions, prompt):
+            with Session(engine) as cancel_session:
+                hp = cancel_session.get(HouseProject, "hcancel1")
+                hp.status = "cancelled"
+                cancel_session.add(hp)
+                cancel_session.commit()
+            return super().generate_floor_plan(plot_description, dimensions, prompt)
+
+    provider = CancellingProvider()
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    run_house_pipeline("hcancel1", provider, storage, dimensions, prompt="modern style")
+
+    assert provider.room_layout_calls == []
+    assert provider.render_calls == []
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hcancel1")
+        assert house_project.status == "cancelled"
+        assert house_project.render_key is None
+
+
+def test_run_house_pipeline_stops_when_cancelled_before_render(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hcancel2/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hcancel2", status="queued", plot_image_key="hcancel2/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    class CancellingProvider(FakeProvider):
+        def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+            with Session(engine) as cancel_session:
+                hp = cancel_session.get(HouseProject, "hcancel2")
+                hp.status = "cancelled"
+                cancel_session.add(hp)
+                cancel_session.commit()
+            return super().generate_room_layout(dimensions, prompt, plot_description, floor_count)
+
+    provider = CancellingProvider()
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    run_house_pipeline("hcancel2", provider, storage, dimensions, prompt="modern style")
+
+    assert provider.render_calls == []
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hcancel2")
+        assert house_project.status == "cancelled"
+        assert house_project.render_key is None
+        # The blueprint step itself DID complete before the checkpoint caught
+        # the cancellation - its result is just never used for a render.
+        assert house_project.blueprint_status == "done"
+
+
 def test_run_house_pipeline_generates_blueprint_per_floor(monkeypatch):
     engine = make_test_engine()
     monkeypatch.setattr(generate_house_module, "engine", engine)

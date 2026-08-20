@@ -1108,6 +1108,65 @@ replaced the old system" below for the real incident that drove it.
   token) plus a couple of integration checks against the real app (401 without/with a bad token, 200 with
   a valid one). `tests/test_google_oauth.py` is deleted — there's no local Google OAuth code left to test.
 
+## Resilient loading (reconnect on reload/navigation) + Cancel generating…
+
+Generation was already a server-side FastAPI `BackgroundTask` (`app/main.py`'s `create_project`/
+`create_house_project` → `background_tasks.add_task`) that always runs to completion regardless of the
+client — but the live progress VIEW lived only in an in-memory JS variable (the project id passed into
+`pollProject()`/`pollHouseProject()`), so a reload or navigating away (e.g. to sign up) orphaned it: the
+generation kept running server-side, but the user landed back on a blank upload screen with no indication
+anything was happening, recoverable only via History once it finished. Two real problems fixed together:
+the view not surviving navigation, and no way to actually stop/discard a generation the user no longer
+wants.
+
+- **Reconnect**: `static/app.js` persists `{tab, id}` to `localStorage` under `interior-gen:active-generation`
+  (`saveActiveGeneration()`/`clearActiveGeneration()`) the moment a generation is successfully created,
+  cleared the moment it reaches any terminal state (`done`/`failed`/`cancelled`) or the user explicitly
+  cancels it — deliberately `localStorage`, not the pre-existing `sessionStorage`-based
+  `savePendingGeneration()` (a SEPARATE, one-shot 401-login-redirect handoff for UNSUBMITTED form fields,
+  untouched by this feature — the two mechanisms solve different problems and don't share a key).
+  `resumeActiveGeneration()` runs at page load (alongside the existing `restorePendingGeneration()` — a
+  real in-flight generation takes priority if both keys somehow exist) and instantly switches to the right
+  tab, shows the progress card, and resumes polling from where it left off — the poll response's real data
+  (materials_status, blueprint_status, image presence) naturally reconstructs the correct stepper/stage
+  state, no separate "resume state" needed.
+- **Cancel-and-discard, not just "stop watching"**: a real **"Cancel generating…"** button on both progress
+  cards. Best-effort — a paid image/GPU call already in flight when clicked still finishes; its result is
+  simply discarded rather than shown or saved, matching the plainly-communicated limit of what a server-side
+  BackgroundTask can do (no true mid-request kill). Backend: `POST /api/projects/{id}/cancel` and
+  `POST /api/house-projects/{id}/cancel` (`app/main.py`) flip `status` to a new `"cancelled"` value —
+  idempotent, only actually changes `queued`/`running` rows, owner-scoped with the same 404-not-403
+  treatment as every other project endpoint. The pipelines (`run_pipeline()`/`run_house_pipeline()`) poll
+  for this via `_is_cancelled(session, project)` (`app/pipeline/generate.py`/`generate_house.py`) at stage
+  boundaries — room: before image generation starts, and again right after it finishes (before materials
+  join/`done`); house: before the blueprint step, and again right before the paid render call (the most
+  valuable checkpoint, since it's the costly step). **`_is_cancelled()` MUST call `session.refresh(project)`,
+  not read the in-memory object** — the cancel request lands via a completely separate request/session, so
+  the long-lived pipeline session's own identity-map cache would otherwise never see it. On a hit, the
+  pipeline returns immediately without overwriting `status` back to `done`/`failed`. `list_projects`/
+  `list_house_projects` exclude `status == "cancelled"` rows so a discarded run never reappears in History.
+  No S3 cleanup — a cancelled project is simply never rendered again, and its (if any) partial objects are
+  harmless orphans.
+- **Frontend poll-loop safety**: `roomPollCancelled`/`housePollCancelled` + `activeRoomProjectId`/
+  `activeHouseProjectId` module-level flags let a poll already scheduled via `setTimeout()` before a Cancel
+  click recognize it's stale and stop rescheduling itself, instead of racing the UI back into "progress"
+  after the user already left it. `pollProject()`/`pollHouseProject()` also handle a `"cancelled"` status
+  arriving mid-poll (e.g. resumed after reload, discovering the generation was cancelled from elsewhere) by
+  quietly returning to the upload screen.
+- **Test note**: `tests/test_pipeline.py`'s/`tests/test_house_pipeline.py`'s cancellation tests simulate a
+  concurrent cancel request by opening a genuinely SEPARATE `Session(engine)` from inside a fake provider
+  method (mirroring what the real cancel endpoint does) - one room test needed a `StaticPool`-backed test
+  engine specifically because it does this from a WORKER THREAD (the per-tier `ThreadPoolExecutor`), and
+  plain SQLite in-memory pooling gives each thread its own separate `:memory:` database, silently "losing"
+  the table. Real production code never opens a session from a worker thread (see `run_pipeline()`'s own
+  comment on that) — this is purely a test-simulation need. Also: `tests/test_api.py`/`tests/test_house_api.py`
+  create rows directly via `app.db.engine` (no `TestClient` POST reaches a `queued`/`running` state
+  observably — `BackgroundTasks` run synchronously within `TestClient`'s request, so a project is already
+  `done` by the time the create response returns) — and use random `uuid4`-suffixed ids, since **this
+  project's test suite has no DB isolation for `test_api.py`/`test_house_api.py`** (they hit the real
+  configured `DATABASE_URL`, normally the dev `data/app.db` file) — a fixed literal id would collide with
+  a leftover row from the same test's own previous run.
+
 ## Model attribution ("Generated with our model" / "Generated with OpenAI")
 
 After a generation completes, the results screen (both Room Redesign and Build a House) shows a short line

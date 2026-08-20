@@ -1,11 +1,15 @@
 import io
 import json
+import uuid
 
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlmodel import Session
 
 import app.main as main_module
+from app.db import engine
 from app.main import app
+from app.models import Project
 from tests.conftest import login_as
 
 # Generators are gated behind login now - every test hitting them needs a
@@ -386,6 +390,84 @@ def test_list_projects_excludes_other_users(monkeypatch):
         res = client_b.get("/api/projects")
         assert res.status_code == 200
         assert res.json() == []
+
+
+def test_cancel_project_flips_a_running_project_to_cancelled():
+    # POST /api/projects normally completes its background task
+    # synchronously within TestClient's request (see test_full_upload_and_
+    # poll_flow - the project is already "done" by the time the create
+    # response returns), so there's no way to catch a project mid-generation
+    # through the real endpoint in this test setup. Create the row directly
+    # in "running" state instead, mirroring what a real in-progress
+    # generation looks like from the DB's perspective. Uses a real random id
+    # (not a fixed literal) since this app has no test-DB isolation - the
+    # real dev database persists across test runs, so a fixed id would
+    # collide with the row this same test left behind last time.
+    pid = f"cancel-{uuid.uuid4().hex}"
+    with TestClient(app) as client:
+        user_id = login_as(client)
+        with Session(engine) as session:
+            project = Project(id=pid, status="running", user_id=user_id)
+            session.add(project)
+            session.commit()
+
+        res = client.post(f"/api/projects/{pid}/cancel")
+        assert res.status_code == 200
+        assert res.json()["status"] == "cancelled"
+
+        with Session(engine) as session:
+            project = session.get(Project, pid)
+            assert project.status == "cancelled"
+
+
+def test_cancel_project_is_a_noop_on_an_already_done_project():
+    pid = f"cancel-{uuid.uuid4().hex}"
+    with TestClient(app) as client:
+        user_id = login_as(client)
+        with Session(engine) as session:
+            project = Project(id=pid, status="done", user_id=user_id)
+            session.add(project)
+            session.commit()
+
+        res = client.post(f"/api/projects/{pid}/cancel")
+        assert res.status_code == 200
+        assert res.json()["status"] == "done"
+
+
+def test_cancel_project_404s_for_another_users_project():
+    pid = f"cancel-{uuid.uuid4().hex}"
+    with TestClient(app) as client_a:
+        user_a = login_as(client_a)
+        with Session(engine) as session:
+            project = Project(id=pid, status="running", user_id=user_a)
+            session.add(project)
+            session.commit()
+
+    with TestClient(app) as client_b:
+        login_as(client_b)
+        res = client_b.post(f"/api/projects/{pid}/cancel")
+        assert res.status_code == 404
+
+    with Session(engine) as session:
+        project = session.get(Project, pid)
+        assert project.status == "running"  # unchanged
+
+
+def test_cancelled_projects_excluded_from_list_projects():
+    pid_cancelled = f"cancel-{uuid.uuid4().hex}"
+    pid_done = f"cancel-{uuid.uuid4().hex}"
+    with TestClient(app) as client:
+        user_id = login_as(client)
+        with Session(engine) as session:
+            session.add(Project(id=pid_cancelled, status="cancelled", user_id=user_id))
+            session.add(Project(id=pid_done, status="done", user_id=user_id))
+            session.commit()
+
+        res = client.get("/api/projects")
+        assert res.status_code == 200
+        ids = {p["project_id"] for p in res.json()}
+        assert pid_cancelled not in ids
+        assert pid_done in ids
 
 
 def test_compute_room_dimensions_returns_none_without_both_length_and_width():

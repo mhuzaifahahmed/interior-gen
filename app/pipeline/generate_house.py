@@ -13,6 +13,13 @@ from app.storage.base import Storage
 
 logger = logging.getLogger(__name__)
 
+
+def _is_cancelled(session: Session, house_project: HouseProject) -> bool:
+    """Mirrors app/pipeline/generate.py's _is_cancelled() - see its docstring
+    for why session.refresh() (not a plain attribute read) is required."""
+    session.refresh(house_project)
+    return house_project.status == "cancelled"
+
 # v3: enriched photoreal prompt vocabulary, floor-count hard constraint, a
 # researched negative-prompt block.
 # v4: removed the second, blueprint-sourced 3D isometric render; briefly
@@ -120,6 +127,13 @@ def run_house_pipeline(
             session.add(house_project)
             session.commit()
 
+            if _is_cancelled(session, house_project):
+                logger.info(
+                    "house project %s was cancelled before the blueprint step started - stopping",
+                    house_project_id,
+                )
+                return
+
             # Free algorithmic blueprint step - unrelated to the floor_plan_*
             # stage above (that one's the still-inert, deferred REAL PAID
             # vendor slot). This one is live: Gemini returns a structured room
@@ -159,6 +173,12 @@ def run_house_pipeline(
             house_project.blueprint_keys_json = json.dumps(blueprint_keys) if blueprint_keys else None
             session.add(house_project)
             session.commit()
+
+            if _is_cancelled(session, house_project):
+                logger.info(
+                    "house project %s was cancelled before the render started - stopping", house_project_id
+                )
+                return
 
             # Exterior render is NOT best-effort - it's the core paid
             # deliverable of this feature, same treatment as the room-redesign

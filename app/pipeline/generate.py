@@ -45,6 +45,19 @@ def _detect_image_format(image_bytes: bytes) -> tuple[str, str]:
 MATERIALS_TIMEOUT_SECONDS = 100
 
 
+def _is_cancelled(session: Session, project: Project) -> bool:
+    """Re-reads `status` fresh from the DB (bypassing the session's identity-
+    map cache via refresh()) - a cancel request lands via a SEPARATE request/
+    session (app/main.py's cancel_project), so the long-lived pipeline
+    session must actually hit the DB to see it, not just read its own
+    in-memory copy. Best-effort, checked at stage boundaries only (see
+    run_pipeline's checkpoints) - an image/render call already in flight when
+    cancel is clicked still finishes, its result is just discarded rather
+    than being interrupted mid-request."""
+    session.refresh(project)
+    return project.status == "cancelled"
+
+
 def run_pipeline(
     project_id: str,
     provider: Provider,
@@ -129,6 +142,12 @@ def run_pipeline(
             except Exception:
                 logger.exception("generate_tier_notes failed for project %s; continuing without it", project_id)
                 tier_notes = {}
+
+            if _is_cancelled(session, project):
+                logger.info(
+                    "project %s was cancelled before image generation started - stopping", project_id
+                )
+                return
 
             tier_specs = {tier: build_tier_spec(tier, interior_style, color_palette) for tier in TIERS}
 
@@ -272,6 +291,14 @@ def run_pipeline(
                             setattr(project, f"{tier}_key", key)
                             session.add(project)
                             session.commit()
+
+            if _is_cancelled(session, project):
+                logger.info(
+                    "project %s was cancelled after image generation - discarding result", project_id
+                )
+                if executor is not None:
+                    executor.shutdown(wait=False)
+                return
 
             if materials_futures is not None:
                 materials: dict[str, dict] = {}
