@@ -50,6 +50,16 @@ class Project(SQLModel, table=True):
     materials_json: Optional[str] = None
     materials_status: str = Field(default="idle")  # idle | running | done | failed | skipped
 
+    # Optional user-supplied room measurements - {"length", "width", "height",
+    # "unit", "area_sqft", "wall_area_sqft"} as JSON text, same JSON-as-text
+    # convention as HouseProject.dimensions_json. When present, run_pipeline
+    # uses area_sqft/wall_area_sqft as the AUTHORITATIVE materials-pricing
+    # quantity instead of provider.estimate_room_area()'s Gemini vision guess
+    # (which becomes the fallback only). height/wall_area_sqft are optional
+    # even when length/width are given - wall_area_sqft is only computed when
+    # height is also supplied.
+    room_dimensions_json: Optional[str] = None
+
     meta_json: Optional[str] = None
 
 

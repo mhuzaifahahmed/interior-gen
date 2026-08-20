@@ -237,6 +237,41 @@ def test_generate_materials_states_area_in_prompt_when_provided(monkeypatch):
     assert "multiply" in captured["prompt"].lower()
 
 
+def test_generate_materials_states_wall_area_in_prompt_when_provided(monkeypatch):
+    # A real user-measured wall area (from length/width/height, see
+    # app/main.py's _compute_room_dimensions) must override floor area for
+    # Paint's own quantity rule specifically - it's a different number.
+    captured = {}
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Flooring", "price": "$1980"}], "total": "$1980"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            captured["prompt"] = contents[0]
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+
+    provider = GeminiProvider()
+    provider.generate_materials(
+        "economical",
+        {"label": "x", "flooring": "tile"},
+        None,
+        "Karachi",
+        room_area_sqft=180,
+        wall_area_sqft=396,
+    )
+    assert "180 square feet" in captured["prompt"]
+    assert "396 square feet" in captured["prompt"]
+    assert "Paint" in captured["prompt"]
+
+
 def test_generate_materials_asks_for_an_assumption_when_area_unknown(monkeypatch):
     captured = {}
 

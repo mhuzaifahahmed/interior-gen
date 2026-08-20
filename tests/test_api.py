@@ -19,6 +19,7 @@ class FakeProvider:
     def __init__(self):
         self.image_prompts = []
         self.materials_calls = []
+        self.estimate_room_area_calls = 0
 
     def describe_room(self, image_bytes: bytes) -> str:
         return "A small rectangular room with one window."
@@ -32,8 +33,10 @@ class FakeProvider:
         Image.new("RGB", (4, 4), color=(200, 200, 200)).save(buf, format="PNG")
         return buf.getvalue()
 
-    def generate_materials(self, tier, tier_spec, room_description, city, api_key=None, room_area_sqft=None):
-        self.materials_calls.append((tier, city))
+    def generate_materials(
+        self, tier, tier_spec, room_description, city, api_key=None, room_area_sqft=None, wall_area_sqft=None
+    ):
+        self.materials_calls.append((tier, city, room_area_sqft, wall_area_sqft))
         return {
             "items": [{"name": "Flooring", "spec": "", "price": "$100", "currency": "USD",
                        "source_url": None, "is_estimate": True}],
@@ -42,6 +45,7 @@ class FakeProvider:
         }
 
     def estimate_room_area(self, image_bytes: bytes) -> float | None:
+        self.estimate_room_area_calls += 1
         return 180.0
 
 
@@ -138,6 +142,7 @@ def test_input_metadata_json_written_to_storage(monkeypatch):
             "color_palette": "Neutral",
             "additional_instructions": "add a reading nook",
             "city": "Karachi",
+            "room_dimensions": None,
         }
 
 
@@ -300,9 +305,9 @@ def test_city_triggers_materials_for_every_tier(monkeypatch):
         for tier_materials in body["materials"].values():
             assert tier_materials["items"][0]["name"] == "Flooring"
 
-    called_tiers = {tier for tier, _ in provider.materials_calls}
+    called_tiers = {tier for tier, _, _, _ in provider.materials_calls}
     assert called_tiers == {"economical", "mid", "premium"}
-    assert all(city == "Karachi" for _, city in provider.materials_calls)
+    assert all(city == "Karachi" for _, city, _, _ in provider.materials_calls)
 
 
 def test_rejects_unsupported_file_type():
@@ -380,6 +385,104 @@ def test_list_projects_excludes_other_users(monkeypatch):
         res = client_b.get("/api/projects")
         assert res.status_code == 200
         assert res.json() == []
+
+
+def test_compute_room_dimensions_returns_none_without_both_length_and_width():
+    from app.main import _compute_room_dimensions
+
+    assert _compute_room_dimensions(None, None, None, "ft") is None
+    assert _compute_room_dimensions(12, None, None, "ft") is None
+    assert _compute_room_dimensions(None, 10, None, "ft") is None
+
+
+def test_compute_room_dimensions_computes_area_in_feet():
+    from app.main import _compute_room_dimensions
+
+    result = _compute_room_dimensions(12, 10, None, "ft")
+    assert result["area_sqft"] == 120.0
+    assert result["wall_area_sqft"] is None
+    assert result["unit"] == "ft"
+
+
+def test_compute_room_dimensions_computes_wall_area_when_height_given():
+    from app.main import _compute_room_dimensions
+
+    result = _compute_room_dimensions(12, 10, 9, "ft")
+    assert result["area_sqft"] == 120.0
+    # 2 * (12 + 10) * 9 = 396
+    assert result["wall_area_sqft"] == 396.0
+
+
+def test_compute_room_dimensions_converts_meters_to_feet():
+    from app.main import _compute_room_dimensions
+
+    result = _compute_room_dimensions(4, 3, None, "m")
+    # 4m -> 13.12ft, 3m -> 9.84ft, area ~= 129.2 sqft
+    assert 125 < result["area_sqft"] < 135
+    # Original values preserved as entered, not converted, for display.
+    assert result["length"] == 4
+    assert result["unit"] == "m"
+
+
+def test_compute_room_dimensions_rejects_out_of_range_values():
+    from app.main import _compute_room_dimensions
+
+    assert _compute_room_dimensions(0, 10, None, "ft") is None
+    assert _compute_room_dimensions(-5, 10, None, "ft") is None
+    assert _compute_room_dimensions(10000, 10, None, "ft") is None
+
+
+def test_room_measurements_are_used_instead_of_the_gemini_estimate(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        data = {
+            **_REQUIRED_STYLE_FIELDS,
+            "city": "Karachi",
+            "room_length": "12",
+            "room_width": "10",
+            "room_height": "9",
+            "dimension_unit": "ft",
+        }
+        create_res = client.post("/api/projects", files=files, data=data)
+        assert create_res.status_code == 200
+        project_id = create_res.json()["project_id"]
+
+        status_res = client.get(f"/api/projects/{project_id}")
+        body = status_res.json()
+        assert body["room_dimensions"]["area_sqft"] == 120.0
+        assert body["room_dimensions"]["wall_area_sqft"] == 396.0
+
+    # The Gemini vision guess must NOT run when a real measurement was given.
+    assert provider.estimate_room_area_calls == 0
+    assert all(area == 120.0 for _, _, area, _ in provider.materials_calls)
+    assert all(wall_area == 396.0 for _, _, _, wall_area in provider.materials_calls)
+
+
+def test_no_room_measurements_falls_back_to_gemini_estimate(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/projects", files=files, data={**_REQUIRED_STYLE_FIELDS, "city": "Karachi"}
+        )
+        assert create_res.status_code == 200
+        project_id = create_res.json()["project_id"]
+
+        status_res = client.get(f"/api/projects/{project_id}")
+        assert status_res.json()["room_dimensions"] is None
+
+    assert provider.estimate_room_area_calls == 1
+    assert all(area == 180.0 for _, _, area, _ in provider.materials_calls)
+    assert all(wall_area is None for _, _, _, wall_area in provider.materials_calls)
 
 
 def test_terms_page_serves():

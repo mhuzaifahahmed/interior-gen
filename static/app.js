@@ -101,6 +101,10 @@ const interiorStyleSelect = document.getElementById("interior-style-select");
 const colorPaletteSelect = document.getElementById("color-palette-select");
 const additionalInstructionsInput = document.getElementById("additional-instructions");
 const cityInput = document.getElementById("city-input");
+const roomLengthInput = document.getElementById("room-length");
+const roomWidthInput = document.getElementById("room-width");
+const roomHeightInput = document.getElementById("room-height");
+const roomDimensionUnitInput = document.getElementById("room-dimension-unit");
 
 const progressCard = document.getElementById("progress-card");
 const progressMessageEl = document.getElementById("progress-message");
@@ -717,6 +721,10 @@ async function restorePendingGeneration() {
     colorPaletteDropdown.setValue(pending.colorPalette || "");
     additionalInstructionsInput.value = pending.additionalInstructions || "";
     cityInput.value = pending.city || "";
+    roomLengthInput.value = pending.roomLength || "";
+    roomWidthInput.value = pending.roomWidth || "";
+    roomHeightInput.value = pending.roomHeight || "";
+    roomDimensionUnitInput.value = pending.roomDimensionUnit || "ft";
     updateGenerateButtonState();
   } else {
     houseLengthInput.value = pending.length || "";
@@ -967,6 +975,13 @@ form.addEventListener("submit", async (e) => {
   formData.append("additional_instructions", additionalInstructionsInput.value.trim());
   formData.append("city", city);
   formData.append("display_name", await currentUserDisplayName());
+  // Optional room measurements - improves material-cost accuracy when given;
+  // left blank, the backend falls back to its existing Gemini-vision area
+  // estimate (see app/main.py's _compute_room_dimensions()).
+  if (roomLengthInput.value) formData.append("room_length", roomLengthInput.value);
+  if (roomWidthInput.value) formData.append("room_width", roomWidthInput.value);
+  if (roomHeightInput.value) formData.append("room_height", roomHeightInput.value);
+  formData.append("dimension_unit", roomDimensionUnitInput.value);
 
   let projectId;
   try {
@@ -980,6 +995,10 @@ form.addEventListener("submit", async (e) => {
         colorPalette: colorPaletteSelect.value,
         additionalInstructions: additionalInstructionsInput.value,
         city: cityInput.value,
+        roomLength: roomLengthInput.value,
+        roomWidth: roomWidthInput.value,
+        roomHeight: roomHeightInput.value,
+        roomDimensionUnit: roomDimensionUnitInput.value,
       });
       window.location.href = "/static/login.html";
       return;

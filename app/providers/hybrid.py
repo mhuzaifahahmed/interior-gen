@@ -149,9 +149,10 @@ class HybridProvider(Provider):
         city: str,
         api_key: str | None = None,
         room_area_sqft: float | None = None,
+        wall_area_sqft: float | None = None,
     ) -> dict:
         return self._gemini.generate_materials(
-            tier, tier_spec, room_description, city, api_key, room_area_sqft
+            tier, tier_spec, room_description, city, api_key, room_area_sqft, wall_area_sqft
         )
 
     def estimate_room_area(self, image_bytes: bytes) -> float | None:

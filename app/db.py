@@ -41,6 +41,7 @@ _NEW_COLUMNS_BY_TABLE = {
         ("interior_style", "TEXT"),
         ("color_palette", "TEXT"),
         ("additional_instructions", "TEXT"),
+        ("room_dimensions_json", "TEXT"),
     ],
     "houseproject": [
         ("room_layout_json", "TEXT"),

@@ -22,6 +22,10 @@ class ProjectStatusResponse(BaseModel):
     interior_style: Optional[str] = None
     color_palette: Optional[str] = None
     additional_instructions: Optional[str] = None
+    # {"length", "width", "height", "unit", "area_sqft", "wall_area_sqft"} -
+    # None when the user didn't supply measurements (materials pricing then
+    # falls back to provider.estimate_room_area()'s Gemini vision guess).
+    room_dimensions: Optional[dict] = None
 
 
 class HouseProjectCreateResponse(BaseModel):

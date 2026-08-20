@@ -337,6 +337,7 @@ class GeminiProvider(Provider):
         city: str,
         api_key: str | None = None,
         room_area_sqft: float | None = None,
+        wall_area_sqft: float | None = None,
     ) -> dict:
         line_items = _tier_line_items(tier_spec)
 
@@ -369,6 +370,20 @@ class GeminiProvider(Provider):
                 "to adequately illuminate that area - use this count for Lighting's own "
                 "multiplication rule below.\n\n"
             )
+            # wall_area_sqft is a real, user-measured value (only present when
+            # the user also gave a room height - see app/main.py's
+            # _compute_room_dimensions()) - when given, it OVERRIDES floor
+            # area for Paint/wall-finish's own quantity rule specifically,
+            # since a room's paintable wall area is a different number from
+            # its floor area. Every other item (Flooring, Ceiling, Lighting)
+            # keeps using room_area_sqft above, unaffected.
+            if wall_area_sqft:
+                area_block += (
+                    f"For Paint / wall finish specifically, this room's estimated paintable wall "
+                    f"area is approximately {wall_area_sqft:.0f} square feet (measured from the "
+                    "room's actual height, not guessed) - use THIS number, not the floor area "
+                    "above, for Paint's own quantity/multiplication rule.\n\n"
+                )
         else:
             area_block = (
                 "No floor-area estimate is available for this room - for Flooring, Ceiling "

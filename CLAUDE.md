@@ -222,6 +222,30 @@ After the 3 tiers are generated, each tier (except the original) can show an ite
 with local pricing + source links + a rough total, localized to a city the user types on the **upload
 screen** (not after — see below).
 
+- **Real user-supplied room measurements (2026-08), replacing the Gemini-guess-only quantity input.**
+  Previously the ONLY source of room floor area for materials pricing was `estimate_room_area()`
+  (`GeminiProvider`) - a pure vision guess from the photo, injected into `generate_materials()`'s prompt
+  where Gemini itself does the per-sqft×area / per-fixture math (no Python-side multiplication exists or
+  was added - that stays entirely LLM-side). Now the upload form (`static/index.html`, next to `#city-input`)
+  also has optional **Length / Width / Height + unit (ft/m)** inputs (`#room-length`/`#room-width`/
+  `#room-height`/`#room-dimension-unit`). All three are optional; Length+Width together compute a real
+  `area_sqft` via `app/main.py`'s `_compute_room_dimensions()` (meters converted to feet, sanity-bounded
+  1-200ft per dimension to reject obvious garbage); Height is independently optional ON TOP of that and
+  additionally computes `wall_area_sqft` (`2*(L+W)*H`, a rectangular-room assumption) for Paint/wall-finish's
+  own quantity rule specifically, since paintable wall area and floor area are different numbers.
+  **A real measurement is authoritative and skips the Gemini guess entirely** - `run_pipeline()`
+  (`app/pipeline/generate.py`) only calls `provider.estimate_room_area()` when the user didn't supply one;
+  when they did, that call doesn't happen at all (not just overridden after the fact - a wasted API call
+  avoided). `Provider.generate_materials()` gained an optional `wall_area_sqft` param (threaded through
+  `HybridProvider`) alongside the existing `room_area_sqft` one; `GeminiProvider.generate_materials()`
+  appends a separate sentence to the pricing prompt's `area_block` telling Gemini to use `wall_area_sqft`
+  (not floor area) specifically for Paint's multiplication rule, when given. Persisted as
+  `Project.room_dimensions_json` (`{"length","width","height","unit","area_sqft","wall_area_sqft"}`,
+  same JSON-as-text convention as `HouseProject.dimensions_json`) - null when the user left the fields
+  blank, in which case pricing behaves exactly as before this feature (Gemini-guess fallback). Also
+  mirrored into the S3 input `metadata.json` (see below) and exposed back to the frontend via
+  `ProjectStatusResponse.room_dimensions`. Leaving all three fields blank is a fully supported,
+  zero-friction path - this is a "more accurate if given" input, never a required one.
 - **City input** (`static/index.html`'s `#city-input`, above Generate): persisted to `localStorage`
   (`CITY_STORAGE_KEY` in `app.js`) so it only shows the `e.g. Karachi` placeholder the first time - after
   that it stays filled with whatever was last entered until the user changes it. **Empty city is a

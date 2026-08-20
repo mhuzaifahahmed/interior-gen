@@ -71,6 +71,7 @@ class Provider(ABC):
         city: str,
         api_key: str | None = None,
         room_area_sqft: float | None = None,
+        wall_area_sqft: float | None = None,
     ) -> dict:
         """Return an itemized materials/furniture list with local pricing for one
         tier, localized to `city`. Shape: {"items": [{"name", "spec", "price",
@@ -89,12 +90,23 @@ class Provider(ABC):
         ignore it.
 
         room_area_sqft is the best-effort estimate from estimate_room_area()
-        below - when present, implementations should use it to turn a found
+        below, OR a real user-supplied floor area (see app/main.py's
+        _compute_room_dimensions() / app/pipeline/generate.py's run_pipeline())
+        - when present, implementations should use it to turn a found
         PER-UNIT price (e.g. "$12/sqft" for flooring) into a real total for the
         whole room (price * area), not just copy the per-unit number through as
         if it were already the item's total cost. None means no estimate was
         available - implementations should fall back to their prior per-item
         guessing behavior in that case.
+
+        wall_area_sqft is an independently-optional, user-supplied paintable
+        wall area (only present when the user also gave a room height - see
+        _compute_room_dimensions()) - when present, implementations should use
+        it (instead of room_area_sqft) for Paint/wall-finish's own quantity
+        rule specifically, since a room's wall area and floor area are
+        different numbers. None means no such measurement was given - Paint
+        falls back to using room_area_sqft (or its own guess) exactly as
+        before this parameter existed.
         """
         ...
 

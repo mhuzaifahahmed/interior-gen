@@ -54,6 +54,8 @@ def run_pipeline(
     additional_instructions: str | None = None,
     city: str | None = None,
     username: str | None = None,
+    user_room_area_sqft: float | None = None,
+    user_wall_area_sqft: float | None = None,
 ) -> None:
     """Runs the full 3-tier generation for a project. Intended to run as a
     background task; opens its own DB session since the request-scoped one
@@ -82,6 +84,16 @@ def run_pipeline(
     settings.gemini_materials_api_keys (a fixed tier->key mapping, not shared
     with gemini_api_key/the text calls) so all 3 run on separate rate-limit
     quotas with zero contention.
+
+    user_room_area_sqft/user_wall_area_sqft come from an optional user-supplied
+    Length x Width (x Height) measurement (see app/main.py's
+    _compute_room_dimensions()) - when user_room_area_sqft is given, it's used
+    as the AUTHORITATIVE materials-pricing floor area instead of
+    provider.estimate_room_area()'s Gemini vision guess (the guess becomes the
+    fallback, only called when the user didn't supply a measurement).
+    user_wall_area_sqft is independently optional on top of that (only present
+    if the user also gave a height) and feeds Paint/wall-finish's own quantity
+    rule in generate_materials() - see gemini.py's docstring there.
     """
     timer = PipelineTimer(project_id)
 
@@ -123,19 +135,25 @@ def run_pipeline(
             executor = None
             materials_futures = None
             if city:
-                # Best-effort - see estimate_room_area()'s docstring for why
-                # this exists (without it, a per-sqft price found for e.g.
-                # flooring never actually got multiplied into a real total).
-                # Only called when materials pricing will actually run, since
-                # it's wasted work otherwise.
-                try:
-                    with timer.stage("estimate_room_area"):
-                        room_area_sqft = provider.estimate_room_area(original_bytes)
-                except Exception:
-                    logger.exception(
-                        "estimate_room_area failed for project %s; continuing without it", project_id
-                    )
-                    room_area_sqft = None
+                # A real user-supplied measurement (see app/main.py's
+                # _compute_room_dimensions()) is AUTHORITATIVE and skips the
+                # Gemini vision guess entirely - estimate_room_area() only
+                # runs as a fallback when the user didn't supply one. Best-
+                # effort either way - see estimate_room_area()'s docstring
+                # for why this exists (without it, a per-sqft price found for
+                # e.g. flooring never actually got multiplied into a real
+                # total).
+                if user_room_area_sqft:
+                    room_area_sqft = user_room_area_sqft
+                else:
+                    try:
+                        with timer.stage("estimate_room_area"):
+                            room_area_sqft = provider.estimate_room_area(original_bytes)
+                    except Exception:
+                        logger.exception(
+                            "estimate_room_area failed for project %s; continuing without it", project_id
+                        )
+                        room_area_sqft = None
 
                 project.materials_status = "running"
                 session.add(project)
@@ -152,6 +170,7 @@ def run_pipeline(
                         city,
                         materials_keys[tier],
                         room_area_sqft,
+                        user_wall_area_sqft,
                     )
                     for tier in TIERS
                 }

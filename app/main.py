@@ -132,6 +132,10 @@ async def create_project(
     additional_instructions: str = Form(""),
     city: str = Form(""),
     display_name: str = Form(""),
+    room_length: float | None = Form(None),
+    room_width: float | None = Form(None),
+    room_height: float | None = Form(None),
+    dimension_unit: str = Form("ft"),
     session: Session = Depends(get_session),
     user: AuthUser = Depends(require_user),
 ):
@@ -159,6 +163,16 @@ async def create_project(
     # dialog on the frontend) - not an error, just no materials/pricing lookup.
     city = city.strip()[:CITY_MAX_CHARS] or None
 
+    # Optional user-supplied room measurements - see _compute_room_dimensions()'s
+    # docstring. Length + width are both required for ANY of this to apply
+    # (an area needs both); height is independently optional on top of that
+    # (only unlocks wall-area/paint accuracy). Bad/nonsensical input (e.g.
+    # negative or absurdly large) is silently ignored rather than erroring -
+    # this is a "nice to have if given" field, not a required one, so it
+    # degrades to the existing Gemini-estimate fallback exactly like omitting
+    # it entirely.
+    room_dimensions = _compute_room_dimensions(room_length, room_width, room_height, dimension_unit)
+
     storage = get_storage()
     provider = get_provider()
 
@@ -168,6 +182,7 @@ async def create_project(
         color_palette=color_palette,
         additional_instructions=additional_instructions,
         user_id=user.id,
+        room_dimensions_json=json.dumps(room_dimensions) if room_dimensions else None,
     )
     session.add(project)
     session.commit()
@@ -196,6 +211,7 @@ async def create_project(
         "color_palette": color_palette,
         "additional_instructions": additional_instructions,
         "city": city,
+        "room_dimensions": room_dimensions,
     }
     try:
         storage.put(metadata_key, json.dumps(metadata).encode("utf-8"), content_type="application/json")
@@ -212,9 +228,66 @@ async def create_project(
         additional_instructions,
         city,
         storage_namespace,
+        room_dimensions.get("area_sqft") if room_dimensions else None,
+        room_dimensions.get("wall_area_sqft") if room_dimensions else None,
     )
 
     return ProjectCreateResponse(project_id=project.id)
+
+
+# Sanity bounds for a real-world room, in feet (after unit conversion) - not a
+# strict validation contract, just enough to reject obvious garbage (0,
+# negative, or absurd values from a mistyped unit) without erroring the whole
+# request. Anything outside these bounds is silently dropped, same
+# "best-effort, degrade to the existing fallback" treatment as a missing value.
+_MIN_ROOM_DIMENSION_FT = 1.0
+_MAX_ROOM_DIMENSION_FT = 200.0
+
+
+def _compute_room_dimensions(
+    length: float | None, width: float | None, height: float | None, unit: str
+) -> dict | None:
+    """Turns optional user-supplied Length x Width (x Height) + unit into a
+    dict of {"length", "width", "height", "unit", "area_sqft", "wall_area_sqft"}
+    - the AUTHORITATIVE materials-pricing quantity when present, replacing
+    provider.estimate_room_area()'s Gemini vision guess (see run_pipeline()).
+
+    Length AND width are both required (an area needs both) - if either is
+    missing, returns None and the pipeline falls back to the existing
+    Gemini-vision estimate exactly as if this feature didn't exist. Height is
+    independently optional ON TOP of that: given, it additionally computes
+    wall_area_sqft (2*(L+W)*H, a rectangular-room assumption) which feeds
+    Paint/wall-finish's own quantity rule in generate_materials(); omitted,
+    wall_area_sqft is None and Paint keeps behaving as it does today (no wall
+    area at all, area_block's Flooring/Ceiling/Paint sqft comes from
+    area_sqft only - see gemini.py's generate_materials()).
+
+    unit is "ft" (default) or "m" - meters are converted to feet since every
+    other sqft/pricing calculation in this codebase (LIGHT_FIXTURE_COVERAGE_SQFT,
+    the materials prompt's "square feet" wording) already assumes feet.
+    """
+    if length is None or width is None:
+        return None
+
+    unit = unit if unit in ("ft", "m") else "ft"
+    factor = 3.28084 if unit == "m" else 1.0
+    length_ft = length * factor
+    width_ft = width * factor
+    height_ft = height * factor if height is not None else None
+
+    for value in (length_ft, width_ft, *([height_ft] if height_ft is not None else [])):
+        if not (_MIN_ROOM_DIMENSION_FT <= value <= _MAX_ROOM_DIMENSION_FT):
+            return None
+
+    result = {
+        "length": length,
+        "width": width,
+        "height": height,
+        "unit": unit,
+        "area_sqft": round(length_ft * width_ft, 1),
+        "wall_area_sqft": round(2 * (length_ft + width_ft) * height_ft, 1) if height_ft else None,
+    }
+    return result
 
 
 def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
@@ -226,6 +299,7 @@ def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
         images[tier] = storage.url(key) if key else None
 
     materials = json.loads(project.materials_json) if project.materials_json else None
+    room_dimensions = json.loads(project.room_dimensions_json) if project.room_dimensions_json else None
 
     return ProjectStatusResponse(
         project_id=project.id,
@@ -240,6 +314,7 @@ def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
         interior_style=project.interior_style,
         color_palette=project.color_palette,
         additional_instructions=project.additional_instructions,
+        room_dimensions=room_dimensions,
     )
 
 
