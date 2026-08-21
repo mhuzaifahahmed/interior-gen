@@ -53,10 +53,10 @@ class HouseProjectStatusResponse(BaseModel):
     prompt: Optional[str] = None
     # {"length", "width", "unit"} - None when neither length nor width was given.
     dimensions: Optional[dict] = None
-    # {"floor_count", "bedrooms", "bathrooms", "garage", "kitchen_each_floor",
-    # "extras"} - the structured "Plot Parameters" selections that composed
-    # `prompt` above. None for projects created before this feature, or via a
-    # direct API call that only supplied the legacy free-text `prompt` field.
+    # {"floor_count", "bedrooms", "bathrooms", "extras"} - the structured
+    # "Plot Parameters" selections that composed `prompt` above. None for
+    # projects created before this feature, or via a direct API call that
+    # only supplied the legacy free-text `prompt` field.
     house_inputs: Optional[dict] = None
     # "our model" or "OpenAI" - which provider produced the render. None
     # until the render completes. See

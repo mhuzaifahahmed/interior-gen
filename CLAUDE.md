@@ -607,24 +607,28 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   floor count derived by regex-guessing "N floor(s)" out of whatever the user typed
   (`_explicit_floor_count`/`_guess_floor_count` in `gemini.py`). The "Plot Parameters" panel
   (`static/index.html`) now has **Floors** (integer `<select>`, 1-5), **Bedrooms**, **Bathrooms**
-  (`<select>`s), **Garage** + **Kitchen on every floor** checkboxes, and a small free-text **"Anything
-  else?" extras** input (`#house-extras`, still capped at `USER_PROMPT_MAX_CHARS`).
-  - **`app/main.py`'s `create_house_project`** gained `floor_count`/`bedrooms`/`bathrooms`/`garage`/
-    `kitchen_each_floor`/`extras` Form fields (clamped: floors 1-10 matching `_explicit_floor_count`'s own
-    clamp, bed/bath counts 0-20). `_compose_house_requirements()` turns these into one natural-language
-    sentence (e.g. `"2 floors, 3 bedrooms, 2 bathrooms, an attached garage, a kitchen on every floor.
-    Extras: dirty kitchen each floor"`), **deliberately still using the literal word "floor(s)" next to the
-    number** so `house_prompts.py`'s regex-based `_resolve_floor_count()` fallback stays correct even when
-    `room_layout` is unavailable (e.g. the blueprint step failed) - belt-and-suspenders with the real int
-    passed separately, not a redundant duplicate. This composed string is stored as `HouseProject.prompt`
-    (the SAME column every downstream consumer already reads - `analyze_plot`, `generate_room_layout`,
-    `build_house_prompt`, `meta_json` - so nothing downstream needed to change shape) - **not a new
-    column**, keeping this additive rather than a parallel-plumbing rewrite. The raw structured selections
-    are ALSO persisted separately as `HouseProject.house_inputs_json` (new column, additive migration in
-    `app/db.py`) and exposed back via `HouseProjectStatusResponse.house_inputs`/`.dimensions`, so a
-    resumed/pending-login flow or a future "edit this project" UI has the real structured values, not just
-    the composed sentence. **Raw free-text `prompt` is still accepted** for direct API callers that predate
-    this feature (backward compat) - only used when NO structured field was given at all.
+  (`<select>`s), and a small free-text **"Anything else?" extras** input (`#house-extras`, still capped at
+  `USER_PROMPT_MAX_CHARS`). **A Garage + Kitchen-on-every-floor checkbox pair was tried and dropped
+  same-day** - felt like an arbitrarily incomplete amenities list sitting next to the real dropdowns (only
+  2 items, no obvious reason those two and not others) rather than expanding it further, per explicit user
+  feedback. Things like a garage now just go in `extras` as free text, same as any other requirement -
+  there is no dedicated field for them.
+  - **`app/main.py`'s `create_house_project`** gained `floor_count`/`bedrooms`/`bathrooms`/`extras` Form
+    fields (clamped: floors 1-10 matching `_explicit_floor_count`'s own clamp, bed/bath counts 0-20).
+    `_compose_house_requirements()` turns these into one natural-language sentence (e.g. `"2 floors,
+    3 bedrooms, 2 bathrooms. Extras: garage, dirty kitchen each floor"`), **deliberately still using the
+    literal word "floor(s)" next to the number** so `house_prompts.py`'s regex-based
+    `_resolve_floor_count()` fallback stays correct even when `room_layout` is unavailable (e.g. the
+    blueprint step failed) - belt-and-suspenders with the real int passed separately, not a redundant
+    duplicate. This composed string is stored as `HouseProject.prompt` (the SAME column every downstream
+    consumer already reads - `analyze_plot`, `generate_room_layout`, `build_house_prompt`, `meta_json` - so
+    nothing downstream needed to change shape) - **not a new column**, keeping this additive rather than a
+    parallel-plumbing rewrite. The raw structured selections are ALSO persisted separately as
+    `HouseProject.house_inputs_json` (new column, additive migration in `app/db.py`) and exposed back via
+    `HouseProjectStatusResponse.house_inputs`/`.dimensions`, so a resumed/pending-login flow or a future
+    "edit this project" UI has the real structured values, not just the composed sentence. **Raw free-text
+    `prompt` is still accepted** for direct API callers that predate this feature (backward compat) - only
+    used when NO structured field was given at all.
   - **Explicit floor count skips the regex guess entirely, not just informs it.** `floor_count` (the real
     int from the dropdown) is threaded through `run_house_pipeline()` → `Provider.generate_room_layout(...,
     floor_count=...)` (new optional param, `base.py`/`hybrid.py`/`gemini.py`) straight into

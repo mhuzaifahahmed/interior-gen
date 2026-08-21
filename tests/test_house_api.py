@@ -97,30 +97,29 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
 def test_compose_house_requirements_combines_all_fields():
     from app.main import _compose_house_requirements
 
-    result = _compose_house_requirements(2, 3, 2, True, True, "dirty kitchen each floor")
+    result = _compose_house_requirements(2, 3, 2, "dirty kitchen each floor, garage")
     assert result == (
-        "2 floors, 3 bedrooms, 2 bathrooms, an attached garage, a kitchen on every floor. "
-        "Extras: dirty kitchen each floor"
+        "2 floors, 3 bedrooms, 2 bathrooms. Extras: dirty kitchen each floor, garage"
     )
 
 
 def test_compose_house_requirements_uses_singular_for_one():
     from app.main import _compose_house_requirements
 
-    result = _compose_house_requirements(1, 1, 1, False, False, "")
+    result = _compose_house_requirements(1, 1, 1, "")
     assert result == "1 floor, 1 bedroom, 1 bathroom"
 
 
 def test_compose_house_requirements_returns_none_when_everything_empty():
     from app.main import _compose_house_requirements
 
-    assert _compose_house_requirements(None, None, None, False, False, "") is None
+    assert _compose_house_requirements(None, None, None, "") is None
 
 
 def test_compose_house_requirements_extras_only():
     from app.main import _compose_house_requirements
 
-    assert _compose_house_requirements(None, None, None, False, False, "modern style") == "modern style"
+    assert _compose_house_requirements(None, None, None, "modern style") == "modern style"
 
 
 def test_structured_house_inputs_compose_the_prompt_and_persist(monkeypatch):
@@ -140,9 +139,7 @@ def test_structured_house_inputs_compose_the_prompt_and_persist(monkeypatch):
                 "floor_count": "2",
                 "bedrooms": "3",
                 "bathrooms": "2",
-                "garage": "true",
-                "kitchen_each_floor": "true",
-                "extras": "dirty kitchen each floor",
+                "extras": "dirty kitchen each floor, garage",
             },
         )
         assert create_res.status_code == 200
@@ -151,16 +148,13 @@ def test_structured_house_inputs_compose_the_prompt_and_persist(monkeypatch):
         status_res = client.get(f"/api/house-projects/{house_project_id}")
         body = status_res.json()
         assert body["prompt"] == (
-            "2 floors, 3 bedrooms, 2 bathrooms, an attached garage, a kitchen on every floor. "
-            "Extras: dirty kitchen each floor"
+            "2 floors, 3 bedrooms, 2 bathrooms. Extras: dirty kitchen each floor, garage"
         )
         assert body["house_inputs"] == {
             "floor_count": 2,
             "bedrooms": 3,
             "bathrooms": 2,
-            "garage": True,
-            "kitchen_each_floor": True,
-            "extras": "dirty kitchen each floor",
+            "extras": "dirty kitchen each floor, garage",
         }
         assert body["dimensions"] == {"length": 40.0, "width": 60.0, "unit": "ft"}
 
@@ -202,8 +196,6 @@ def test_house_input_metadata_json_written_to_storage(monkeypatch):
             "floor_count": "2",
             "bedrooms": "3",
             "bathrooms": "2",
-            "garage": "true",
-            "kitchen_each_floor": "false",
             "extras": "modern style",
         }
         create_res = client.post("/api/house-projects", files=files, data=data)
@@ -218,8 +210,6 @@ def test_house_input_metadata_json_written_to_storage(monkeypatch):
             "floor_count": 2,
             "bedrooms": 3,
             "bathrooms": 2,
-            "garage": True,
-            "kitchen_each_floor": False,
             "extras": "modern style",
         }
 

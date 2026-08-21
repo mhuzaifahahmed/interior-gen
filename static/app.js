@@ -552,8 +552,6 @@ const houseUnitInput = document.getElementById("house-unit");
 const houseFloorCountInput = document.getElementById("house-floor-count");
 const houseBedroomsInput = document.getElementById("house-bedrooms");
 const houseBathroomsInput = document.getElementById("house-bathrooms");
-const houseGarageInput = document.getElementById("house-garage");
-const houseKitchenEachFloorInput = document.getElementById("house-kitchen-each-floor");
 const houseExtrasInput = document.getElementById("house-extras");
 
 const houseProgressCard = document.getElementById("house-progress-card");
@@ -823,8 +821,6 @@ async function restorePendingGeneration() {
     houseFloorCountInput.value = pending.floorCount || "1";
     houseBedroomsInput.value = pending.bedrooms || "3";
     houseBathroomsInput.value = pending.bathrooms || "2";
-    houseGarageInput.checked = !!pending.garage;
-    houseKitchenEachFloorInput.checked = !!pending.kitchenEachFloor;
     houseExtrasInput.value = pending.extras || "";
   }
 
@@ -1865,8 +1861,6 @@ houseForm.addEventListener("submit", async (e) => {
   formData.append("floor_count", houseFloorCountInput.value);
   formData.append("bedrooms", houseBedroomsInput.value);
   formData.append("bathrooms", houseBathroomsInput.value);
-  formData.append("garage", houseGarageInput.checked ? "true" : "false");
-  formData.append("kitchen_each_floor", houseKitchenEachFloorInput.checked ? "true" : "false");
   formData.append("extras", houseExtrasInput.value.trim());
   formData.append("display_name", await currentUserDisplayName());
 
@@ -1887,8 +1881,6 @@ houseForm.addEventListener("submit", async (e) => {
         floorCount: houseFloorCountInput.value,
         bedrooms: houseBedroomsInput.value,
         bathrooms: houseBathroomsInput.value,
-        garage: houseGarageInput.checked,
-        kitchenEachFloor: houseKitchenEachFloorInput.checked,
         extras: houseExtrasInput.value,
       });
       window.location.href = "/static/login.html";

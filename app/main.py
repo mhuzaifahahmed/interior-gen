@@ -390,8 +390,6 @@ async def create_house_project(
     floor_count: int | None = Form(None),
     bedrooms: int | None = Form(None),
     bathrooms: int | None = Form(None),
-    garage: bool = Form(False),
-    kitchen_each_floor: bool = Form(False),
     extras: str = Form(""),
     session: Session = Depends(get_session),
     user: AuthUser = Depends(require_user),
@@ -402,16 +400,20 @@ async def create_house_project(
     submission) - dimensions.json degrades to an empty dict rather than
     rejecting the request.
 
-    floor_count/bedrooms/bathrooms/garage/kitchen_each_floor/extras are the
-    structured inputs that replaced the old single free-text `prompt` field
-    (see static/index.html's "Plot Parameters" panel) - _compose_house_requirements()
-    turns them into a natural-language requirements string, stored as
-    `prompt` for full backward compatibility with every downstream consumer
-    (run_house_pipeline, build_house_prompt, meta_json, etc. all still just
-    read `prompt`). The raw `prompt` Form field is kept as a fallback for
-    direct API callers that don't supply any structured field at all - a
-    request with neither is simply "no specific requirements", same as
-    before this feature existed.
+    floor_count/bedrooms/bathrooms/extras are the structured inputs that
+    replaced the old single free-text `prompt` field (see static/index.html's
+    "Plot Parameters" panel) - _compose_house_requirements() turns them into a
+    natural-language requirements string, stored as `prompt` for full
+    backward compatibility with every downstream consumer (run_house_pipeline,
+    build_house_prompt, meta_json, etc. all still just read `prompt`). Things
+    like a garage or a kitchen on every floor are NOT their own dedicated
+    fields - a dedicated Garage/Kitchen-each-floor checkbox pair was tried and
+    dropped (felt like an arbitrarily incomplete amenities list next to the
+    real dropdowns) - a user just types them into `extras` like any other
+    requirement. The raw `prompt` Form field is kept as a fallback for direct
+    API callers that don't supply any structured field at all - a request
+    with neither is simply "no specific requirements", same as before this
+    feature existed.
     """
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(400, f"unsupported file type: {file.content_type}")
@@ -437,13 +439,9 @@ async def create_house_project(
         "floor_count": floor_count,
         "bedrooms": bedrooms,
         "bathrooms": bathrooms,
-        "garage": garage,
-        "kitchen_each_floor": kitchen_each_floor,
         "extras": extras or None,
     }
-    composed_requirements = _compose_house_requirements(
-        floor_count, bedrooms, bathrooms, garage, kitchen_each_floor, extras
-    )
+    composed_requirements = _compose_house_requirements(floor_count, bedrooms, bathrooms, extras)
     # Defensive re-truncation, same reasoning as style_notes/city above - the
     # frontend's <input maxlength> is trivially bypassable by a direct API call.
     # Falls back to the raw legacy `prompt` field only when NO structured
@@ -507,8 +505,6 @@ def _compose_house_requirements(
     floor_count: int | None,
     bedrooms: int | None,
     bathrooms: int | None,
-    garage: bool,
-    kitchen_each_floor: bool,
     extras: str,
 ) -> str | None:
     """Turns the structured "Plot Parameters" selections into one natural-
@@ -523,10 +519,14 @@ def _compose_house_requirements(
     (run_house_pipeline -> generate_room_layout) - belt and suspenders,
     not redundant.
 
-    Returns None (not "") when every field is empty/False - the pipeline
-    already treats an empty/None prompt as "no specific requirements",
-    identical to today's behavior when a user left the old free-text field
-    blank.
+    Only 3 structured dropdowns feed this (floors/bedrooms/bathrooms) - a
+    Garage + Kitchen-on-every-floor checkbox pair was tried and dropped (felt
+    like an arbitrary, incomplete amenities list sitting next to real
+    dropdowns); anything beyond the 3 counts is just free text in `extras`.
+
+    Returns None (not "") when every field is empty - the pipeline already
+    treats an empty/None prompt as "no specific requirements", identical to
+    today's behavior when a user left the old free-text field blank.
     """
     parts = []
     if floor_count:
@@ -535,10 +535,6 @@ def _compose_house_requirements(
         parts.append(f"{bedrooms} bedroom{'s' if bedrooms != 1 else ''}")
     if bathrooms:
         parts.append(f"{bathrooms} bathroom{'s' if bathrooms != 1 else ''}")
-    if garage:
-        parts.append("an attached garage")
-    if kitchen_each_floor:
-        parts.append("a kitchen on every floor")
 
     requirements = ", ".join(parts)
     if extras:

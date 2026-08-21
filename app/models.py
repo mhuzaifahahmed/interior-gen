@@ -98,11 +98,14 @@ class HouseProject(SQLModel, table=True):
     # single column every downstream consumer already reads, rather than
     # threading a second field through the whole pipeline.
     prompt: Optional[str] = None
-    # {"floor_count", "bedrooms", "bathrooms", "garage", "kitchen_each_floor",
-    # "extras"} as JSON text - the structured "Plot Parameters" selections
-    # that replaced the old single free-text prompt input (still composed
-    # into `prompt` above for backward compatibility with every pipeline
-    # call that reads it). None for projects created before this feature.
+    # {"floor_count", "bedrooms", "bathrooms", "extras"} as JSON text - the
+    # structured "Plot Parameters" selections that replaced the old single
+    # free-text prompt input (still composed into `prompt` above for backward
+    # compatibility with every pipeline call that reads it). None for
+    # projects created before this feature. A Garage/Kitchen-on-every-floor
+    # checkbox pair was tried and dropped (felt incomplete next to the real
+    # dropdowns) - those go in `extras` as free text instead, same as any
+    # other requirement.
     house_inputs_json: Optional[str] = None
 
     plot_description: Optional[str] = None
