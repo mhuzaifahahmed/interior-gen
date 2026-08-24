@@ -166,6 +166,23 @@ class Settings(BaseSettings):
     # docstring for the assumed (not yet confirmed) request/response contract.
     kaggle_house_api_url: str = ""
 
+    # A THIRD, separate Kaggle notebook/tunnel - a friend-hosted model that
+    # claims to produce AutoCAD/CAD-format floor-plan output. Deliberately
+    # INERT - stored here so the URL isn't lost between sessions, but there is
+    # NO provider code reading this setting yet, and none should be written
+    # until the endpoint has actually been probed live (its request/response
+    # contract is completely unknown - unlike kaggle_house_api_url above,
+    # which at least mirrors a confirmed sibling contract, this one has no
+    # known shape to assume). See CLAUDE.md's "Real DXF/AutoCAD-format
+    # export" entry - the shipped, working DXF export
+    # (app/pipeline/blueprint_dxf.py) uses NO AI model at all and is
+    # independent of whatever this setting eventually points to; this is
+    # being evaluated as a possible alternative/addition, not a replacement.
+    # The tunnel this originally pointed to (2026-08-24) was already dead
+    # (Cloudflare error 1033 - session not running) the first time it was
+    # checked - re-verify liveness before ever wiring real code to it.
+    kaggle_autocad_api_url: str = ""
+
     # ---- Modal (app/providers/modal_provider.py) - the active room-redesign
     # and (optionally) house-render backend as of 2026-08. See image_provider's
     # comment above for the full Kaggle-to-Modal migration story. Both are

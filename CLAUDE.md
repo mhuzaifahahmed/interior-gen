@@ -521,6 +521,30 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     AI-designed* (non-rectangular, non-slice-and-dice) room layouts - and if so, HouseDiffusion and
     House-GAN++'s *released* checkpoints are commercially unusable/legally risky as-is; the real option is
     training a fresh model on ResPlan, which is unbuilt.
+  - **A friend-hosted Kaggle model was proposed and reviewed (2026-08-24) - REJECTED, real code read, not
+    guessed.** `settings.kaggle_autocad_api_url` (`app/config.py`) stores its tunnel URL but is
+    deliberately wired to NOTHING - no provider code reads it. The full generation script was reviewed
+    directly: it is **Stable Diffusion XL + ControlNet (Canny edge conditioning)**, i.e. still an
+    image-diffusion model, the exact category already diagnosed as the root cause of the user's original
+    "random lines and shapes, not AutoCAD format" complaint. ControlNet doesn't change that verdict - it
+    only conditions the diffusion process on an edge-map "hint", it doesn't make the model output
+    coordinates. Two specific, code-level problems, not just the general category objection:
+    1. The output is `image.save("controlnet_cad_floorplan.png")` - a raster PNG, not DXF/DWG/vector data
+       of any kind. There is nothing to convert; the "geometry" is pixels that merely resemble CAD line
+       art, same failure shape as this project's own reverted "v4" AI-drawn CAD-plan experiment (see
+       above - hallucinated dimension text, reverted to the deterministic renderer).
+    2. Worse than a plain text-to-image model: the ControlNet conditioning image (`canny_image`, the
+       "boundary map" the model is supposed to structurally follow) is a **hardcoded fixed rectangle +
+       two hardcoded partition lines**, drawn identically every run regardless of `user_prompt` - it never
+       reads real plot dimensions or a real room list. So even the one thing ControlNet is meant to buy
+       (structural fidelity to a given layout) is disconnected from the actual input; the model has no
+       structural awareness of the user's real plot at all, only whatever the text prompt manages to
+       steer (the same unreliable channel this file has documented failing repeatedly elsewhere).
+    Also note: the script has no HTTP server/API code (`input()` + local `image.save()` only) - even
+    setting the output-format problem aside, nothing here is actually callable as a web API without a
+    FastAPI/Flask+uvicorn wrapper that doesn't exist in what was reviewed. **Verdict: do not integrate.**
+    Confirmed dead at review time too (Cloudflare error 1033, tunnel not running) - moot regardless, since
+    the code itself disqualifies it independent of whether the tunnel is up.
 - **"Concept Layout" labeling requirement**: whenever a real floor-plan vendor is wired in (the
   `floor_plan_key`/`floor_plan_status`/`idealhouse.py` slot, still inert), `renderHouseResults()`
   (`static/app.js`) must label that card **"Concept Layout — not a precise blueprint"**, never anything
