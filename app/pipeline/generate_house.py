@@ -5,6 +5,7 @@ from sqlmodel import Session
 
 from app.db import engine
 from app.models import HouseProject
+from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
 from app.pipeline.blueprint_svg import render_floor_blueprint
 from app.pipeline.floor_layout import layout_floor
 from app.pipeline.house_prompts import build_house_prompt
@@ -38,8 +39,9 @@ def _is_cancelled(session: Session, house_project: HouseProject) -> bool:
 # user supplied, taken to its most literal conclusion: skip the image model
 # for the floor plan entirely, not just for the numbers.
 # v6: the free-text-only prompt input was replaced with structured dropdowns
-# (Floors, Bedrooms, Bathrooms, Garage, Kitchen-each-floor toggles) plus a
-# small free-text "extras" box - see app/main.py's create_house_project. The
+# (Floors, Bedrooms, Bathrooms) plus a small free-text "extras" box (a
+# Garage/Kitchen-each-floor checkbox pair was tried and dropped - see
+# CLAUDE.md) - see app/main.py's create_house_project. The
 # server now composes a natural-language requirements string from those
 # selections (still stored as `prompt`, for backward compatibility with
 # every downstream consumer of it), and passes the real, explicit floor
@@ -148,6 +150,7 @@ def run_house_pipeline(
 
             room_layout: dict | None = None
             blueprint_keys: list[str] = []
+            blueprint_dxf_keys: list[str] = []
             try:
                 room_layout = provider.generate_room_layout(
                     dimensions, prompt or "", plot_description, floor_count
@@ -159,6 +162,22 @@ def run_house_pipeline(
                     key = f"{key_prefix}/{house_project_id}/blueprint_floor{floor['floor_number']}.png"
                     storage.put(key, png_bytes, content_type="image/png")
                     blueprint_keys.append(key)
+                    # Real AutoCAD-format export of the SAME rectangles - no AI
+                    # model involved, see app/pipeline/blueprint_dxf.py's
+                    # module docstring. Deliberately its own try/except so a
+                    # DXF-serialization bug can never take down the PNG
+                    # blueprint (which the render step below depends on).
+                    try:
+                        dxf_bytes = render_floor_blueprint_dxf(floor["floor_number"], rects, dimensions)
+                        dxf_key = f"{key_prefix}/{house_project_id}/blueprint_floor{floor['floor_number']}.dxf"
+                        storage.put(dxf_key, dxf_bytes, content_type="application/dxf")
+                        blueprint_dxf_keys.append(dxf_key)
+                    except Exception:
+                        logger.exception(
+                            "DXF export failed for house project %s floor %s; PNG blueprint is unaffected",
+                            house_project_id,
+                            floor["floor_number"],
+                        )
                 house_project.blueprint_status = "done"
             except Exception:
                 logger.exception(
@@ -167,10 +186,12 @@ def run_house_pipeline(
                 )
                 room_layout = None
                 blueprint_keys = []
+                blueprint_dxf_keys = []
                 house_project.blueprint_status = "failed"
 
             house_project.room_layout_json = json.dumps(room_layout) if room_layout else None
             house_project.blueprint_keys_json = json.dumps(blueprint_keys) if blueprint_keys else None
+            house_project.blueprint_dxf_keys_json = json.dumps(blueprint_dxf_keys) if blueprint_dxf_keys else None
             session.add(house_project)
             session.commit()
 

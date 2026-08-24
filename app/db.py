@@ -47,6 +47,7 @@ _NEW_COLUMNS_BY_TABLE = {
     "houseproject": [
         ("room_layout_json", "TEXT"),
         ("blueprint_keys_json", "TEXT"),
+        ("blueprint_dxf_keys_json", "TEXT"),
         ("blueprint_status", "TEXT NOT NULL DEFAULT 'idle'"),
         ("user_id", "TEXT"),
         ("house_inputs_json", "TEXT"),

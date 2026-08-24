@@ -341,6 +341,10 @@ def test_run_house_pipeline_generates_blueprint_per_floor(monkeypatch):
         blueprint_keys = json.loads(house_project.blueprint_keys_json)
         assert blueprint_keys == ["local.output/h6/blueprint_floor1.png"]
         assert house_project.room_layout_json is not None
+        # Real AutoCAD-format (.dxf) export of the same floor - see
+        # app/pipeline/blueprint_dxf.py.
+        blueprint_dxf_keys = json.loads(house_project.blueprint_dxf_keys_json)
+        assert blueprint_dxf_keys == ["local.output/h6/blueprint_floor1.dxf"]
 
     assert len(provider.room_layout_calls) == 1
     # The exterior render is always edited from the real plot photo - the
@@ -348,6 +352,8 @@ def test_run_house_pipeline_generates_blueprint_per_floor(monkeypatch):
     assert provider.render_calls[0][0] == b"plot-bytes"
     blueprint_bytes = storage.get("local.output/h6/blueprint_floor1.png")
     assert blueprint_bytes.startswith(b"\x89PNG")
+    dxf_bytes = storage.get("local.output/h6/blueprint_floor1.dxf")
+    assert dxf_bytes.startswith(b"  0\nSECTION")
 
 
 def test_run_house_pipeline_falls_back_to_plot_photo_when_blueprint_generation_fails(monkeypatch):
@@ -378,5 +384,6 @@ def test_run_house_pipeline_falls_back_to_plot_photo_when_blueprint_generation_f
         assert house_project.blueprint_status == "failed"
         assert house_project.room_layout_json is None
         assert house_project.blueprint_keys_json is None
+        assert house_project.blueprint_dxf_keys_json is None
 
     assert provider.render_calls[0][0] == b"plot-bytes"

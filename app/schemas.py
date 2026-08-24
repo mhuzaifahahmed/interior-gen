@@ -48,6 +48,10 @@ class HouseProjectStatusResponse(BaseModel):
     # reserved for a future real, paid floor-plan vendor (still inert).
     blueprint_status: str = "idle"
     blueprint_urls: list[str] = []
+    # Real AutoCAD-format (.dxf) download URLs for each floor - same
+    # floor-ordering as blueprint_urls, may be shorter (or empty) than it if
+    # DXF export failed for some/all floors while the PNG still succeeded.
+    blueprint_dxf_urls: list[str] = []
     # Same history-dropdown addition as ProjectStatusResponse above.
     created_at: Optional[str] = None
     prompt: Optional[str] = None

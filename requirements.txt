@@ -24,3 +24,10 @@ httpx>=0.27
 # why) - Clerk owns signup/login/Google sign-in/session issuance now, this
 # backend only verifies the token on each request via verify_token().
 clerk-backend-api>=6.0.1
+# Real AutoCAD-format (.dxf) export for Build a House's per-floor blueprint -
+# converts the same deterministic room rectangles blueprint_svg.py already
+# draws to PNG into a genuine, dimensionally-accurate DXF file that opens in
+# actual AutoCAD. No AI model involved (see app/pipeline/blueprint_dxf.py and
+# CLAUDE.md's "Build a House feature" section for why an AI model was
+# deliberately NOT used here). MIT-licensed, pure Python, no GPU.
+ezdxf>=1.3

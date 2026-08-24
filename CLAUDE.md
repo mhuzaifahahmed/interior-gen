@@ -451,6 +451,76 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   - **Also deferred, and dropped from scope**: corner-point/irregular-plot input. Neither vendor can use
     plot geometry at all, so v1 only collects length×width - building corner-point UI now would be
     misleading. Revisit only if a future vendor can actually consume geometry.
+- **Real DXF/AutoCAD-format export - researched 2026-08-24, BUILT the same day.** User tried multiple
+  self-hosted AI models on Kaggle looking for one that outputs genuine AutoCAD-format geometry and got
+  garbage every time ("random lines and shapes... not AutoCAD format at all"). Root cause, confirmed via
+  live research, not assumption: **every model that was tried was almost certainly an image-diffusion
+  model** (Stable-Diffusion-family) asked to *draw a picture that looks like a CAD drawing* - that always
+  produces meaningless pixel noise dressed as line art, because diffusion image models have no concept of
+  geometry/coordinates, only pixels. This project already hit and documented the exact same failure mode
+  once before (see "v4" above - an image model hallucinating garbage dimension text on a floor plan,
+  reverted to the deterministic Pillow renderer "v5"). **A real AutoCAD file (DXF/DWG) is coordinate data,
+  not an image** - the fix is a model class that outputs actual vector geometry (room polygons/line
+  segments as numbers), not pixels, which can then be converted to a real `.dxf` deterministically.
+  - **Built: zero-risk path, no AI model at all.** This codebase's own `app/pipeline/floor_layout.py`
+    already computes exact room rectangles (real coordinates, in real feet/meters, from the user's stated
+    plot dimensions) for the existing Pillow-drawn blueprint (`blueprint_svg.py`). That data is genuine
+    vector geometry - it was just previously only ever rendered to a PNG. **`app/pipeline/blueprint_dxf.py`**
+    (`render_floor_blueprint_dxf(floor_number, rects, dimensions) -> bytes`) now feeds those SAME
+    rectangles into **`ezdxf`** (`ezdxf>=1.3` in `requirements.txt`, MIT license, pure Python, no GPU, no
+    Kaggle hosting) to produce a real, valid `.dxf` file (R2010 format) that opens in actual AutoCAD - one
+    per floor, alongside (not replacing) the existing PNG. Pure/deterministic like `blueprint_svg.py` -
+    no I/O, geometry only (room outlines on a `ROOMS` layer + the exterior boundary on `WALLS` + a
+    name/dimensions `TEXT` label per room + a title line), deliberately NOT replicating the PNG's
+    furniture/door/window symbols (those are picture-presentation heuristics, not information a DXF
+    consumer needs duplicated). `$INSUNITS` is set from the stated unit (`ft`→2, `m`→6) so the file opens
+    at the correct real-world scale.
+    - **Wired into `app/pipeline/generate_house.py`'s existing blueprint step**: right after each floor's
+      PNG is generated and stored, its DXF is generated and stored too, in its own nested `try/except` so a
+      DXF-serialization bug can never take down the PNG blueprint (which the render step depends on as its
+      image-edit reference). Keys collected into `HouseProject.blueprint_dxf_keys_json` (new column,
+      additive `_NEW_COLUMNS_BY_TABLE` migration in `db.py`) - same floor-ordered JSON-list-of-keys
+      convention as `blueprint_keys_json`, may be shorter than it (or empty) if DXF export failed for some/
+      all floors while the PNG still succeeded. Exposed as `HouseProjectStatusResponse.blueprint_dxf_urls`.
+    - **Frontend**: each "Floor N Layout" card (`renderHouseResults()` in `static/app.js`) gets a
+      "Download AutoCAD File (.dxf)" link (reusing the existing `.materials-open-btn` style) below its
+      caption, shown only when that floor's DXF export actually succeeded - omitted otherwise, no broken
+      link.
+    - **Tests**: `tests/test_blueprint_dxf.py` (parses the output back with `ezdxf.read()` to confirm it's
+      a genuine, valid DXF, and asserts the room polygon coordinates exactly match `layout_floor()`'s
+      numbers - the whole point of this feature is that the DXF can never disagree with the PNG since both
+      come from the identical rectangles); `tests/test_house_pipeline.py`/`test_house_api.py` extended to
+      cover the new key/URL.
+  - **The actual AI research models that generate true vector floor-plan geometry** (for if organic,
+    non-rectangular AI-designed layouts are wanted later, beyond what the deterministic slice-and-dice
+    algorithm produces) - four found, evaluated for real commercial hostability, not just "does it exist":
+
+    | Model | What it outputs | Pretrained weights? | License (commercial use?) | Training data | Verdict |
+    |---|---|---|---|---|---|
+    | **HouseDiffusion** (`aminshabani/house_diffusion`, CVPR 2023) | Room polygons via diffusion denoising | Yes, a "temporary" Google Drive link | **Explicitly NON-commercial** - the repo's own LICENSE states "The code and the model weights in this repository are not allowed for commercial usage" (custom license layered on GPLv3) | RPLAN | **Disqualified for this B2B product** - the license says so in plain text, not a gray area |
+    | **House-GAN++** (`ennauata/houseganpp`, CVPR 2021) | Room polygons via graph-constrained GAN, iterative refinement | Yes, `test.py` runs a released checkpoint | Plain **GPLv3** - commercial use IS allowed, but copyleft applies to anything the code is linked/distributed with (running it purely as a self-hosted backend service that never ships the code to end users is the standard way SaaS products use GPL code without triggering redistribution obligations - not AGPL, so no "network use counts as distribution" clause - but this is not legal advice, worth a real lawyer's 10 minutes before shipping) | **RPLAN** - restricted-access, explicitly "non-commercial research and academic purposes" only, no redistribution | **Legally murky even though the code license allows commercial use** - the released *weights* were trained on data whose own license forbids non-research use; using someone else's RPLAN-trained checkpoint commercially risks violating RPLAN's terms even though House-GAN++'s own code license doesn't forbid it |
+    | **FloorplanGAN** (`luozn15/FloorplanGAN`) | Room polygons, vector generator + raster discriminator, explicitly designed to export to **DWG/SVG directly** (closest to "actual AutoCAD format" of anything found) | **No** - repo says evaluation/pretrained-model docs are "Coming soon..." with no working download found | Code is MIT (commercial-friendly) | RPLAN | **Best output format on paper, but not currently usable** - no weights to download means training from scratch on RPLAN would be required, and RPLAN itself is non-commercial-only, so even a self-trained model would carry the same data-license risk as House-GAN++ |
+    | **FloorGenT** (`lericson/floorgent`) | Line segments as a token sequence (autoregressive, GPT-style) | Not found/documented | Not stated in the repo | Not RPLAN-based (uses its own simulated/sensor data) - the one candidate NOT tied to RPLAN's restriction | Interesting for a from-scratch retrain (clean data-license story) but immature - no ready weights, research-prototype maturity only |
+
+    Also checked and ruled out: **GSDiff** and **C2Plan** (2025/2026 papers, no confirmed public
+    weights/license found - too new to evaluate); **CubiCasa5K** (a *different* task - vectorizes an
+    *existing* floor-plan photo into SVG, doesn't generate a new layout from dimensions, so it doesn't fit
+    this pipeline's actual need); every purely commercial SaaS tool that claims "AI floor plan → DXF"
+    (Maket.ai, Plans2BIM, ai-architectures.com, etc.) - none is self-hostable on Kaggle, they're closed
+    cloud APIs, the opposite of what was asked for.
+  - **The one commercially-clean dataset found: `m-agour/ResPlan`** - 17,000 real residential floor plans
+    in vector format, **CC BY 4.0** (commercial use explicitly permitted, attribution required), code MIT.
+    **No pretrained generative model ships with it** - only benchmark/evaluation baselines. This is the
+    real path to an eventually-commercial, from-scratch-trained AI floor-plan generator with a clean
+    license story (e.g. reproducing FloorplanGAN's or House-GAN++'s architecture but training it on
+    ResPlan instead of RPLAN) - real engineering effort (weeks, GPU training time), not a drop-in model,
+    and not started.
+  - **Bottom line / recommendation**: ship the `ezdxf`-based export of the already-computed deterministic
+    geometry first (cheap, accurate, zero legal risk, no new hosting) if the actual goal is "give users a
+    real AutoCAD file." Only chase a generative AI floor-plan model if the goal is specifically *organic,
+    AI-designed* (non-rectangular, non-slice-and-dice) room layouts - and if so, HouseDiffusion and
+    House-GAN++'s *released* checkpoints are commercially unusable/legally risky as-is; the real option is
+    training a fresh model on ResPlan, which is unbuilt.
 - **"Concept Layout" labeling requirement**: whenever a real floor-plan vendor is wired in (the
   `floor_plan_key`/`floor_plan_status`/`idealhouse.py` slot, still inert), `renderHouseResults()`
   (`static/app.js`) must label that card **"Concept Layout — not a precise blueprint"**, never anything

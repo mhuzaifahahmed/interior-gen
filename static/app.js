@@ -2124,6 +2124,15 @@ function renderHouseResults(data) {
     data.blueprint_urls.forEach((url, i) => {
       const floorNumber = i + 1;
       const label = `Floor ${floorNumber} Layout`;
+      // Real AutoCAD-format (.dxf) export of this same floor's geometry - no
+      // AI model involved (app/pipeline/blueprint_dxf.py), same room
+      // rectangles as the PNG above. May be missing for an individual floor
+      // even when the PNG succeeded (DXF export is its own best-effort step
+      // server-side) - the link is simply omitted in that case.
+      const dxfUrl = (data.blueprint_dxf_urls || [])[i];
+      const dxfLinkHtml = dxfUrl
+        ? `<a class="materials-open-btn" href="${dxfUrl}" download="blueprint_floor${floorNumber}.dxf">Download AutoCAD File (.dxf)</a>`
+        : "";
       const card = document.createElement("div");
       card.className = "result-card";
       card.innerHTML = `
@@ -2137,9 +2146,12 @@ function renderHouseResults(data) {
           <p class="tier-name">${label}</p>
           <p class="tier-desc">Computed from your stated dimensions - an accurate room layout, though not a full architectural/code-compliant plan.</p>
         </div>
+        ${dxfLinkHtml}
       `;
       card.addEventListener("click", () => openLightbox(url, label));
       card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
+      const dxfLink = card.querySelector(".materials-open-btn");
+      if (dxfLink) dxfLink.addEventListener("click", (e) => e.stopPropagation());
       houseResultsGrid.appendChild(card);
     });
   }

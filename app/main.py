@@ -553,6 +553,11 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
     blueprint_keys = json.loads(house_project.blueprint_keys_json) if house_project.blueprint_keys_json else []
     blueprint_urls = [storage.url(key) for key in blueprint_keys]
 
+    blueprint_dxf_keys = (
+        json.loads(house_project.blueprint_dxf_keys_json) if house_project.blueprint_dxf_keys_json else []
+    )
+    blueprint_dxf_urls = [storage.url(key) for key in blueprint_dxf_keys]
+
     dimensions = json.loads(house_project.dimensions_json) if house_project.dimensions_json else None
     house_inputs = json.loads(house_project.house_inputs_json) if house_project.house_inputs_json else None
 
@@ -565,6 +570,7 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
         floor_plan_status=house_project.floor_plan_status,
         blueprint_status=house_project.blueprint_status,
         blueprint_urls=blueprint_urls,
+        blueprint_dxf_urls=blueprint_dxf_urls,
         created_at=house_project.created_at.isoformat(),
         prompt=house_project.prompt,
         dimensions=dimensions,

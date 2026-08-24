@@ -141,6 +141,13 @@ class HouseProject(SQLModel, table=True):
     # now including furniture and staircase symbols (v5).
     room_layout_json: Optional[str] = None
     blueprint_keys_json: Optional[str] = None
+    # Real AutoCAD-format (.dxf) export of the SAME rects each PNG in
+    # blueprint_keys_json was drawn from - see app/pipeline/blueprint_dxf.py.
+    # A JSON list of storage keys, same floor-ordering convention as
+    # blueprint_keys_json (index 0 = ground floor). None for projects
+    # generated before this feature, or if DXF export failed for every floor
+    # (best-effort, doesn't affect blueprint_status/blueprint_keys_json).
+    blueprint_dxf_keys_json: Optional[str] = None
     blueprint_status: str = Field(default="idle")  # idle | running | done | failed
 
     meta_json: Optional[str] = None

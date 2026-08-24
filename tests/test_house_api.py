@@ -88,10 +88,15 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
         assert body["images"]["floor_plan"] is None
         assert body["blueprint_status"] == "done"
         assert len(body["blueprint_urls"]) == 1
+        # Real AutoCAD-format (.dxf) export, same floor count as the PNGs -
+        # see app/pipeline/blueprint_dxf.py.
+        assert len(body["blueprint_dxf_urls"]) == 1
 
         assert f"users/{username}/buildAHouse/input/" in body["images"]["plot"]
         assert f"users/{username}/buildAHouse/output/" in body["images"]["render"]
         assert f"users/{username}/buildAHouse/output/" in body["blueprint_urls"][0]
+        assert f"users/{username}/buildAHouse/output/" in body["blueprint_dxf_urls"][0]
+        assert body["blueprint_dxf_urls"][0].endswith(".dxf")
 
 
 def test_compose_house_requirements_combines_all_fields():
