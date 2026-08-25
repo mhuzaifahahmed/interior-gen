@@ -28,6 +28,29 @@ renderer instead, so geometry/dimensions/labels can never be hallucinated -
 no image model is involved in producing the floor-plan image at all. See
 app/pipeline/generate_house.py's HOUSE_PROMPT_VERSION docstring for the
 full history of what was tried.
+
+v6 (2026-08-25) replaces the double-THIN-LINE wall model with real solid
+POCHÉ (filled-black) walls - a real, live-compared user finding: a friend-
+hosted AI model's output looked more "professionally drafted" than this
+renderer's despite being dimensionally inaccurate and text-garbled, and
+solid poché was identified as the single biggest visual signature actually
+missing (every real architectural drawing fills walls solid; this one drew
+them as two thin outlines). Technique: fill the whole plot footprint solid
+black first (_draw_wall_base), then carve each room's interior back out of
+that base, inset by WALL_HALF_THICKNESS_PX (_carve_room) - whatever black
+remains between two carved-out interiors automatically reads as a correct,
+solid partition wall, and the band left around the whole plot automatically
+reads as the exterior wall, with NO separate line-drawing/alignment logic
+needed for either (this is what guarantees every wall junction lines up
+exactly, unlike hand-drawing each wall as a separate stroke). Interior
+partition walls come out twice as thick as the exterior wall by this
+technique alone (two rooms each contribute one inset), which happens to
+match a real architectural convention (exterior walls often thinner than
+load-bearing interior ones in a light-frame residential build) - not
+deliberately engineered, but not wrong either. Doors/windows now cut an
+opening straight through the solid poché band (same hinge+leaf+arc door
+symbol and window-glazing-line convention as before, just carved through
+black instead of erasing a double-line gap).
 """
 
 import math
@@ -47,8 +70,23 @@ DIM_GUTTER_PX = 44      # gap between the plot edge and its nearest dimension li
 DIM_OVERALL_OFFSET_PX = 30  # extra gap out to the "overall" dimension line
 DIM_TICK_PX = 8
 
-WALL_EXTERIOR_GAP_PX = 9   # gap between the two parallel exterior wall lines
-WALL_INTERIOR_GAP_PX = 4   # gap between the two parallel interior wall lines
+# Solid poché wall model (v6, see module docstring) - each room's interior
+# is carved this far in from its outer rect. Two adjacent rooms each carve
+# their own inset, so the partition between them ends up 2x this thick;
+# the exterior wall (only one room contributing, plus the outward
+# extension below) ends up thinner - see module docstring for why that's
+# an acceptable, not-deliberately-engineered side effect of the technique.
+WALL_HALF_THICKNESS_PX = 5
+# How far the solid wall base extends OUTWARD beyond the plot boundary,
+# on top of the WALL_HALF_THICKNESS_PX every room already carves back from
+# that same boundary - together these give the exterior wall a real,
+# visible thickness (9px total, matching this renderer's pre-v6 exterior
+# wall gap for visual continuity) instead of being paper-thin.
+WALL_EXTERIOR_EXTRA_PX = 4
+# Extra clearance furniture/staircase symbols keep from a room's true
+# (post-poché) interior edge, so nothing visually touches or crosses into
+# the solid wall band.
+INTERIOR_CLEARANCE_PX = WALL_HALF_THICKNESS_PX + 2
 
 # ---- Palette (Sage & Linen, matching the site's tokens) ----
 PAPER = (250, 246, 238)        # background wash, ~#faf6ee
@@ -94,8 +132,13 @@ def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dic
     # into the margins gives a "drafting sheet" backdrop that's actually seen.
     _draw_grid(draw, img_w, img_h, plot_x0, plot_y0, plot_x1, plot_y1, scale)
 
+    # Solid poché wall base - fill the whole plot footprint (extended
+    # outward for the exterior wall) black, THEN carve each room's
+    # interior back out of it. See module docstring for why this single
+    # fill+carve technique replaces all the old separate wall-line drawing.
+    _draw_wall_base(draw, plot_x0, plot_y0, plot_x1, plot_y1)
     for rect in rects:
-        _draw_room(draw, _room_bbox(rect, plot_x0, plot_y0, scale))
+        _carve_room(draw, _room_bbox(rect, plot_x0, plot_y0, scale))
 
     for rect in rects:
         _draw_furniture(draw, rect, plot_x0, plot_y0, scale)
@@ -109,8 +152,6 @@ def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dic
         edge = _shared_edge(a, b)
         if edge is not None:
             _draw_door(draw, edge, plot_x0, plot_y0, scale, door_len_px)
-
-    _draw_exterior_wall(draw, plot_x0, plot_y0, plot_x1, plot_y1)
 
     for rect in rects:
         _draw_windows(draw, rect, length, width, plot_x0, plot_y0, scale)
@@ -134,22 +175,26 @@ def _room_bbox(rect: dict, plot_x0: float, plot_y0: float, scale: float) -> tupl
     return x0, y0, x0 + rect["w"] * scale, y0 + rect["h"] * scale
 
 
-def _draw_room(draw: ImageDraw.ImageDraw, bbox: tuple[float, float, float, float]) -> None:
+def _draw_wall_base(draw: ImageDraw.ImageDraw, plot_x0: float, plot_y0: float, plot_x1: float, plot_y1: float) -> None:
+    """Fills the whole plot footprint - extended outward by
+    WALL_EXTERIOR_EXTRA_PX so the exterior wall has real visible thickness -
+    solid black. Every room is then carved back out of this single fill
+    (_carve_room), so both the exterior wall and every interior partition
+    come from the same technique, always aligned, never drawn as separate
+    line segments that could mismatch."""
+    ext = WALL_EXTERIOR_EXTRA_PX
+    draw.rectangle([plot_x0 - ext, plot_y0 - ext, plot_x1 + ext, plot_y1 + ext], fill=WALL_COLOR)
+
+
+def _carve_room(draw: ImageDraw.ImageDraw, bbox: tuple[float, float, float, float]) -> None:
+    """Carves one room's interior back out of the solid wall base, inset by
+    WALL_HALF_THICKNESS_PX on every side - whatever black remains between
+    this and neighboring rooms' own carve-outs is the poché wall."""
     x0, y0, x1, y1 = bbox
-    draw.rectangle([x0, y0, x1, y1], fill=ROOM_FILL)
-    draw.rectangle([x0, y0, x1, y1], outline=WALL_COLOR, width=1)
-    inset = WALL_INTERIOR_GAP_PX
-    if x1 - x0 > 2 * inset + 4 and y1 - y0 > 2 * inset + 4:
-        draw.rectangle([x0 + inset, y0 + inset, x1 - inset, y1 - inset], outline=WALL_COLOR, width=1)
-
-
-def _draw_exterior_wall(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float) -> None:
-    """Double-line exterior wall: the plot boundary itself is the inner face,
-    plus a parallel line offset outward - a genuine architectural double-line
-    wall, not just a thick single stroke."""
-    inset = WALL_EXTERIOR_GAP_PX
-    draw.rectangle([x0, y0, x1, y1], outline=WALL_COLOR, width=2)
-    draw.rectangle([x0 - inset, y0 - inset, x1 + inset, y1 + inset], outline=WALL_COLOR, width=2)
+    inset = WALL_HALF_THICKNESS_PX
+    if x1 - x0 <= 2 * inset or y1 - y0 <= 2 * inset:
+        return  # room too small to carve a real interior - leave it solid wall rather than invert
+    draw.rectangle([x0 + inset, y0 + inset, x1 - inset, y1 - inset], fill=ROOM_FILL)
 
 
 # ---- Doors ----
@@ -203,7 +248,11 @@ def _draw_door(draw: ImageDraw.ImageDraw, edge: dict, plot_x0: float, plot_y0: f
         open_end = (hx, hy + leaf_len_px)
 
     hinge = (hx, hy)
-    erase_width = 2 * WALL_INTERIOR_GAP_PX + 6
+    # Interior partition walls are 2*WALL_HALF_THICKNESS_PX thick (see
+    # _carve_room) - erase generously past that so the opening fully clears
+    # the poché band regardless of which two rooms' inset happens to meet
+    # here, then redraw the leaf/arc symbol on top in WALL_COLOR.
+    erase_width = 2 * WALL_HALF_THICKNESS_PX + 6
     draw.line([hinge, gap_end], fill=ROOM_FILL, width=erase_width)
     draw.line([hinge, open_end], fill=WALL_COLOR, width=1)
     draw.arc(
@@ -217,8 +266,9 @@ def _draw_door(draw: ImageDraw.ImageDraw, edge: dict, plot_x0: float, plot_y0: f
 
 def _draw_windows(draw: ImageDraw.ImageDraw, rect: dict, plot_length: float, plot_width: float, plot_x0: float, plot_y0: float, scale: float) -> None:
     """Marks a window on each of the room's edges that lie on the exterior
-    plot boundary - a short colored line cut into the exterior double wall,
-    centered on that edge."""
+    plot boundary - cuts straight through the solid exterior wall band (back
+    to PAPER, i.e. genuinely open to the outside, not just a color change)
+    with a colored glazing line centered on the cut."""
     x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
     edges = []
     if abs(x) < _EDGE_TOL:
@@ -238,7 +288,11 @@ def _draw_windows(draw: ImageDraw.ImageDraw, rect: dict, plot_length: float, plo
         mid = (start_units + end_units) / 2
         w_start_px = (mid - win_len_units / 2)
         w_end_px = (mid + win_len_units / 2)
-        erase_width = WALL_EXTERIOR_GAP_PX + 6
+        # Exterior wall band is WALL_HALF_THICKNESS_PX (inward) +
+        # WALL_EXTERIOR_EXTRA_PX (outward) thick, centered on the plot
+        # boundary line - erase generously past that so the cut fully
+        # clears the poché band.
+        erase_width = WALL_HALF_THICKNESS_PX + WALL_EXTERIOR_EXTRA_PX + 6
 
         if side in ("left", "right"):
             px = plot_x0 + (0.0 if side == "left" else plot_length) * scale
@@ -285,7 +339,10 @@ def _draw_furniture(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_
         return
 
     cy = (y0 + y1) / 2
-    pad = max(4.0, min(box_w, box_h) * 0.07)
+    # Minimum pad is INTERIOR_CLEARANCE_PX, not an arbitrary 4px - guarantees
+    # furniture never visually touches/crosses the poché wall band carved
+    # WALL_HALF_THICKNESS_PX in from this same outer bbox (see _carve_room).
+    pad = max(float(INTERIOR_CLEARANCE_PX), min(box_w, box_h) * 0.07)
     ix0, iy0, ix1, iy1 = x0 + pad, y0 + pad, x1 - pad, y1 - pad
     iw, ih = ix1 - ix0, iy1 - iy0
     name = rect["name"].lower()

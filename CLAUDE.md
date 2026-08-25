@@ -746,6 +746,32 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     crashes. `tests/test_blueprint_svg.py` covers the `total_floors` param, the bed/label
     non-overlap regression, and a smoke test across every recognized (and one unrecognized) room-name
     keyword.
+  - **`blueprint_svg.py`'s own v6 (2026-08-25): solid poché (filled-black) walls, replacing the
+    double-thin-line model.** Real trigger: a live side-by-side comparison against a friend-hosted AI
+    model's output (see "Real DXF/AutoCAD-format export" below) showed the AI version reading as more
+    "professionally drafted" despite being dimensionally inaccurate and text-garbled - solid poché was
+    identified as the single biggest visual signature this renderer was missing (every real
+    architectural drawing fills walls solid; this one drew two thin outlines). Technique: `_draw_wall_base()`
+    fills the whole plot footprint (extended outward by `WALL_EXTERIOR_EXTRA_PX`) solid black FIRST, then
+    `_carve_room()` cuts each room's interior back out of that base, inset by `WALL_HALF_THICKNESS_PX` -
+    whatever black remains between two carved-out interiors automatically reads as a correct, aligned
+    partition wall, and the band left around the whole plot automatically reads as the exterior wall, with
+    no separate line-drawing/alignment logic needed for either (this is what guarantees every wall
+    junction lines up exactly, unlike hand-drawing each wall as its own stroke - a real risk the old
+    double-line approach carried). A side effect of the technique, not deliberately engineered but not
+    wrong either: interior partition walls come out 2x as thick as the exterior wall (two rooms each
+    contribute one inset vs. only one room + the outward extension) - which happens to match a real
+    light-frame-residential convention. `_draw_door()`/`_draw_windows()` now cut their openings straight
+    through the solid poché band (same hinge+leaf+arc door symbol and glazing-line window convention as
+    before) instead of erasing a double-line gap. Furniture's minimum interior padding was bumped to
+    `INTERIOR_CLEARANCE_PX` (was a bare `4.0`) so symbols can never visually cross into the now-thicker
+    wall band. Verified both via the existing test suite (unchanged pass/fail contract - no test asserts
+    exact pixel colors, only valid-PNG/differs-when-expected) and by rendering and visually inspecting
+    real output: a full 2-floor 40x60ft house (6 rooms/floor) and a stress-test tight 24x20ft/5-room plot -
+    confirmed clean wall junctions, correctly-cut door/window openings, and no furniture/label overlaps at
+    either scale. `blueprint_dxf.py` (the real `.dxf` export) was deliberately NOT changed - CAD users want
+    editable line geometry, not filled poché, so the DXF stays line-based; this upgrade is scoped to the
+    PNG display renderer only.
 - **v6: structured dropdown inputs replace the single free-text requirements field (2026-08-20).**
   Previously the ONLY way to steer floor count/room mix was one free-text `#house-prompt` input, with
   floor count derived by regex-guessing "N floor(s)" out of whatever the user typed
