@@ -2156,31 +2156,36 @@ function renderHouseResults(data) {
     });
   }
 
-  // Floor-plan generation via a real, PAID vendor is deferred (no vendor
-  // wired in yet - see app/providers/idealhouse.py) - deliberately show NO
-  // floor-plan card at all rather than a broken/empty placeholder. Once a
-  // vendor is wired in, this is where a floor-plan card should be added,
-  // labeled "Concept Layout - not a precise blueprint" (no image-gen API
-  // guarantees dimensional accuracy) - NOT the same as the blueprint cards
-  // above, which already are dimensionally accurate.
-  if (data.floor_plan_status === "done" && data.images.floor_plan) {
-    const card = document.createElement("div");
-    card.className = "result-card";
-    card.innerHTML = `
-      <div class="img-wrap">
-        <img src="${data.images.floor_plan}" alt="Concept Layout" loading="lazy" />
-        <a class="download-btn" href="${data.images.floor_plan}" download="floor_plan.png" aria-label="Download floor plan" title="Download image">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </a>
-      </div>
-      <div class="caption">
-        <p class="tier-name">Concept Layout</p>
-        <p class="tier-desc">Not a precise blueprint - no image-gen API guarantees dimensional accuracy.</p>
-      </div>
-    `;
-    card.addEventListener("click", () => openLightbox(data.images.floor_plan, "Concept Layout"));
-    card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
-    houseResultsGrid.appendChild(card);
+  // Real vendor output (app/providers/kaggle_autocad.py, a friend-hosted
+  // Kaggle SDXL+ControlNet model - see CLAUDE.md for the honest quality
+  // evaluation). One card PER FLOOR (data.floor_plan_urls, floor-ordered) -
+  // the vendor generates one image per floor natively, so showing only the
+  // first would silently hide floors 2+ for any multi-floor request.
+  // Deliberately labeled "Concept Layout - not a precise blueprint" (no
+  // image-gen model guarantees dimensional accuracy) - NOT the same as the
+  // blueprint cards above, which already are dimensionally accurate.
+  if (data.floor_plan_status === "done" && data.floor_plan_urls && data.floor_plan_urls.length) {
+    data.floor_plan_urls.forEach((url, i) => {
+      const floorNumber = i + 1;
+      const label = data.floor_plan_urls.length > 1 ? `Concept Layout - Floor ${floorNumber}` : "Concept Layout";
+      const card = document.createElement("div");
+      card.className = "result-card";
+      card.innerHTML = `
+        <div class="img-wrap">
+          <img src="${url}" alt="${label}" loading="lazy" />
+          <a class="download-btn" href="${url}" download="floor_plan_floor${floorNumber}.png" aria-label="Download ${label}" title="Download image">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+        </div>
+        <div class="caption">
+          <p class="tier-name">${label}</p>
+          <p class="tier-desc">Not a precise blueprint - no image-gen API guarantees dimensional accuracy.</p>
+        </div>
+      `;
+      card.addEventListener("click", () => openLightbox(url, label));
+      card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
+      houseResultsGrid.appendChild(card);
+    });
   }
 }
 

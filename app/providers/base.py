@@ -134,15 +134,22 @@ class Provider(ABC):
     @abstractmethod
     def generate_floor_plan(
         self, plot_description: str | None, dimensions: dict, prompt: str
-    ) -> bytes | None:
-        """Generate a 2D floor plan (PNG bytes) respecting `dimensions` and
-        `prompt` as closely as the underlying vendor allows. Best-effort: return
-        None if no floor-plan vendor is configured/available, or if generation
-        fails - the pipeline must treat "no floor plan" as an expected, non-fatal
-        state (see app/providers/idealhouse.py), not a crash. Unlike
+    ) -> list[bytes] | None:
+        """Generate one 2D floor plan image (PNG bytes) PER FLOOR, respecting
+        `dimensions` and `prompt` as closely as the underlying vendor allows -
+        floor-ordered (index 0 = ground floor), same convention as
+        blueprint_keys_json. Best-effort: return None if no floor-plan vendor
+        is configured/available, or if generation fails entirely - the
+        pipeline must treat "no floor plan" as an expected, non-fatal state
+        (see app/providers/idealhouse.py), not a crash. Unlike
         generate_materials, there is deliberately NO never-empty fallback here -
         a fabricated floor-plan image would be actively misleading in a way a
         labeled price estimate isn't.
+
+        Changed from a single bytes | None to list[bytes] | None (2026-08-25)
+        once a real vendor (kaggle_autocad.py) turned out to generate one
+        image per floor natively - the original single-image contract was
+        silently discarding floors 2+ for any multi-floor request.
         """
         ...
 

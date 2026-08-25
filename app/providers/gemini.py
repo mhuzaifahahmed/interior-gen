@@ -298,7 +298,7 @@ class GeminiProvider(Provider):
 
     def generate_floor_plan(
         self, plot_description: str | None, dimensions: dict, prompt: str
-    ) -> bytes | None:
+    ) -> list[bytes] | None:
         # Gemini has no floor-plan-specific capability - this is the honest
         # "not available from this provider" case the best-effort contract
         # allows for (see Provider.generate_floor_plan's docstring). The real

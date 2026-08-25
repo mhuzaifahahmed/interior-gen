@@ -222,6 +222,19 @@ class Settings(BaseSettings):
     # set - flip this the moment it is, no code change needed.
     house_image_provider: str = "openai"
 
+    # Dev/testing escape hatch: when False, run_house_pipeline() (generate_house.py)
+    # skips the exterior render step (provider.generate_house_render()) entirely -
+    # no call to Kaggle or OpenAI happens at all - and the house project still
+    # completes as "done" with whatever else succeeded (plot analysis, the free
+    # algorithmic blueprint + DXF export, and the friend-hosted AutoCAD concept
+    # floor plan via kaggle_autocad.py). Added specifically so the AutoCAD/
+    # floor-plan work can be checked end-to-end on the real site while the
+    # separate elevation-render Kaggle model isn't running yet, without risking
+    # an accidental OpenAI charge or a failed project from a dead Kaggle house
+    # tunnel. Default True (render always attempted) - this is NOT meant to be
+    # the normal production setting, only a temporary local toggle.
+    house_render_enabled: bool = True
+
     # Set ONLY when the frontend is hosted on a different domain from this
     # backend (e.g. static/ deployed to Vercel, this FastAPI app deployed to
     # Render) - blank (the default) means same-origin, which is how local dev

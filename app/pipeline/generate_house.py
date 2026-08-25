@@ -3,6 +3,7 @@ import logging
 
 from sqlmodel import Session
 
+from app.config import settings
 from app.db import engine
 from app.models import HouseProject
 from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
@@ -112,17 +113,21 @@ def run_house_pipeline(
             session.commit()
 
             try:
-                floor_plan_bytes = provider.generate_floor_plan(plot_description, dimensions, prompt or "")
+                floor_plan_images = provider.generate_floor_plan(plot_description, dimensions, prompt or "")
             except Exception:
                 logger.exception(
                     "generate_floor_plan failed for house project %s; continuing without it", house_project_id
                 )
-                floor_plan_bytes = None
+                floor_plan_images = None
 
-            if floor_plan_bytes:
-                key = f"{key_prefix}/{house_project_id}/floor_plan.png"
-                storage.put(key, floor_plan_bytes, content_type="image/png")
-                house_project.floor_plan_key = key
+            if floor_plan_images:
+                floor_plan_keys = []
+                for i, image_bytes in enumerate(floor_plan_images, start=1):
+                    key = f"{key_prefix}/{house_project_id}/floor_plan_floor{i}.png"
+                    storage.put(key, image_bytes, content_type="image/png")
+                    floor_plan_keys.append(key)
+                house_project.floor_plan_key = floor_plan_keys[0]  # legacy single-key field, first floor only
+                house_project.floor_plan_keys_json = json.dumps(floor_plan_keys)
                 house_project.floor_plan_status = "done"
             else:
                 house_project.floor_plan_status = "not_configured"
@@ -208,17 +213,29 @@ def run_house_pipeline(
             # "house on this actual land" picture). v4 removed the second,
             # blueprint-sourced 3D isometric render entirely - this is now the
             # only generate_house_render() call in the pipeline.
-            primary_prompt = build_house_prompt(dimensions, prompt, plot_description, room_layout)
-            render_bytes = provider.generate_house_render(plot_bytes, primary_prompt)
-            render_key = f"{key_prefix}/{house_project_id}/render.png"
-            storage.put(render_key, render_bytes, content_type="image/png")
-            house_project.render_key = render_key
-            # Which provider produced the render - "our model"/"OpenAI", or
-            # None if the provider doesn't track this (e.g. a test
-            # FakeProvider). See app/providers/hybrid.py's
-            # get_house_render_model_label() docstring.
-            render_model = getattr(provider, "get_house_render_model_label", lambda: None)()
-            house_project.render_model = render_model
+            #
+            # settings.house_render_enabled is a dev-only escape hatch (see its
+            # comment in app/config.py) - when False, this whole step (and the
+            # ONLY OpenAI/Kaggle call in the house pipeline) is skipped, so the
+            # project still completes as "done" with whatever else succeeded.
+            render_model = None
+            if settings.house_render_enabled:
+                primary_prompt = build_house_prompt(dimensions, prompt, plot_description, room_layout)
+                render_bytes = provider.generate_house_render(plot_bytes, primary_prompt)
+                render_key = f"{key_prefix}/{house_project_id}/render.png"
+                storage.put(render_key, render_bytes, content_type="image/png")
+                house_project.render_key = render_key
+                # Which provider produced the render - "our model"/"OpenAI", or
+                # None if the provider doesn't track this (e.g. a test
+                # FakeProvider). See app/providers/hybrid.py's
+                # get_house_render_model_label() docstring.
+                render_model = getattr(provider, "get_house_render_model_label", lambda: None)()
+                house_project.render_model = render_model
+            else:
+                logger.info(
+                    "house_render_enabled is False - skipping the render step for house project %s",
+                    house_project_id,
+                )
             session.add(house_project)
             session.commit()
 

@@ -8,12 +8,12 @@ from app.pipeline.generate_house import run_house_pipeline
 
 
 class FakeProvider:
-    def __init__(self, floor_plan_bytes=None):
+    def __init__(self, floor_plan_images=None):
         self.plot_calls = []
         self.floor_plan_calls = []
         self.render_calls = []
         self.room_layout_calls = []
-        self._floor_plan_bytes = floor_plan_bytes
+        self._floor_plan_images = floor_plan_images
 
     def analyze_plot(self, image_bytes, dimensions):
         self.plot_calls.append((image_bytes, dimensions))
@@ -21,7 +21,7 @@ class FakeProvider:
 
     def generate_floor_plan(self, plot_description, dimensions, prompt):
         self.floor_plan_calls.append((plot_description, dimensions, prompt))
-        return self._floor_plan_bytes
+        return self._floor_plan_images
 
     def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
@@ -73,7 +73,7 @@ def test_run_house_pipeline_success_without_floor_plan_vendor(monkeypatch):
         session.add(house_project)
         session.commit()
 
-    provider = FakeProvider(floor_plan_bytes=None)
+    provider = FakeProvider(floor_plan_images=None)
     dimensions = {"length": 40, "width": 60, "unit": "ft"}
     run_house_pipeline("h1", provider, storage, dimensions, prompt="2 floors, modern style")
 
@@ -96,10 +96,10 @@ def test_run_house_pipeline_success_without_floor_plan_vendor(monkeypatch):
 
 
 def test_run_house_pipeline_stores_floor_plan_when_vendor_available(monkeypatch):
-    # Forward-looking: once a real vendor is wired in and returns bytes, the
-    # pipeline should store it and mark floor_plan_status="done" - exercising
-    # this path now (with a fake that returns bytes) confirms that branch works
-    # even though no real vendor is configured yet.
+    # Forward-looking: once a real vendor is wired in and returns images, the
+    # pipeline should store them and mark floor_plan_status="done" - exercising
+    # this path now (with a fake that returns images) confirms that branch
+    # works even though no real vendor is configured by default.
     engine = make_test_engine()
     monkeypatch.setattr(generate_house_module, "engine", engine)
 
@@ -111,14 +111,50 @@ def test_run_house_pipeline_stores_floor_plan_when_vendor_available(monkeypatch)
         session.add(house_project)
         session.commit()
 
-    provider = FakeProvider(floor_plan_bytes=b"fake-floor-plan-bytes")
+    provider = FakeProvider(floor_plan_images=[b"fake-floor-plan-bytes"])
     run_house_pipeline("h2", provider, storage, {"length": 40, "width": 60, "unit": "ft"})
 
     with Session(engine) as session:
         house_project = session.get(HouseProject, "h2")
         assert house_project.floor_plan_status == "done"
-        assert house_project.floor_plan_key == "local.output/h2/floor_plan.png"
+        assert house_project.floor_plan_key == "local.output/h2/floor_plan_floor1.png"
         assert storage.get(house_project.floor_plan_key) == b"fake-floor-plan-bytes"
+        assert json.loads(house_project.floor_plan_keys_json) == ["local.output/h2/floor_plan_floor1.png"]
+
+
+def test_run_house_pipeline_stores_one_floor_plan_image_per_floor(monkeypatch):
+    # Real regression guard: a vendor (like kaggle_autocad.py) that generates
+    # one image per floor must have EVERY floor stored, not just the first -
+    # an earlier version of the single-image contract silently discarded
+    # floors 2+ for any multi-floor request.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["h9/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="h9", status="queued", plot_image_key="h9/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = FakeProvider(floor_plan_images=[b"floor1-bytes", b"floor2-bytes", b"floor3-bytes"])
+    run_house_pipeline("h9", provider, storage, {"length": 40, "width": 60, "unit": "ft"}, prompt="3 floors")
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "h9")
+        assert house_project.floor_plan_status == "done"
+        keys = json.loads(house_project.floor_plan_keys_json)
+        assert keys == [
+            "local.output/h9/floor_plan_floor1.png",
+            "local.output/h9/floor_plan_floor2.png",
+            "local.output/h9/floor_plan_floor3.png",
+        ]
+        assert storage.get(keys[0]) == b"floor1-bytes"
+        assert storage.get(keys[1]) == b"floor2-bytes"
+        assert storage.get(keys[2]) == b"floor3-bytes"
+        # Legacy single-key field stays populated with the first floor only.
+        assert house_project.floor_plan_key == keys[0]
 
 
 def test_run_house_pipeline_marks_failed_on_render_error(monkeypatch):
@@ -387,3 +423,38 @@ def test_run_house_pipeline_falls_back_to_plot_photo_when_blueprint_generation_f
         assert house_project.blueprint_dxf_keys_json is None
 
     assert provider.render_calls[0][0] == b"plot-bytes"
+
+
+def test_run_house_pipeline_skips_render_when_house_render_enabled_is_false(monkeypatch):
+    # Dev-only escape hatch (app/config.py's house_render_enabled) - lets the
+    # blueprint/DXF/AutoCAD-concept work be checked end-to-end without ever
+    # calling generate_house_render() (no Kaggle/OpenAI call, no risk of a
+    # failed project from a dead elevation-model tunnel or a stray charge).
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "house_render_enabled", False)
+
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["h8/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="h8", status="queued", plot_image_key="h8/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = FakeProvider()
+    run_house_pipeline("h8", provider, storage, {"length": 40, "width": 60, "unit": "ft"}, prompt="1 floor")
+
+    assert provider.render_calls == []
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "h8")
+        assert house_project.status == "done"
+        assert house_project.render_key is None
+        assert house_project.render_model is None
+        # The rest of the pipeline still ran normally.
+        assert house_project.blueprint_status == "done"
+        assert json.loads(house_project.blueprint_keys_json)

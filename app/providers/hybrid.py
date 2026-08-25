@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
 from app.providers import idealhouse
+from app.providers import kaggle_autocad
 from app.providers.base import Provider
 from app.providers.gemini import GeminiProvider
 from app.providers.kaggle import KaggleImageProvider
@@ -62,6 +63,19 @@ def _default_house_image_provider(openai_provider):
     return openai_provider
 
 
+def _default_floor_plan_provider():
+    # Real vendor for the still-generally-inert generate_floor_plan() slot
+    # (see idealhouse.py's own docstring for why it stays the default "no
+    # vendor configured" fallback). kaggle_autocad only activates itself
+    # (falls back to None internally) when settings.kaggle_autocad_api_url is
+    # set - see that module's docstring for the real, live-confirmed request
+    # contract AND the honest quality caveat (garbled text, broken geometry)
+    # before trusting its output for anything beyond visual inspection.
+    if settings.kaggle_autocad_api_url:
+        return kaggle_autocad
+    return idealhouse
+
+
 class HybridProvider(Provider):
     """Room description + tier-notes analysis via Gemini (still free, separate
     quota from image gen). Image generation via injectable image backends -
@@ -115,7 +129,7 @@ class HybridProvider(Provider):
         self._openai = image_provider or OpenAIImageProvider()
         self._house_image_provider = _default_house_image_provider(self._openai)
         self._room_image_provider = room_image_provider or _default_room_image_provider(self._openai)
-        self._floor_plan_provider = floor_plan_provider or idealhouse
+        self._floor_plan_provider = floor_plan_provider or _default_floor_plan_provider()
 
         # Which provider actually produced each room tier's bytes this
         # generation - recorded as each tier completes (see
@@ -231,7 +245,7 @@ class HybridProvider(Provider):
 
     def generate_floor_plan(
         self, plot_description: str | None, dimensions: dict, prompt: str
-    ) -> bytes | None:
+    ) -> list[bytes] | None:
         return self._floor_plan_provider.generate_floor_plan(plot_description, dimensions, prompt)
 
     def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:

@@ -43,9 +43,15 @@ class HouseProjectStatusResponse(BaseModel):
     plot_description: Optional[str] = None
     images: dict[str, Optional[str]]
     floor_plan_status: str = "idle"
+    # Real vendor output (app/providers/kaggle_autocad.py, see CLAUDE.md) -
+    # one URL per floor, floor-ordered, same convention as blueprint_urls.
+    # images["floor_plan"] is kept populated with the FIRST floor's URL only,
+    # for backward compatibility with old consumers - this list is the real,
+    # current source of truth.
+    floor_plan_urls: list[str] = []
     # Free algorithmic blueprint step (app/pipeline/floor_layout.py +
-    # blueprint_svg.py) - unrelated to floor_plan_status above, which stays
-    # reserved for a future real, paid floor-plan vendor (still inert).
+    # blueprint_svg.py) - unrelated to floor_plan_status above, which is the
+    # real vendor slot above (kaggle_autocad.py).
     blueprint_status: str = "idle"
     blueprint_urls: list[str] = []
     # Real AutoCAD-format (.dxf) download URLs for each floor - same

@@ -27,6 +27,7 @@ from clerk_backend_api.security.types import TokenVerificationError, TokenVerifi
 from fastapi.testclient import TestClient
 
 from app import auth as auth_module
+from app.config import settings
 from app.providers import analysis_cache
 
 
@@ -73,3 +74,20 @@ def _reset_analysis_cache():
     analysis_cache.clear()
     yield
     analysis_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _default_house_render_enabled(monkeypatch):
+    """settings.house_render_enabled (app/config.py) is a dev-only local
+    toggle meant to be flipped to false directly in a developer's real .env
+    while testing the Build a House pipeline on the live site without an
+    elevation-model Kaggle session running - it is NOT meant to affect the
+    test suite's own behavior. Without this, a developer's local .env
+    setting it to false silently breaks every house-pipeline test that
+    expects the render step to actually run (real failure hit while adding
+    this feature - see git history). Forces the functional default (True)
+    for every test regardless of the real .env; the one test that
+    specifically exercises house_render_enabled=False sets it back itself
+    within its own body, which still wins (same per-test monkeypatch
+    instance, last write applies)."""
+    monkeypatch.setattr(settings, "house_render_enabled", True)

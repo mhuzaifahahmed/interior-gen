@@ -110,12 +110,22 @@ class HouseProject(SQLModel, table=True):
 
     plot_description: Optional[str] = None
 
-    # Floor-plan generation via a real, PAID vendor is deferred (no vendor
-    # wired in yet - see app/providers/idealhouse.py) - floor_plan_key stays
-    # None until one is. NOT the same thing as room_layout_json/
-    # blueprint_keys_json below - those power a separate, free, ALGORITHMIC
-    # blueprint step that's live today (see app/pipeline/generate_house.py).
+    # Floor-plan generation via a real vendor - originally deferred (no vendor
+    # wired in), now filled by a friend-hosted Kaggle SDXL+ControlNet model
+    # (app/providers/kaggle_autocad.py) - see CLAUDE.md's "Real DXF/AutoCAD-
+    # format export" entry for the full evaluation and honest quality caveat.
+    # NOT the same thing as room_layout_json/blueprint_keys_json below - those
+    # power a separate, free, ALGORITHMIC blueprint step (deterministic, no AI
+    # model) that's live today (see app/pipeline/generate_house.py).
+    # floor_plan_key (single, legacy) is kept populated with the FIRST floor's
+    # key for backward compatibility with any old consumer of `images.floor_plan`,
+    # but floor_plan_keys_json (a JSON list, same floor-ordered-list-of-keys
+    # convention as blueprint_keys_json) is the real, current source of truth -
+    # added once a real vendor turned out to generate one image PER FLOOR
+    # natively, which the original single-key field was silently discarding
+    # past floor 1 for any multi-floor request.
     floor_plan_key: Optional[str] = None
+    floor_plan_keys_json: Optional[str] = None
     floor_plan_status: str = Field(default="idle")  # idle | running | not_configured | done | failed
 
     render_key: Optional[str] = None

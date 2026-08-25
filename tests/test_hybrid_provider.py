@@ -399,3 +399,26 @@ def test_get_image_model_label_uniform_openai_when_batch_fails(monkeypatch):
     label = provider.get_image_model_label()
     assert label == "OpenAI"
     assert "fallback" not in label.lower()
+
+
+def test_floor_plan_provider_defaults_to_idealhouse_when_kaggle_autocad_url_unset(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "kaggle_autocad_api_url", "")
+    provider = HybridProvider(image_provider=FakeOpenAIProvider())
+    assert provider._floor_plan_provider is hybrid_module.idealhouse
+
+
+def test_floor_plan_provider_uses_kaggle_autocad_when_url_configured(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+    provider = HybridProvider(image_provider=FakeOpenAIProvider())
+    assert provider._floor_plan_provider is hybrid_module.kaggle_autocad
+
+
+def test_floor_plan_provider_explicit_override_takes_priority_over_setting(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+
+    class FakeFloorPlanProvider:
+        pass
+
+    fake = FakeFloorPlanProvider()
+    provider = HybridProvider(image_provider=FakeOpenAIProvider(), floor_plan_provider=fake)
+    assert provider._floor_plan_provider is fake

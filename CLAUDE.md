@@ -521,41 +521,74 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     AI-designed* (non-rectangular, non-slice-and-dice) room layouts - and if so, HouseDiffusion and
     House-GAN++'s *released* checkpoints are commercially unusable/legally risky as-is; the real option is
     training a fresh model on ResPlan, which is unbuilt.
-  - **A friend-hosted Kaggle model was proposed and reviewed (2026-08-24) - REJECTED, real code read, not
-    guessed.** `settings.kaggle_autocad_api_url` (`app/config.py`) stores its tunnel URL but is
-    deliberately wired to NOTHING - no provider code reads it. The full generation script was reviewed
-    directly: it is **Stable Diffusion XL + ControlNet (Canny edge conditioning)**, i.e. still an
-    image-diffusion model, the exact category already diagnosed as the root cause of the user's original
-    "random lines and shapes, not AutoCAD format" complaint. ControlNet doesn't change that verdict - it
-    only conditions the diffusion process on an edge-map "hint", it doesn't make the model output
-    coordinates. Two specific, code-level problems, not just the general category objection:
-    1. The output is `image.save("controlnet_cad_floorplan.png")` - a raster PNG, not DXF/DWG/vector data
-       of any kind. There is nothing to convert; the "geometry" is pixels that merely resemble CAD line
-       art, same failure shape as this project's own reverted "v4" AI-drawn CAD-plan experiment (see
-       above - hallucinated dimension text, reverted to the deterministic renderer).
-    2. Worse than a plain text-to-image model: the ControlNet conditioning image (`canny_image`, the
-       "boundary map" the model is supposed to structurally follow) is a **hardcoded fixed rectangle +
-       two hardcoded partition lines**, drawn identically every run regardless of `user_prompt` - it never
-       reads real plot dimensions or a real room list. So even the one thing ControlNet is meant to buy
-       (structural fidelity to a given layout) is disconnected from the actual input; the model has no
-       structural awareness of the user's real plot at all, only whatever the text prompt manages to
-       steer (the same unreliable channel this file has documented failing repeatedly elsewhere).
-    Also note: the script has no HTTP server/API code (`input()` + local `image.save()` only) - even
-    setting the output-format problem aside, nothing here is actually callable as a web API without a
-    FastAPI/Flask+uvicorn wrapper that doesn't exist in what was reviewed. **Verdict: do not integrate.**
-    Confirmed dead at review time too (Cloudflare error 1033, tunnel not running) - moot regardless, since
-    the code itself disqualifies it independent of whether the tunnel is up.
-- **"Concept Layout" labeling requirement**: whenever a real floor-plan vendor is wired in (the
-  `floor_plan_key`/`floor_plan_status`/`idealhouse.py` slot, still inert), `renderHouseResults()`
-  (`static/app.js`) must label that card **"Concept Layout — not a precise blueprint"**, never anything
-  implying dimensional accuracy - no current image-gen floor-plan API guarantees exact measurements. The
-  frontend already contains this exact label, gated on `floor_plan_status === "done"`, so it's ready the
-  moment a vendor makes that state reachable; if `floor_plan_status` is anything else, no floor-plan card
-  renders at all (not a broken placeholder). This is deliberately DIFFERENT from the free algorithmic
-  blueprint cards (gated on `blueprint_status === "done"` and `blueprint_urls`), labeled "Floor N Layout"
-  with a non-disclaiming description - those genuinely are dimensionally accurate (computed directly from
-  the stated plot dimensions, not guessed by an image model), so they earn a different label. Don't merge
-  these two labeling paths even though they look superficially similar.
+  - **A friend-hosted Kaggle model - first REJECTED (2026-08-24), then WIRED IN ANYWAY at explicit user
+    request (2026-08-25) as a supplementary visual, never a replacement for the working DXF export.**
+    The full generation script was reviewed directly: it is **Stable Diffusion XL + ControlNet (Canny edge
+    conditioning)**, i.e. still an image-diffusion model, the exact category already diagnosed as the root
+    cause of the user's original "random lines and shapes, not AutoCAD format" complaint. ControlNet
+    doesn't change that verdict - it only conditions the diffusion process on an edge-map "hint", it
+    doesn't make the model output coordinates. The output is JPEG/PNG pixels - there is no DXF/DWG/vector
+    data anywhere in it, confirmed by reading the actual notebook code twice (once before an earlier,
+    fixable submit-then-poll timeout bug, once after). A real live generation, run end-to-end through this
+    app's own `HybridProvider.generate_floor_plan()` wiring (not a guess), showed garbled/hallucinated
+    room-label text (e.g. a title reading "42 1") and geometry that only loosely resembles the requested
+    room program - the same failure category already diagnosed, now confirmed live, not just predicted.
+    **User's explicit decision after being shown this evidence and asked directly (AskUserQuestion)**: keep
+    both systems - the deterministic `blueprint_svg.py`/`blueprint_dxf.py` pair stays the sole source of
+    the real `.dxf` file (nothing about it changed), and this vendor's output shows ALONGSIDE it as a
+    separate, clearly-labeled "Concept Layout" visual reference card, not a substitute. Explicitly
+    rejected: removing the deterministic system in favor of this vendor alone (would leave the site with
+    **zero** real AutoCAD export capability, since this model cannot produce one at any input-tuning level -
+    that's a property of being a diffusion model, not a prompting problem).
+  - **Real, CONFIRMED contract** (`app/providers/kaggle_autocad.py`, read from the friend's own FastAPI
+    notebook code, not assumed): `POST {url}/generate_floorplans` with
+    `{length, width, unit, floors, bedrooms, bathrooms, notes}` → `{"status":"started","job_id"}`, then
+    `GET {url}/generate_floorplans/status/{job_id}` polled until `{"status":"done","floors":[{"floor_number",
+    "floor_title","prompt_used","image_base64" (JPEG)}, ...]}` or `{"status":"failed","detail"}`.
+    **Submit-then-poll is required, not a style choice** - the model's own first version blocked inside a
+    single request and reliably hit Cloudflare's free-tunnel ~100-120s timeout (524), confirmed via a real
+    failed call, before the friend split it into a background-thread + job-status-polling design (the exact
+    same fix `app/providers/kaggle.py`'s `generate_images_batch()` already uses for the identical reason).
+  - **One image per floor - a real gap fixed, not assumed to be fine.** The model generates a SEPARATE
+    SDXL pass per floor natively (`for f in range(1, floors+1)` in the friend's own code) and returns all of
+    them in one `floors` list. An earlier version of `kaggle_autocad.py` only kept `floors_out[0]`,
+    silently discarding floor 2+ for any multi-floor request - caught and fixed the same day, once the user
+    asked directly "if I want 3 floors, does it make 3 separate images?" `Provider.generate_floor_plan()`'s
+    return type changed from `bytes | None` to `list[bytes] | None` (floor-ordered, same convention as
+    `blueprint_keys_json`) to carry all of them - `idealhouse.py`/`gemini.py`'s inert stubs are unaffected
+    (still just return `None`, valid under either type). `HouseProject.floor_plan_keys_json` (new column,
+    additive migration) stores the real list; the legacy single `floor_plan_key` column is kept populated
+    with the first floor's key only, for backward compatibility with old consumers of `images.floor_plan`.
+    `HouseProjectStatusResponse.floor_plan_urls` is the new list field frontend code should read.
+  - **Text-hallucination mitigation identified, sent to the friend, not yet applied on their side**: their
+    notebook's `negative_prompt` never excludes text/labels at all - the model is spontaneously adding
+    labels because "architectural blueprint" implies them in its training data, then rendering them as
+    garbage (a well-documented, language-independent diffusion weakness, not a prompt-wording bug - this
+    file already reached the identical conclusion once for a different, since-reverted experiment - see
+    "v4" above). Standard real-world mitigation: add `"text, labels, room names, numbers, writing,
+    watermark"` to the negative prompt so the model doesn't attempt text at all - no text beats garbled
+    text. This is a change to the friend's own notebook, outside this repo - not applied here.
+  - **Dev-only render-skip toggle added alongside this** (`settings.house_render_enabled`, `app/config.py`,
+    default `true`) - when set `false` in `.env`, `run_house_pipeline()` skips `generate_house_render()`
+    entirely (zero Kaggle/OpenAI calls) so the blueprint/DXF/AutoCAD-concept work can be checked end-to-end
+    on the real site without needing the separate elevation-render Kaggle session running, and without any
+    risk of an accidental OpenAI charge. Not meant as a production setting - flip back to `true` once the
+    elevation model's session is live again.
+- **"Concept Layout" labeling requirement**: `renderHouseResults()` (`static/app.js`) labels every card
+  sourced from `floor_plan_urls` (the real vendor slot above, now live via `kaggle_autocad.py`) as
+  **"Concept Layout — not a precise blueprint"** (or "Concept Layout - Floor N" when there's more than
+  one), never anything implying dimensional accuracy - no current image-gen floor-plan API guarantees
+  exact measurements. Gated on `floor_plan_status === "done"` and a non-empty `floor_plan_urls` list; if
+  neither holds, no floor-plan card renders at all (not a broken placeholder) - this is the expected state
+  whenever the vendor's Kaggle session isn't running (`floor_plan_status` degrades to `"not_configured"`,
+  matching this feature's original best-effort contract from before a real vendor existed). This is
+  deliberately DIFFERENT from the free algorithmic blueprint cards (gated on `blueprint_status === "done"`
+  and `blueprint_urls`), labeled "Floor N Layout" with a non-disclaiming description - those genuinely are
+  dimensionally accurate (computed directly from the stated plot dimensions, not guessed by an image
+  model), so they earn a different label. Don't merge these two labeling paths even though they look
+  superficially similar - a real, live user confusion this file now records: after seeing both card types
+  in the same results grid, the user initially mistook the deterministic "Floor N Layout" cards for the AI
+  vendor's output and asked why they looked nothing alike - they are, by design, two unrelated systems.
 - **Frontend**: `static/index.html`'s tab bar (`#tab-bar`, `switchTab()` in `app.js`) toggles between the
   room-redesign panel and the house panel independently - each keeps its own upload/progress/error/results
   state machine (`showState()` for rooms, `showHouseState()` for the house tab), so switching tabs mid-flow

@@ -99,6 +99,36 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
         assert body["blueprint_dxf_urls"][0].endswith(".dxf")
 
 
+def test_house_api_exposes_one_floor_plan_url_per_floor(monkeypatch):
+    # Real vendor path (app/providers/kaggle_autocad.py in production) -
+    # generate_floor_plan() returning multiple images must surface as
+    # multiple floor_plan_urls, floor-ordered, with images.floor_plan kept
+    # as the first one for backward compatibility.
+    class MultiFloorPlanProvider(FakeProvider):
+        def generate_floor_plan(self, plot_description, dimensions, prompt):
+            return [b"floor1-png-bytes", b"floor2-png-bytes"]
+
+    monkeypatch.setattr(main_module, "get_provider", lambda: MultiFloorPlanProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "prompt": "2 floors, modern style"},
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        body = client.get(f"/api/house-projects/{house_project_id}").json()
+        assert body["floor_plan_status"] == "done"
+        assert len(body["floor_plan_urls"]) == 2
+        assert body["floor_plan_urls"][0] != body["floor_plan_urls"][1]
+        assert body["images"]["floor_plan"] == body["floor_plan_urls"][0]
+
+
 def test_compose_house_requirements_combines_all_fields():
     from app.main import _compose_house_requirements
 

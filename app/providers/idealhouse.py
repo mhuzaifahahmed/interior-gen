@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 #     (async - poll every 3-5s until status is terminal)
 
 
-def generate_floor_plan(plot_description: str | None, dimensions: dict, prompt: str) -> bytes | None:
+def generate_floor_plan(plot_description: str | None, dimensions: dict, prompt: str) -> list[bytes] | None:
     """Always returns None - no floor-plan vendor is configured yet (see module
     docstring above). Matches Provider.generate_floor_plan's best-effort
     contract: None means "not available," which the pipeline treats as an
