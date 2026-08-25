@@ -1423,6 +1423,12 @@ touching styling"). Check there before assuming an idea was never considered.
 - `future-plans/build-a-house-theme-parity.md` — porting Room Redesign's visual polish (image hero, status
   chip, concept-preview shimmer tiles, results hierarchy) onto the Build a House tab. Deferred so the
   house render/blueprint quality work (see "Build a House feature" above) could ship first.
+- `future-plans/feasibility-checker.md` — an "is this possible?" checker for Build a House (e.g. warn +
+  suggest fixes when requested extras can't fit the stated plot, like a basketball court on a tiny lot).
+  Recommended approach: deterministic area math (Python, authoritative) + Gemini reasoning/phrasing over
+  those real numbers - same "real data, LLM never guesses the hard numbers" pattern as materials pricing.
+  Not started - two open design decisions (advisory vs. hard gate; runs at input time vs. after generation)
+  recorded in the file, to confirm with the user before building.
 
 ## Git identity
 
