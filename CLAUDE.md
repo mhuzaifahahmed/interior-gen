@@ -424,9 +424,26 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   either way. Only the **ground floor's** (index 0) blueprint image is sent to `gpt-image-1` as the visual
   reference (confirmed design decision - it drives exterior massing most directly); upper floors are
   described in the text prompt only via `build_house_prompt()`'s `room_layout` argument, not shown as an
-  image. Adjacency between rooms (e.g. "bathroom near bedroom") is deliberately out of scope for v1 - only
-  area-based slicing - to ship the simpler algorithm first; a future upgrade could have Gemini also return
-  adjacency hints for `layout_floor()` to try to honor.
+  image. Adjacency between rooms was originally out of scope for v1 (only pure area-based slicing) - a
+  full per-room adjacency solver is still not built, but a real, live-user-reported problem this caused
+  ("no sense of living room being in the middle") was fixed on 2026-08-25 with a much smaller, targeted
+  change: **public/private zone grouping** (`app/pipeline/floor_layout.py`). `_slice()` itself is
+  completely unchanged, still pure weight-balanced recursive splitting - the fix is a single STABLE sort
+  of the room list, BEFORE slicing, into a "public zone" (garage, entry/foyer, living/lounge/family/
+  drawing, dining, kitchen, powder/guest bath, study/office - same keyword vocabulary as
+  `blueprint_svg.py`'s furniture dispatcher) ahead of everything else (the "private zone" - bedrooms,
+  bathrooms, hallways, storage, unrecognized names). Since `_slice()` always splits a *contiguous* sublist,
+  reordering the input is enough to guarantee public rooms cluster together and private rooms cluster
+  together as two connected regions, without needing to touch the splitting algorithm itself. Being a
+  STABLE sort, it also preserves whatever fine-grained order Gemini/fallback already gave rooms *within*
+  a zone - e.g. "Master Bedroom" immediately followed by "Master Bathroom" in the input list stays
+  adjacent in the output, confirmed both by a real generation (Master Bedroom ended up directly next to
+  Master Ensuite Bathroom) and by `tests/test_floor_layout.py`'s connectivity/adjacency regression tests
+  (`test_layout_floor_groups_public_rooms_together_not_scattered`,
+  `test_layout_floor_public_rooms_form_one_contiguous_block`,
+  `test_layout_floor_preserves_relative_order_within_a_zone`). A full adjacency-graph solver (the harder
+  problem - e.g. Gemini also returning explicit adjacency hints for `layout_floor()` to honor) is still
+  not built and would be the next step up if zone-grouping alone proves insufficient.
 - **Floor-plan vendor: deliberately deferred, not forgotten.** The original spec called for a real 2D
   floor-plan generation step (dimensions/prompt → floor plan image) before the render step, since general
   image models don't reliably respect exact measurements. Two vendors were researched (docs read live, not
