@@ -45,11 +45,15 @@ logger = logging.getLogger(__name__)
 #     (async - poll every 3-5s until status is terminal)
 
 
-def generate_floor_plan(plot_description: str | None, dimensions: dict, prompt: str) -> list[bytes] | None:
+def generate_floor_plan(
+    plot_description: str | None, dimensions: dict, prompt: str, room_layout: dict | None = None
+) -> list[bytes] | None:
     """Always returns None - no floor-plan vendor is configured yet (see module
     docstring above). Matches Provider.generate_floor_plan's best-effort
     contract: None means "not available," which the pipeline treats as an
-    expected, non-fatal state, not a crash.
+    expected, non-fatal state, not a crash. room_layout is accepted for
+    interface compatibility (see base.py's docstring) but unused - this stub
+    has no real conditioning to build.
     """
     logger.info("floor-plan vendor not configured; skipping floor plan generation")
     return None

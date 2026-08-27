@@ -133,7 +133,11 @@ class Provider(ABC):
 
     @abstractmethod
     def generate_floor_plan(
-        self, plot_description: str | None, dimensions: dict, prompt: str
+        self,
+        plot_description: str | None,
+        dimensions: dict,
+        prompt: str,
+        room_layout: dict | None = None,
     ) -> list[bytes] | None:
         """Generate one 2D floor plan image (PNG bytes) PER FLOOR, respecting
         `dimensions` and `prompt` as closely as the underlying vendor allows -
@@ -150,6 +154,19 @@ class Provider(ABC):
         once a real vendor (kaggle_autocad.py) turned out to generate one
         image per floor natively - the original single-image contract was
         silently discarding floors 2+ for any multi-floor request.
+
+        room_layout, when given, is the SAME structured per-floor room list
+        generate_room_layout() below already returned for the deterministic
+        blueprint step (see app/pipeline/generate_house.py, which now computes
+        room_layout BEFORE calling this) - {"floors": [{"floor_number",
+        "rooms": [{"name", "area"}]}]}. Optional, added 2026-08-27
+        (future-plans/concept-layout-controlnet-conditioning.md, Phase 1) so a
+        vendor that can accept a ControlNet-style conditioning image
+        (kaggle_autocad.py) can trace this repo's real, already-computed
+        geometry instead of inventing its own - implementations that don't use
+        real conditioning (idealhouse.py, GeminiProvider's stub) simply ignore
+        it. None means no layout was available/computed - implementations must
+        fall back to whatever they did before this parameter existed.
         """
         ...
 

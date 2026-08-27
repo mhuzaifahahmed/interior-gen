@@ -577,6 +577,37 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     additive migration) stores the real list; the legacy single `floor_plan_key` column is kept populated
     with the first floor's key only, for backward compatibility with old consumers of `images.floor_plan`.
     `HouseProjectStatusResponse.floor_plan_urls` is the new list field frontend code should read.
+  - **Real-geometry ControlNet conditioning + label compositing - DONE and LIVE-VERIFIED (2026-08-27)**,
+    both the repo side AND the friend's notebook (pasted the generated code, redeployed, `.env`'s
+    `KAGGLE_AUTOCAD_API_URL` updated to the new tunnel) - see
+    `future-plans/concept-layout-controlnet-conditioning.md` for the full plan and the real verification
+    run's evidence (the AI's traced geometry matched our sent conditioning image's 6-room layout almost
+    exactly, `used_real_geometry: true`, no garbled text, and every one of our composited labels landed
+    inside its correct room - see `scripts/output/autocad_with_labels_floor1.png`).
+    Diagnosis: the model's real flaw wasn't its aesthetic, it was that the friend's own
+    `create_plot_boundary()` only ever drew the plot's OUTER rectangle as the ControlNet conditioning
+    image (no interior walls), so ControlNet only constrained the outer edge and the model hallucinated
+    every room at random - it never saw the user's actual room program at all. Fix, on THIS repo's side
+    only so far: **`app/pipeline/conditioning_image.py`** (new, pure, visually verified) renders the
+    exact same rectangles `layout_floor()`/`blueprint_svg.py` already compute as a clean white-lines-on-
+    black edge map; `app/providers/kaggle_autocad.py`'s `generate_floor_plan()` gained an optional
+    `room_layout` param and, when given, sends one such conditioning image per floor as
+    `conditioning_images` (base64 PNGs) in the request - additive to the contract, so an un-updated
+    notebook keeps working via its own `create_plot_boundary()` fallback. It ALSO now composites our
+    own accurate room-name labels onto each returned image at room centers
+    (`_composite_room_labels()`), since the notebook's negative prompt is being updated to make the AI
+    output deliberately text-free - alignment is guaranteed because both the conditioning image and the
+    label positions are computed from the identical rects via the identical placement math
+    (`conditioning_image.py`'s `plot_to_canvas_box()`). Required reordering
+    `app/pipeline/generate_house.py`'s pipeline (`HOUSE_PROMPT_VERSION` bumped to `v7`): the room-
+    layout/blueprint stage now runs BEFORE the AI floor-plan stage (was after), since the layout must
+    exist before it can be sent as conditioning - the two cancellation checkpoints moved with their
+    stages. `Provider.generate_floor_plan()`'s signature gained `room_layout: dict | None = None` across
+    all implementations (`idealhouse.py`/`GeminiProvider` ignore it - no real conditioning to build).
+    **The notebook-side half (accepting `conditioning_images`, raising `controlnet_conditioning_scale`
+    to 0.95 when using real geometry, prompt simplification) is DONE too** - pasted into the friend's
+    notebook and redeployed; a live end-to-end test against the real tunnel confirmed both halves work
+    together correctly (see the plan file's Status section for the verification evidence).
   - **Text-hallucination mitigation identified, sent to the friend, not yet applied on their side**: their
     notebook's `negative_prompt` never excludes text/labels at all - the model is spontaneously adding
     labels because "architectural blueprint" implies them in its training data, then rendering them as

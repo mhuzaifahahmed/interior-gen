@@ -2,10 +2,59 @@
 
 ## Status
 
-Planned, not started (2026-08-25). This is the improvement path for the friend-hosted Kaggle
-SDXL+ControlNet floor-plan model (`app/providers/kaggle_autocad.py`, the "Concept Layout" card),
-chosen after a full senior-level survey of every option (prompting, params, model swaps, LoRAs,
-compositing). It is a TWO-SIDED change: the friend's Kaggle notebook AND this repo.
+**DONE and LIVE-VERIFIED (2026-08-27).** Both sides shipped: this repo's changes, AND the friend's
+notebook was updated (from the generated paste-ready code below) and redeployed. Confirmed via a real
+end-to-end call against the live tunnel (`scripts/test_autocad_kaggle_labels.py`, which exercises the
+exact same `app.providers.kaggle_autocad.generate_floor_plan()` the production pipeline calls):
+- The AI output's wall layout matched the sent conditioning image's 6-room geometry almost exactly
+  (same exterior boundary, same room split proportions, same positions) - the response also reported
+  `used_real_geometry: true` for the floor.
+- No garbled/hallucinated text appeared in the AI's own raw output (the text-exclusion negative prompt
+  worked).
+- Our own composited labels (Phase 2) landed correctly inside every one of the 6 rooms - Living Room,
+  Kitchen, Dining Room, Bedroom 1, Bedroom 2, Bathroom all legible and correctly placed, confirming the
+  conditioning-image renderer and the label compositor's shared placement math (`plot_to_canvas_box()`)
+  actually agree in a real generation, not just in unit tests.
+
+See `scripts/output/conditioning_sent_floor1.png` (what we sent), `scripts/output/autocad_conditioning_floor1.jpg`
+(raw AI output, Phase 1 only), and `scripts/output/autocad_with_labels_floor1.png` (final result with
+Phase 2 labels - what the app actually produces) for the images from this verification run.
+
+This is the improvement path for the friend-hosted Kaggle SDXL+ControlNet floor-plan model
+(`app/providers/kaggle_autocad.py`, the "Concept Layout" card), chosen after a full senior-level survey
+of every option (prompting, params, model swaps, LoRAs, compositing). It was a TWO-SIDED change: the
+friend's Kaggle notebook AND this repo - both are now live.
+
+**What's actually built on this repo's side:**
+- `app/pipeline/conditioning_image.py` (new) - pure `render_conditioning_edge_map(rects, dimensions)`,
+  white wall-centerlines on a black 1024x1024 canvas, from the exact same `layout_floor()` rects the
+  deterministic blueprint PNG uses. `plot_to_canvas_box()` is the shared placement-math helper reused
+  by label compositing below - visually verified (`scripts/output/conditioning_sample.png`).
+- `app/providers/kaggle_autocad.py`'s `generate_floor_plan()` gained an optional `room_layout` param -
+  when given, builds one conditioning image per floor and sends it as `conditioning_images` (base64
+  PNGs, floor-ordered) in the request payload; omitted entirely when no layout is available (fully
+  backward compatible with a not-yet-updated notebook). Also composites accurate room-name labels
+  (`_composite_room_labels()`) onto each returned image at room centers, scaled to whatever resolution
+  the model actually returns - Phase 2, done on this side already since it only needed the rects, not
+  a notebook change.
+- `Provider.generate_floor_plan()` signature gained `room_layout: dict | None = None` across
+  `base.py`/`hybrid.py`/`gemini.py`/`idealhouse.py` (the latter two ignore it - no real conditioning to
+  build).
+- **`app/pipeline/generate_house.py` pipeline REORDERED (`HOUSE_PROMPT_VERSION` bumped to `v7`)**: the
+  room-layout/blueprint stage (`generate_room_layout` + `layout_floor` + blueprint PNG/DXF) now runs
+  BEFORE the AI floor-plan stage (`generate_floor_plan`), not after - required so the layout exists in
+  time to be passed in. The two cancellation checkpoints moved with their stages (see that file's `v7`
+  comment).
+- Tests: `tests/test_conditioning_image.py` (new, pure renderer), `tests/test_kaggle_autocad.py`
+  extended (conditioning images sent/omitted, label compositing), `tests/test_house_pipeline.py`
+  extended (room_layout threading + call order, rewritten cancellation-checkpoint test). 383/383 passing.
+
+**Notebook side, also DONE**: the generated paste-ready code (4 changes - `List` import,
+`decode_conditioning_image()` helper, `PlotParameters.conditioning_images`, and the per-floor loop
+using it with `controlnet_conditioning_scale=0.95` + a simplified prompt when present) was pasted into
+the friend's actual Kaggle notebook and redeployed; `KAGGLE_AUTOCAD_API_URL` in `.env` was updated to
+the new tunnel URL. Nothing left to do here unless a future generation shows the geometry tracing isn't
+tight enough, in which case Phase 3 (MLSD ControlNet, a floor-plan LoRA) is the next lever.
 
 ## The core idea (why this is THE lever, not prompting)
 
@@ -35,7 +84,7 @@ once. This is worth more than every prompting/param tweak combined.
 
 ## Phase 1 (core, biggest win): real-geometry ControlNet conditioning
 
-### Our repo side (`app/providers/kaggle_autocad.py` + a small new renderer)
+### Our repo side (`app/providers/kaggle_autocad.py` + a small new renderer) - DONE, see Status above
 - **New: a conditioning-image renderer** (a small pure function, e.g. `render_conditioning_edge_map(rects,
   dimensions) -> bytes` in a new `app/pipeline/conditioning_image.py`, or reuse geometry from
   `floor_layout.py`). Draws, on a **1024x1024 black canvas** (SDXL-native):
@@ -82,7 +131,7 @@ transformative change. Labels come in Phase 2.
 
 ---
 
-## Phase 2 (labels): composite our accurate text onto the text-free AI image
+## Phase 2 (labels): composite our accurate text onto the text-free AI image - DONE, see Status above
 
 Once the AI output traces our geometry, our labels are guaranteed to align (same base geometry) - which
 removes the exact objection that killed the earlier "v4" composite attempt (unpredictable alignment).

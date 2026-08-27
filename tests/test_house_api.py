@@ -105,7 +105,7 @@ def test_house_api_exposes_one_floor_plan_url_per_floor(monkeypatch):
     # multiple floor_plan_urls, floor-ordered, with images.floor_plan kept
     # as the first one for backward compatibility.
     class MultiFloorPlanProvider(FakeProvider):
-        def generate_floor_plan(self, plot_description, dimensions, prompt):
+        def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None):
             return [b"floor1-png-bytes", b"floor2-png-bytes"]
 
     monkeypatch.setattr(main_module, "get_provider", lambda: MultiFloorPlanProvider())

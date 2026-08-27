@@ -48,7 +48,18 @@ def _is_cancelled(session: Session, house_project: HouseProject) -> bool:
 # every downstream consumer of it), and passes the real, explicit floor
 # count straight into generate_room_layout() instead of relying on regex-
 # guessing it back out of that composed text.
-HOUSE_PROMPT_VERSION = "v6"
+# v7 (2026-08-27): reordered the pipeline so the deterministic room-layout
+# stage (generate_room_layout + layout_floor + blueprint PNG/DXF) now runs
+# BEFORE the AI "Concept Layout" floor-plan stage (generate_floor_plan),
+# not after - see future-plans/concept-layout-controlnet-conditioning.md,
+# Phase 1. That plan feeds this repo's real room rectangles into the
+# friend-hosted Kaggle model's ControlNet conditioning input so it traces
+# our actual geometry instead of a hardcoded empty rectangle, which requires
+# the layout to already exist by the time generate_floor_plan() is called.
+# The two cancellation checkpoints moved with their stages: one right after
+# analyze_plot (before any of layout/blueprint/floor-plan work starts), one
+# right before the paid render (unchanged position).
+HOUSE_PROMPT_VERSION = "v7"
 
 
 def run_house_pipeline(
@@ -104,51 +115,24 @@ def run_house_pipeline(
             session.add(house_project)
             session.commit()
 
-            # Floor-plan generation is best-effort/deferred - see
-            # app/providers/idealhouse.py. None (the expected path today) means
-            # "not_configured", not a failure - the whole house-project must
-            # still succeed without one.
-            house_project.floor_plan_status = "running"
-            session.add(house_project)
-            session.commit()
-
-            try:
-                floor_plan_images = provider.generate_floor_plan(plot_description, dimensions, prompt or "")
-            except Exception:
-                logger.exception(
-                    "generate_floor_plan failed for house project %s; continuing without it", house_project_id
-                )
-                floor_plan_images = None
-
-            if floor_plan_images:
-                floor_plan_keys = []
-                for i, image_bytes in enumerate(floor_plan_images, start=1):
-                    key = f"{key_prefix}/{house_project_id}/floor_plan_floor{i}.png"
-                    storage.put(key, image_bytes, content_type="image/png")
-                    floor_plan_keys.append(key)
-                house_project.floor_plan_key = floor_plan_keys[0]  # legacy single-key field, first floor only
-                house_project.floor_plan_keys_json = json.dumps(floor_plan_keys)
-                house_project.floor_plan_status = "done"
-            else:
-                house_project.floor_plan_status = "not_configured"
-            session.add(house_project)
-            session.commit()
-
             if _is_cancelled(session, house_project):
                 logger.info(
-                    "house project %s was cancelled before the blueprint step started - stopping",
+                    "house project %s was cancelled before the layout/blueprint/floor-plan stage "
+                    "started - stopping",
                     house_project_id,
                 )
                 return
 
-            # Free algorithmic blueprint step - unrelated to the floor_plan_*
-            # stage above (that one's the still-inert, deferred REAL PAID
-            # vendor slot). This one is live: Gemini returns a structured room
-            # list per floor, app/pipeline/floor_layout.py deterministically
-            # slices the plot into room rectangles, app/pipeline/
-            # blueprint_svg.py draws each floor as a PNG. Best-effort/local
-            # try-except, same as analyze_plot/generate_floor_plan above - a
-            # bug in this newer code must not take down the render step below.
+            # Free algorithmic blueprint step - runs BEFORE the AI "Concept
+            # Layout" floor-plan stage below (v7 reorder, see
+            # HOUSE_PROMPT_VERSION comment) because that stage now feeds this
+            # step's real room rectangles into the AI model's ControlNet
+            # conditioning input. Gemini returns a structured room list per
+            # floor, app/pipeline/floor_layout.py deterministically slices the
+            # plot into room rectangles, app/pipeline/blueprint_svg.py draws
+            # each floor as a PNG. Best-effort/local try-except, same as
+            # analyze_plot above - a bug in this newer code must not take down
+            # the render step below.
             house_project.blueprint_status = "running"
             session.add(house_project)
             session.commit()
@@ -197,6 +181,43 @@ def run_house_pipeline(
             house_project.room_layout_json = json.dumps(room_layout) if room_layout else None
             house_project.blueprint_keys_json = json.dumps(blueprint_keys) if blueprint_keys else None
             house_project.blueprint_dxf_keys_json = json.dumps(blueprint_dxf_keys) if blueprint_dxf_keys else None
+            session.add(house_project)
+            session.commit()
+
+            # AI "Concept Layout" floor-plan generation - best-effort/deferred,
+            # see app/providers/idealhouse.py. None (the expected path when no
+            # vendor is configured) means "not_configured", not a failure - the
+            # whole house-project must still succeed without one. room_layout
+            # (just computed above, possibly None if the blueprint step
+            # failed) is passed through so a vendor that can use it
+            # (kaggle_autocad.py) traces our real geometry via ControlNet
+            # conditioning instead of inventing its own - see
+            # future-plans/concept-layout-controlnet-conditioning.md.
+            house_project.floor_plan_status = "running"
+            session.add(house_project)
+            session.commit()
+
+            try:
+                floor_plan_images = provider.generate_floor_plan(
+                    plot_description, dimensions, prompt or "", room_layout
+                )
+            except Exception:
+                logger.exception(
+                    "generate_floor_plan failed for house project %s; continuing without it", house_project_id
+                )
+                floor_plan_images = None
+
+            if floor_plan_images:
+                floor_plan_keys = []
+                for i, image_bytes in enumerate(floor_plan_images, start=1):
+                    key = f"{key_prefix}/{house_project_id}/floor_plan_floor{i}.png"
+                    storage.put(key, image_bytes, content_type="image/png")
+                    floor_plan_keys.append(key)
+                house_project.floor_plan_key = floor_plan_keys[0]  # legacy single-key field, first floor only
+                house_project.floor_plan_keys_json = json.dumps(floor_plan_keys)
+                house_project.floor_plan_status = "done"
+            else:
+                house_project.floor_plan_status = "not_configured"
             session.add(house_project)
             session.commit()
 

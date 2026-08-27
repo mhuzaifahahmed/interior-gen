@@ -151,6 +151,105 @@ def test_generate_floor_plan_returns_none_on_request_exception(monkeypatch):
     assert result is None
 
 
+def test_generate_floor_plan_omits_conditioning_images_when_no_room_layout(monkeypatch):
+    # Backward compat: a caller that doesn't supply room_layout must get the
+    # exact same request shape as before Phase 1 (concept-layout-controlnet-
+    # conditioning.md) - no conditioning_images field at all, so the
+    # notebook's own create_plot_boundary() fallback keeps working unchanged.
+    monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_autocad_module.time, "sleep", lambda _: None)
+
+    def fake_post(url, json=None, timeout=None):
+        assert "conditioning_images" not in json
+        return FakeResponse(json_data={"status": "started", "job_id": "job-noconditioning"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(json_data={"status": "done", "floors": [{"floor_number": 1, "image_base64": _fake_jpeg_b64()}]})
+
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "get", fake_get)
+
+    result = generate_floor_plan("a plot", {"length": 40, "width": 60, "unit": "ft"}, "1 floor")
+    assert result is not None
+
+
+def test_generate_floor_plan_sends_one_conditioning_image_per_floor_when_room_layout_given(monkeypatch):
+    # Phase 1: real geometry beats the notebook's own hardcoded empty
+    # rectangle - one conditioning image per floor, built from the SAME
+    # rects layout_floor() (and thus the deterministic blueprint step) uses.
+    monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_autocad_module.time, "sleep", lambda _: None)
+
+    room_layout = {
+        "floors": [
+            {"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]},
+            {"floor_number": 2, "rooms": [{"name": "Bedroom 2", "area": 1}]},
+        ]
+    }
+
+    def fake_post(url, json=None, timeout=None):
+        assert "conditioning_images" in json
+        assert len(json["conditioning_images"]) == 2
+        for b64_png in json["conditioning_images"]:
+            assert base64.b64decode(b64_png).startswith(b"\x89PNG")
+        return FakeResponse(json_data={"status": "started", "job_id": "job-conditioning"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(
+            json_data={
+                "status": "done",
+                "floors": [
+                    {"floor_number": 1, "image_base64": _fake_jpeg_b64()},
+                    {"floor_number": 2, "image_base64": _fake_jpeg_b64()},
+                ],
+            }
+        )
+
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "get", fake_get)
+
+    result = generate_floor_plan(
+        "a plot", {"length": 40, "width": 60, "unit": "ft"}, "2 floors", room_layout=room_layout
+    )
+    assert result is not None
+    assert len(result) == 2
+
+
+def test_generate_floor_plan_composites_room_labels_when_room_layout_given(monkeypatch):
+    # Phase 2: once we sent real conditioning geometry, composite our own
+    # accurate room labels onto the (deliberately text-free) returned image -
+    # confirmed here by checking the result differs from the plain
+    # re-encoded-with-no-labels case (same fake JPEG input either way).
+    monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_autocad_module.time, "sleep", lambda _: None)
+
+    room_layout = {"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 1}]}]}
+
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(json_data={"status": "started", "job_id": "job-label"})
+
+    fake_jpeg = _fake_jpeg_b64()
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(
+            json_data={"status": "done", "floors": [{"floor_number": 1, "image_base64": fake_jpeg}]}
+        )
+
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "get", fake_get)
+
+    with_labels = generate_floor_plan(
+        "a plot", {"length": 40, "width": 60, "unit": "ft"}, "1 floor", room_layout=room_layout
+    )
+
+    without_labels = generate_floor_plan("a plot", {"length": 40, "width": 60, "unit": "ft"}, "1 floor")
+
+    assert with_labels is not None and without_labels is not None
+    # Same input JPEG both times, but only the room_layout call composites a
+    # label onto it - the resulting PNG bytes must differ.
+    assert with_labels[0] != without_labels[0]
+
+
 def test_generate_floor_plan_defaults_bedrooms_bathrooms_when_not_stated(monkeypatch):
     monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
     monkeypatch.setattr(kaggle_autocad_module.time, "sleep", lambda _: None)

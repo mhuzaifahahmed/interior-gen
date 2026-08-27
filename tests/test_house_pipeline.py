@@ -19,8 +19,8 @@ class FakeProvider:
         self.plot_calls.append((image_bytes, dimensions))
         return "A rectangular plot facing north."
 
-    def generate_floor_plan(self, plot_description, dimensions, prompt):
-        self.floor_plan_calls.append((plot_description, dimensions, prompt))
+    def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None):
+        self.floor_plan_calls.append((plot_description, dimensions, prompt, room_layout))
         return self._floor_plan_images
 
     def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
@@ -281,11 +281,14 @@ def test_run_house_pipeline_render_model_stays_none_when_provider_does_not_track
         assert house_project.render_model is None
 
 
-def test_run_house_pipeline_stops_when_cancelled_before_blueprint_step(monkeypatch):
+def test_run_house_pipeline_stops_when_cancelled_before_layout_stage(monkeypatch):
     # Simulates a real cancel request (app/main.py's cancel_house_project)
     # landing via a SEPARATE session while the pipeline is mid-run. No
     # worker threads in this pipeline (unlike room redesign's per-tier
     # executor), so a plain make_test_engine() (no StaticPool needed) works.
+    # v7 reorder: the layout/blueprint stage now runs BEFORE the floor-plan
+    # (AI Concept Layout) stage, so this checkpoint - the first of two - sits
+    # right after analyze_plot, before either of them starts.
     engine = make_test_engine()
     monkeypatch.setattr(generate_house_module, "engine", engine)
 
@@ -298,19 +301,20 @@ def test_run_house_pipeline_stops_when_cancelled_before_blueprint_step(monkeypat
         session.commit()
 
     class CancellingProvider(FakeProvider):
-        def generate_floor_plan(self, plot_description, dimensions, prompt):
+        def analyze_plot(self, image_bytes, dimensions):
             with Session(engine) as cancel_session:
                 hp = cancel_session.get(HouseProject, "hcancel1")
                 hp.status = "cancelled"
                 cancel_session.add(hp)
                 cancel_session.commit()
-            return super().generate_floor_plan(plot_description, dimensions, prompt)
+            return super().analyze_plot(image_bytes, dimensions)
 
     provider = CancellingProvider()
     dimensions = {"length": 40, "width": 60, "unit": "ft"}
     run_house_pipeline("hcancel1", provider, storage, dimensions, prompt="modern style")
 
     assert provider.room_layout_calls == []
+    assert provider.floor_plan_calls == []
     assert provider.render_calls == []
 
     with Session(engine) as session:
@@ -390,6 +394,44 @@ def test_run_house_pipeline_generates_blueprint_per_floor(monkeypatch):
     assert blueprint_bytes.startswith(b"\x89PNG")
     dxf_bytes = storage.get("local.output/h6/blueprint_floor1.dxf")
     assert dxf_bytes.startswith(b"  0\nSECTION")
+
+
+def test_run_house_pipeline_passes_room_layout_into_generate_floor_plan(monkeypatch):
+    # v7 reorder / concept-layout-controlnet-conditioning.md Phase 1: the
+    # real room_layout computed by the blueprint stage must be threaded into
+    # generate_floor_plan() so a vendor (kaggle_autocad.py) can build
+    # ControlNet conditioning images from our real geometry - AND the
+    # blueprint stage must run first (room_layout_calls before floor_plan_calls).
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["h6b/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="h6b", status="queued", plot_image_key="h6b/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    call_order = []
+
+    class OrderTrackingProvider(FakeProvider):
+        def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+            call_order.append("room_layout")
+            return super().generate_room_layout(dimensions, prompt, plot_description, floor_count)
+
+        def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None):
+            call_order.append("floor_plan")
+            return super().generate_floor_plan(plot_description, dimensions, prompt, room_layout)
+
+    provider = OrderTrackingProvider()
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    run_house_pipeline("h6b", provider, storage, dimensions, prompt="modern style")
+
+    assert call_order == ["room_layout", "floor_plan"]
+    room_layout_arg = provider.floor_plan_calls[0][3]
+    assert room_layout_arg is not None
+    assert room_layout_arg["floors"][0]["rooms"][0]["name"] == "Living Room"
 
 
 def test_run_house_pipeline_falls_back_to_plot_photo_when_blueprint_generation_fails(monkeypatch):

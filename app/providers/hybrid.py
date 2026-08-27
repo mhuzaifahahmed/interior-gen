@@ -244,9 +244,15 @@ class HybridProvider(Provider):
         return self._gemini.analyze_plot(image_bytes, dimensions)
 
     def generate_floor_plan(
-        self, plot_description: str | None, dimensions: dict, prompt: str
+        self,
+        plot_description: str | None,
+        dimensions: dict,
+        prompt: str,
+        room_layout: dict | None = None,
     ) -> list[bytes] | None:
-        return self._floor_plan_provider.generate_floor_plan(plot_description, dimensions, prompt)
+        return self._floor_plan_provider.generate_floor_plan(
+            plot_description, dimensions, prompt, room_layout
+        )
 
     def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
         result = self._house_image_provider.generate_house_render(image_bytes, prompt)
