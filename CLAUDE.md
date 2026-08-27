@@ -1492,6 +1492,14 @@ touching styling"). Check there before assuming an idea was never considered.
   those real numbers - same "real data, LLM never guesses the hard numbers" pattern as materials pricing.
   Not started - two open design decisions (advisory vs. hard gate; runs at input time vs. after generation)
   recorded in the file, to confirm with the user before building.
+- `future-plans/concept-layout-controlnet-conditioning.md` — make the friend-hosted AI "Concept Layout"
+  card ACCURATE (not just decorative) by feeding this repo's real computed wall geometry
+  (`floor_layout.py`) into the model's ControlNet as the conditioning image, instead of the empty
+  rectangle it currently uses - so it traces the real plan instead of inventing one. Then composite our
+  own accurate room labels onto the (deliberately text-free) AI output. A TWO-SIDED change (friend's
+  Kaggle notebook + this repo), phased; the doc splits notebook-side vs repo-side work explicitly so a
+  future session can generate the paste-ready notebook code on request. Not started - needs friend
+  coordination; the deterministic system stays the source of truth + only real `.dxf` regardless.
 
 ## Git identity
 
