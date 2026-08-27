@@ -158,6 +158,12 @@ class HouseProject(SQLModel, table=True):
     # generated before this feature, or if DXF export failed for every floor
     # (best-effort, doesn't affect blueprint_status/blueprint_keys_json).
     blueprint_dxf_keys_json: Optional[str] = None
-    blueprint_status: str = Field(default="idle")  # idle | running | done | failed
+    blueprint_status: str = Field(default="idle")  # idle | running | done | failed | infeasible
+    # Feasibility hard-gate result (app/pipeline/feasibility.py), added
+    # 2026-08-27 - {"verdict": "feasible"|"tight"|"not_feasible",
+    # "required_area", "available_area", "unit", "explanation"}. None for
+    # projects generated before this feature, or when the blueprint stage
+    # itself failed before a feasibility check could run.
+    feasibility_json: Optional[str] = None
 
     meta_json: Optional[str] = None

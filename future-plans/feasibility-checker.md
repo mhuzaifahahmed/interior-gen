@@ -1,9 +1,38 @@
-# "Is this possible?" feasibility checker for Build a House (deferred)
+# "Is this possible?" feasibility checker for Build a House
 
 ## Status
 
-Deferred - proposed and discussed on 2026-08-25, not started. Recorded here so
-the approach doesn't have to be re-derived when picked up.
+**DONE - built 2026-08-27, but as PURE DETERMINISTIC MATH, not the hybrid
+math+Gemini design originally recommended below.** Driven by an external
+architectural-generation spec the user supplied, which resolved both open
+design decisions explicitly (see "Two open design decisions" below - now
+answered, not open). `app/pipeline/feasibility.py`'s `check_feasibility()`
+computes required area (real per-room-type minimums from
+`app/pipeline/room_specs.py` + a circulation-overhead fraction + a staircase
+allowance for multi-floor) vs. the available building footprint, classifies
+`feasible`/`tight`/`not_feasible`, and is called from
+`app/pipeline/generate_house.py` as a HARD GATE right before
+`layout_floor()`/blueprint rendering - an infeasible request gets
+`blueprint_status="infeasible"` + a real explanation
+(`HouseProject.feasibility_json`, exposed via `HouseProjectStatusResponse.
+feasibility`) instead of a silently-generated broken layout. The AI Concept
+Layout stage is skipped too in that case (see generate_house.py's `v8`
+comment). Frontend shows a banner (`static/app.js`'s
+`renderHouseFeasibilityBanner()`) - red/blocking for `not_feasible`, a softer
+informational tone for `tight`.
+
+**Why pure math instead of the hybrid design originally recommended below**:
+the user's later spec didn't ask for natural-language reasoning over
+open-ended "extras" text (the original motivating case - basketball courts,
+koi ponds, etc.) - it asked for feasibility over the STRUCTURED room program
+(bedrooms/bathrooms/kitchens/garage) already going through
+`generate_room_layout()`/`layout_floor()`, which already has real per-room
+minimum sizes to check against deterministically. Gemini-synthesized
+phrasing over those numbers (the hybrid idea) is still a reasonable upgrade
+if free-text "extras" ever need their own feasibility check (e.g. "does a
+basketball court fit"), but wasn't needed for what got built - see
+`_room_size_specs`/`check_feasibility`'s plain f-string explanations, which
+are accurate but more mechanical than a Gemini-phrased sentence would be.
 
 ## What this is
 
@@ -38,20 +67,24 @@ Three approaches were considered:
    SerpApi-search-then-Gemini-synthesizes design) and worth reusing directly
    rather than reinventing.
 
-## Two open design decisions (ask the user before building)
+## Two open design decisions - NOW RESOLVED (2026-08-27, explicit user answer)
 
-1. **Advisory warning vs. hard gate.** Recommended: advisory - show the
-   warning + suggestions but still let the user generate anyway if they
-   want. A hard block that's occasionally wrong (edge cases, unusual but
-   valid layouts) would be actively obstructive; an advisory suggestion that's
-   occasionally wrong is just ignorable. Needs explicit confirmation before
-   building either way, since a hard gate is a real behavior change to the
-   upload flow.
-2. **When it runs.** Recommended: at input time, before generation starts (a
-   "Check feasibility" step, or inline on submit) - so it saves a wasted
-   generation (and, if `HOUSE_RENDER_ENABLED`/real render is on, wasted
-   OpenAI/Kaggle cost) rather than only warning after the fact on the
-   results screen.
+1. **Advisory warning vs. hard gate → HARD GATE, chosen over this doc's own
+   "advisory" recommendation.** The user was asked directly and picked "block
+   render, explain" - the blueprint/AI floor-plan stages never run for an
+   infeasible request; only the exterior render still proceeds (a
+   photoreal visualization of the plot itself isn't misleading the same way a
+   blueprint of rooms that don't fit would be).
+2. **When it runs → AFTER generation starts, not at input time.** Not the
+   originally-recommended "check before generating" - it runs inside
+   `run_house_pipeline()` right after `generate_room_layout()` returns (real
+   room data is needed to check against, and that call is free/text-only
+   anyway), BEFORE the paid render step. So a wasted OpenAI/Kaggle render
+   call is still avoided when infeasible (`house_render_enabled`'s paid step
+   only runs after the gate), just not via a separate pre-submit UI check -
+   the two both prevent wasted PAID cost, this recommendation's exact
+   original goal, just via a different mechanism (mid-pipeline gate vs.
+   pre-submit check).
 
 ## Where this would plug in
 

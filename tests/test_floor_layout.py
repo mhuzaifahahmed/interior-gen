@@ -39,14 +39,19 @@ def test_layout_floor_rectangles_tile_the_plot_exactly():
 
 def test_layout_floor_areas_are_roughly_proportional_to_weights():
     # Two rooms, one weighted 3x the other - its rectangle should end up
-    # roughly 3x the area (allowing for the two-way recursive split, which is
-    # exact for exactly 2 rooms).
+    # bigger, though no longer EXACTLY 3x: both "Big Room"/"Small Room" are
+    # unrecognized names (classify to the "default" category), so they get
+    # an EQUAL guaranteed minimum area each - only the area remaining after
+    # both minimums are reserved is split 3:1, which compresses the final
+    # ratio below 3 (see floor_layout.py's MINIMUM-AREA GUARANTEE docstring
+    # section - this is the intended, not accidental, behavior).
     rooms = [{"name": "Big Room", "area": 3}, {"name": "Small Room", "area": 1}]
     rects = layout_floor(rooms, {"length": 40, "width": 40, "unit": "ft"})
 
     big = next(r for r in rects if r["name"] == "Big Room")
     small = next(r for r in rects if r["name"] == "Small Room")
-    assert abs(_area(big) / _area(small) - 3) < 1e-6
+    ratio = _area(big) / _area(small)
+    assert 1 < ratio < 3
 
 
 def test_layout_floor_handles_many_rooms_without_error():
@@ -129,6 +134,32 @@ def test_layout_floor_public_rooms_form_one_contiguous_block():
                 changed = True
 
     assert reachable == public_names
+
+
+def test_layout_floor_guarantees_minimum_area_even_when_gemini_gives_a_tiny_weight():
+    # Real regression guard for the bug the min-area guarantee fixes: a
+    # bedroom given a tiny relative weight next to a much bigger living room
+    # must NOT shrink below its real-world usable minimum (see
+    # room_specs.ROOM_SIZE_SPECS_M["bedroom"] - 2.7m x 2.7m, well over 60 sq
+    # ft even before unit conversion slack).
+    rooms = [{"name": "Living Room", "area": 20}, {"name": "Bedroom", "area": 0.1}]
+    rects = layout_floor(rooms, {"length": 40, "width": 40, "unit": "ft"})
+    bedroom = next(r for r in rects if r["name"] == "Bedroom")
+    assert _area(bedroom) > 60
+
+
+def test_layout_floor_garage_scales_with_car_count():
+    # A 2-car garage must reserve more area than a 1-car garage, all else
+    # equal - the minimum-area guarantee should scale with garage_cars.
+    rooms = [{"name": "Garage", "area": 1}, {"name": "Living Room", "area": 1}]
+    dimensions = {"length": 60, "width": 60, "unit": "ft"}
+
+    one_car = layout_floor(rooms, dimensions, garage_cars=1)
+    two_car = layout_floor(rooms, dimensions, garage_cars=2)
+
+    garage_1 = next(r for r in one_car if r["name"] == "Garage")
+    garage_2 = next(r for r in two_car if r["name"] == "Garage")
+    assert _area(garage_2) > _area(garage_1)
 
 
 def test_layout_floor_preserves_relative_order_within_a_zone():

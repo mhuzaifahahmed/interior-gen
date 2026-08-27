@@ -8,12 +8,17 @@ from app.db import engine
 from app.models import HouseProject
 from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
 from app.pipeline.blueprint_svg import render_floor_blueprint
+from app.pipeline.feasibility import check_feasibility
 from app.pipeline.floor_layout import layout_floor
 from app.pipeline.house_prompts import build_house_prompt
+from app.pipeline.house_requirements import mentions_garage, parse_front_yard_depth, parse_garage_cars
+from app.pipeline.room_specs import classify_room_category
 from app.providers.base import Provider
 from app.storage.base import Storage
 
 logger = logging.getLogger(__name__)
+
+_VERDICT_RANK = {"feasible": 0, "tight": 1, "not_feasible": 2}
 
 
 def _is_cancelled(session: Session, house_project: HouseProject) -> bool:
@@ -59,7 +64,22 @@ def _is_cancelled(session: Session, house_project: HouseProject) -> bool:
 # The two cancellation checkpoints moved with their stages: one right after
 # analyze_plot (before any of layout/blueprint/floor-plan work starts), one
 # right before the paid render (unchanged position).
-HOUSE_PROMPT_VERSION = "v7"
+# v8 (2026-08-27): added a real feasibility HARD GATE (app/pipeline/
+# feasibility.py, finally building future-plans/feasibility-checker.md) -
+# an infeasible room program is never silently laid out/rendered anymore;
+# blueprint_status/floor_plan_status become "infeasible" and
+# HouseProject.feasibility_json carries a plain-language explanation
+# instead. Also: garage car-count and front-yard depth are now parsed
+# deterministically out of the free-text requirements string (app/pipeline/
+# house_requirements.py, explicit user decision 2026-08-27 - NOT new
+# structured frontend fields, since a dedicated Garage/Kitchen checkbox pair
+# was already tried and dropped once) - a front yard reduces the actual
+# building footprint passed to layout_floor()/the blueprint renderers
+# BEFORE any room is placed, and a requested-but-missing garage room is
+# injected into the ground floor's room list so it's guaranteed to exist and
+# be sized for the requested car count. See app/pipeline/room_specs.py for
+# the real-world minimum room sizes this all depends on.
+HOUSE_PROMPT_VERSION = "v8"
 
 
 def run_house_pipeline(
@@ -140,34 +160,110 @@ def run_house_pipeline(
             room_layout: dict | None = None
             blueprint_keys: list[str] = []
             blueprint_dxf_keys: list[str] = []
+            feasibility_result: dict | None = None
+            garage_cars: int | None = None
+            building_dimensions = dimensions
+            requirements_text = prompt or ""
             try:
                 room_layout = provider.generate_room_layout(
                     dimensions, prompt or "", plot_description, floor_count
                 )
                 total_floors = len(room_layout["floors"])
-                for floor in room_layout["floors"]:
-                    rects = layout_floor(floor["rooms"], dimensions)
-                    png_bytes = render_floor_blueprint(floor["floor_number"], rects, dimensions, total_floors)
-                    key = f"{key_prefix}/{house_project_id}/blueprint_floor{floor['floor_number']}.png"
-                    storage.put(key, png_bytes, content_type="image/png")
-                    blueprint_keys.append(key)
-                    # Real AutoCAD-format export of the SAME rectangles - no AI
-                    # model involved, see app/pipeline/blueprint_dxf.py's
-                    # module docstring. Deliberately its own try/except so a
-                    # DXF-serialization bug can never take down the PNG
-                    # blueprint (which the render step below depends on).
-                    try:
-                        dxf_bytes = render_floor_blueprint_dxf(floor["floor_number"], rects, dimensions)
-                        dxf_key = f"{key_prefix}/{house_project_id}/blueprint_floor{floor['floor_number']}.dxf"
-                        storage.put(dxf_key, dxf_bytes, content_type="application/dxf")
-                        blueprint_dxf_keys.append(dxf_key)
-                    except Exception:
-                        logger.exception(
-                            "DXF export failed for house project %s floor %s; PNG blueprint is unaffected",
-                            house_project_id,
-                            floor["floor_number"],
+
+                # Garage/front-yard requirements are parsed deterministically
+                # from the free-text requirements string, NOT trusted to
+                # Gemini's own judgement, and NOT new structured frontend
+                # fields (a dedicated Garage/Kitchen checkbox pair was already
+                # tried and dropped once - see house_requirements.py's module
+                # docstring for the reasoning and the documented front/road-
+                # orientation limitation).
+                garage_cars = parse_garage_cars(requirements_text) if mentions_garage(requirements_text) else None
+                unit = dimensions.get("unit") or "ft"
+                front_yard_depth = parse_front_yard_depth(requirements_text, unit)
+
+                yard_infeasible_explanation = None
+                if front_yard_depth:
+                    building_dimensions = dict(dimensions)
+                    available_width = float(dimensions.get("width") or 0) - front_yard_depth
+                    if available_width <= 0:
+                        yard_infeasible_explanation = (
+                            f"The requested front yard ({front_yard_depth:.0f} sq {unit} deep) alone "
+                            f"leaves no room for the building on a plot only "
+                            f"{float(dimensions.get('width') or 0):.0f} sq {unit} deep."
                         )
-                house_project.blueprint_status = "done"
+                    else:
+                        building_dimensions["width"] = available_width
+
+                # Ground floor only - guarantee a garage room exists if one
+                # was requested but Gemini's own room list didn't include one.
+                if garage_cars and total_floors:
+                    ground_floor_rooms = room_layout["floors"][0].setdefault("rooms", [])
+                    has_garage = any(
+                        classify_room_category(str(r.get("name") or "")) == "garage" for r in ground_floor_rooms
+                    )
+                    if not has_garage:
+                        avg_weight = (
+                            sum(float(r.get("area") or 1) for r in ground_floor_rooms) / len(ground_floor_rooms)
+                            if ground_floor_rooms
+                            else 1.0
+                        )
+                        ground_floor_rooms.append({"name": "Garage", "area": avg_weight})
+
+                # Feasibility check - HARD GATE (explicit user decision,
+                # 2026-08-27): an infeasible floor is never silently laid out
+                # or rendered - see app/pipeline/feasibility.py.
+                if yard_infeasible_explanation:
+                    feasibility_result = {
+                        "verdict": "not_feasible",
+                        "required_area": None,
+                        "available_area": None,
+                        "unit": unit,
+                        "explanation": yard_infeasible_explanation,
+                    }
+                else:
+                    for floor in room_layout["floors"]:
+                        floor_result = check_feasibility(
+                            floor.get("rooms") or [], building_dimensions, total_floors, garage_cars
+                        )
+                        if (
+                            feasibility_result is None
+                            or _VERDICT_RANK[floor_result["verdict"]] > _VERDICT_RANK[feasibility_result["verdict"]]
+                        ):
+                            feasibility_result = floor_result
+
+                if feasibility_result and feasibility_result["verdict"] == "not_feasible":
+                    logger.info(
+                        "house project %s is not feasible: %s",
+                        house_project_id,
+                        feasibility_result["explanation"],
+                    )
+                    house_project.blueprint_status = "infeasible"
+                else:
+                    for floor in room_layout["floors"]:
+                        rects = layout_floor(floor["rooms"], building_dimensions, garage_cars)
+                        png_bytes = render_floor_blueprint(
+                            floor["floor_number"], rects, building_dimensions, total_floors
+                        )
+                        key = f"{key_prefix}/{house_project_id}/blueprint_floor{floor['floor_number']}.png"
+                        storage.put(key, png_bytes, content_type="image/png")
+                        blueprint_keys.append(key)
+                        # Real AutoCAD-format export of the SAME rectangles - no
+                        # AI model involved, see app/pipeline/blueprint_dxf.py's
+                        # module docstring. Deliberately its own try/except so a
+                        # DXF-serialization bug can never take down the PNG
+                        # blueprint (which the render step below depends on).
+                        try:
+                            dxf_bytes = render_floor_blueprint_dxf(floor["floor_number"], rects, building_dimensions)
+                            dxf_key = f"{key_prefix}/{house_project_id}/blueprint_floor{floor['floor_number']}.dxf"
+                            storage.put(dxf_key, dxf_bytes, content_type="application/dxf")
+                            blueprint_dxf_keys.append(dxf_key)
+                        except Exception:
+                            logger.exception(
+                                "DXF export failed for house project %s floor %s; PNG blueprint is unaffected",
+                                house_project_id,
+                                floor["floor_number"],
+                            )
+                    house_project.blueprint_status = "done"
             except Exception:
                 logger.exception(
                     "blueprint generation failed for house project %s; falling back to plot photo for the render",
@@ -176,11 +272,13 @@ def run_house_pipeline(
                 room_layout = None
                 blueprint_keys = []
                 blueprint_dxf_keys = []
+                feasibility_result = None
                 house_project.blueprint_status = "failed"
 
             house_project.room_layout_json = json.dumps(room_layout) if room_layout else None
             house_project.blueprint_keys_json = json.dumps(blueprint_keys) if blueprint_keys else None
             house_project.blueprint_dxf_keys_json = json.dumps(blueprint_dxf_keys) if blueprint_dxf_keys else None
+            house_project.feasibility_json = json.dumps(feasibility_result) if feasibility_result else None
             session.add(house_project)
             session.commit()
 
@@ -193,33 +291,43 @@ def run_house_pipeline(
             # (kaggle_autocad.py) traces our real geometry via ControlNet
             # conditioning instead of inventing its own - see
             # future-plans/concept-layout-controlnet-conditioning.md.
-            house_project.floor_plan_status = "running"
-            session.add(house_project)
-            session.commit()
-
-            try:
-                floor_plan_images = provider.generate_floor_plan(
-                    plot_description, dimensions, prompt or "", room_layout
-                )
-            except Exception:
-                logger.exception(
-                    "generate_floor_plan failed for house project %s; continuing without it", house_project_id
-                )
-                floor_plan_images = None
-
-            if floor_plan_images:
-                floor_plan_keys = []
-                for i, image_bytes in enumerate(floor_plan_images, start=1):
-                    key = f"{key_prefix}/{house_project_id}/floor_plan_floor{i}.png"
-                    storage.put(key, image_bytes, content_type="image/png")
-                    floor_plan_keys.append(key)
-                house_project.floor_plan_key = floor_plan_keys[0]  # legacy single-key field, first floor only
-                house_project.floor_plan_keys_json = json.dumps(floor_plan_keys)
-                house_project.floor_plan_status = "done"
+            #
+            # Same hard gate as the blueprint stage above - an infeasible
+            # program never gets an AI visualization either (it would be
+            # equally misleading), so this stage is skipped entirely rather
+            # than run with a set-of-rectangles that don't actually fit.
+            if feasibility_result and feasibility_result["verdict"] == "not_feasible":
+                house_project.floor_plan_status = "infeasible"
+                session.add(house_project)
+                session.commit()
             else:
-                house_project.floor_plan_status = "not_configured"
-            session.add(house_project)
-            session.commit()
+                house_project.floor_plan_status = "running"
+                session.add(house_project)
+                session.commit()
+
+                try:
+                    floor_plan_images = provider.generate_floor_plan(
+                        plot_description, building_dimensions, prompt or "", room_layout
+                    )
+                except Exception:
+                    logger.exception(
+                        "generate_floor_plan failed for house project %s; continuing without it", house_project_id
+                    )
+                    floor_plan_images = None
+
+                if floor_plan_images:
+                    floor_plan_keys = []
+                    for i, image_bytes in enumerate(floor_plan_images, start=1):
+                        key = f"{key_prefix}/{house_project_id}/floor_plan_floor{i}.png"
+                        storage.put(key, image_bytes, content_type="image/png")
+                        floor_plan_keys.append(key)
+                    house_project.floor_plan_key = floor_plan_keys[0]  # legacy single-key field, first floor only
+                    house_project.floor_plan_keys_json = json.dumps(floor_plan_keys)
+                    house_project.floor_plan_status = "done"
+                else:
+                    house_project.floor_plan_status = "not_configured"
+                session.add(house_project)
+                session.commit()
 
             if _is_cancelled(session, house_project):
                 logger.info(
@@ -270,6 +378,7 @@ def run_house_pipeline(
                     "blueprint_generated": house_project.blueprint_status == "done",
                     "floor_count": len(blueprint_keys) or (len(room_layout["floors"]) if room_layout else 0),
                     "render_model": render_model,
+                    "feasibility_verdict": feasibility_result["verdict"] if feasibility_result else None,
                 }
             )
             session.add(house_project)

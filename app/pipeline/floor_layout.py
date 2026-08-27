@@ -35,8 +35,33 @@ disturbing whatever fine-grained order Gemini/fallback already gave rooms
 WITHIN a zone (e.g. a "Master Bedroom" immediately followed by "Master
 Bathroom" in the input list stays adjacent - only the coarse public-vs-
 private split is enforced, not a full per-room adjacency solver, which is a
-much harder problem deliberately still out of scope - see CLAUDE.md).
+much harder problem deliberately still out of scope - see CLAUDE.md). This
+contiguity guarantee is PURELY structural (recursively splitting a
+contiguous range always yields two still-contiguous sub-ranges) and holds
+regardless of the specific weight VALUES used at each split - so the
+minimum-area guarantee added below doesn't disturb it.
+
+MINIMUM-AREA GUARANTEE (added 2026-08-27, part of the same pass that added
+app/pipeline/feasibility.py's hard feasibility gate): Gemini's "area" field
+is only a RELATIVE WEIGHT, with no floor - a room could previously shrink to
+an unusable sliver purely because the LLM guessed a low weight relative to
+many other rooms in the same floor, independent of whether that room type
+has a real-world minimum usable size. `layout_floor()` now first reserves
+each room's real minimum area (app/pipeline/room_specs.py, keyed by a
+lightweight room-type classifier - bedroom/bathroom/kitchen/etc. each have a
+real minimum footprint, a garage's minimum additionally scales with
+requested car count), THEN distributes whatever area remains across the
+plot proportionally to Gemini's relative weights - so a weight only ever
+controls how much space a room gets ABOVE its guaranteed usable minimum,
+never whether it gets one at all. When the sum of every room's minimum
+exceeds the plot's actual area, this falls back to the original pure-weight
+behavior instead of computing a nonsensical negative remainder - that case
+is expected to have already been caught by feasibility.check_feasibility()
+BEFORE layout_floor() is ever called (see generate_house.py's hard gate),
+so this fallback is a defensive backstop, not the normal path.
 """
+
+from app.pipeline.room_specs import min_area_for_room
 
 MIN_WEIGHT = 0.01
 
@@ -60,9 +85,13 @@ def _zone_key(room_name: str) -> int:
     return 0 if any(keyword in name for keyword in _PUBLIC_ZONE_KEYWORDS) else 1
 
 
-def layout_floor(rooms: list[dict], dimensions: dict) -> list[dict]:
+def layout_floor(rooms: list[dict], dimensions: dict, garage_cars: int | None = None) -> list[dict]:
     """rooms: [{"name": str, "area": number}, ...] (area is a relative weight).
-    dimensions: {"length": float, "width": float, "unit": str}.
+    dimensions: {"length": float, "width": float, "unit": str}. garage_cars,
+    when given, sizes any room classified as a garage using the real
+    per-car minimum instead of the single-car default - see
+    room_specs.garage_min_area_sqm().
+
     Returns [{"name": str, "x": float, "y": float, "w": float, "h": float}, ...]
     in the same unit as dimensions, tiling exactly [0, length] x [0, width].
     """
@@ -71,13 +100,36 @@ def layout_floor(rooms: list[dict], dimensions: dict) -> list[dict]:
 
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
+    unit = dimensions.get("unit") or "ft"
 
     # Stable sort into public-then-private zones (see module docstring) -
     # preserves each zone's own internal relative order.
     rooms = sorted(rooms, key=lambda r: _zone_key(str(r.get("name") or "")))
 
     names = [str(r.get("name") or f"Room {i + 1}") for i, r in enumerate(rooms)]
-    weights = [max(float(r.get("area") or 0), MIN_WEIGHT) for r in rooms]
+    raw_weights = [max(float(r.get("area") or 0), MIN_WEIGHT) for r in rooms]
+
+    total_area = length * width
+    min_areas = [min_area_for_room(name, unit, garage_cars) for name in names]
+    sum_min = sum(min_areas)
+
+    if 0 < sum_min <= total_area:
+        # Guarantee every room at least its real-world minimum area (see
+        # module docstring's MINIMUM-AREA GUARANTEE section), then distribute
+        # whatever area remains proportionally to Gemini's relative weights.
+        remaining_area = total_area - sum_min
+        weight_sum = sum(raw_weights)
+        weights = [
+            min_areas[i]
+            + remaining_area * (raw_weights[i] / weight_sum if weight_sum else 1 / len(raw_weights))
+            for i in range(len(names))
+        ]
+    else:
+        # Plot smaller than the guaranteed minimums - expected to already
+        # have been caught by feasibility.check_feasibility() before this is
+        # called. Defensive fallback to the original pure-weight behavior
+        # rather than a nonsensical negative remainder.
+        weights = raw_weights
 
     return _slice(names, weights, 0.0, 0.0, length, width, sum(weights))
 

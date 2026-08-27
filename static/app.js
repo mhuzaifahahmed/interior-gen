@@ -567,6 +567,7 @@ const houseRetryBtn = document.getElementById("house-retry-btn");
 const houseResultsSection = document.getElementById("house-results");
 const plotDescriptionEl = document.getElementById("plot-description");
 const houseImageModelNoteEl = document.getElementById("house-image-model-note");
+const houseFeasibilityBannerEl = document.getElementById("house-feasibility-banner");
 const houseResultsGrid = document.getElementById("house-results-grid");
 const houseStartOverBtn = document.getElementById("house-start-over-btn");
 
@@ -2079,6 +2080,31 @@ const HOUSE_RESULT_TIERS = [
   { key: "render", label: "Concept Render", desc: "AI-generated exterior/interior concept." },
 ];
 
+// Feasibility hard-gate result (app/pipeline/feasibility.py) - shown as a
+// banner above the results grid. "not_feasible" means the blueprint/Concept
+// Layout stages were skipped entirely (see their own gated blocks below);
+// "tight" is informational only - everything still generated normally, just
+// close to real-world minimum room sizes.
+function renderHouseFeasibilityBanner(feasibility) {
+  if (!feasibility || feasibility.verdict === "feasible") {
+    houseFeasibilityBannerEl.hidden = true;
+    houseFeasibilityBannerEl.innerHTML = "";
+    return;
+  }
+
+  const isBlocking = feasibility.verdict === "not_feasible";
+  houseFeasibilityBannerEl.className = isBlocking
+    ? "max-w-2xl mx-auto mb-10 px-6 py-4 border bg-error-container/10 border-error/30"
+    : "max-w-2xl mx-auto mb-10 px-6 py-4 border bg-tertiary-container/40 border-tertiary/40";
+  const titleClass = isBlocking ? "text-error" : "text-on-tertiary-container";
+  const title = isBlocking ? "Requested program doesn't fit this plot" : "Tight fit";
+  houseFeasibilityBannerEl.innerHTML = `
+    <p class="font-headline-sm ${titleClass} font-semibold mb-1 text-center">${title}</p>
+    <p class="font-body-md text-on-surface-variant text-sm text-center">${feasibility.explanation || ""}</p>
+  `;
+  houseFeasibilityBannerEl.hidden = false;
+}
+
 function renderHouseResults(data) {
   plotDescriptionEl.textContent = data.plot_description ? `"${data.plot_description}"` : "";
   if (data.render_model) {
@@ -2087,6 +2113,7 @@ function renderHouseResults(data) {
   } else {
     houseImageModelNoteEl.hidden = true;
   }
+  renderHouseFeasibilityBanner(data.feasibility);
   houseResultsGrid.innerHTML = "";
 
   for (const tier of HOUSE_RESULT_TIERS) {

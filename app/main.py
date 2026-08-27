@@ -565,6 +565,7 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
 
     dimensions = json.loads(house_project.dimensions_json) if house_project.dimensions_json else None
     house_inputs = json.loads(house_project.house_inputs_json) if house_project.house_inputs_json else None
+    feasibility = json.loads(house_project.feasibility_json) if house_project.feasibility_json else None
 
     return HouseProjectStatusResponse(
         house_project_id=house_project.id,
@@ -582,6 +583,7 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
         dimensions=dimensions,
         house_inputs=house_inputs,
         render_model=house_project.render_model,
+        feasibility=feasibility,
     )
 
 

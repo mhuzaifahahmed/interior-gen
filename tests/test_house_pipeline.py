@@ -500,3 +500,130 @@ def test_run_house_pipeline_skips_render_when_house_render_enabled_is_false(monk
         # The rest of the pipeline still ran normally.
         assert house_project.blueprint_status == "done"
         assert json.loads(house_project.blueprint_keys_json)
+
+
+class ManyRoomsProvider(FakeProvider):
+    """Returns a room program too large for a tiny plot - used to exercise
+    the feasibility hard gate (2026-08-27)."""
+
+    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+        rooms = [
+            {"name": "Bedroom 1", "area": 1},
+            {"name": "Bedroom 2", "area": 1},
+            {"name": "Bedroom 3", "area": 1},
+            {"name": "Bathroom 1", "area": 1},
+            {"name": "Bathroom 2", "area": 1},
+            {"name": "Kitchen", "area": 1},
+            {"name": "Living Room", "area": 1},
+            {"name": "Garage", "area": 1},
+        ]
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+        return {"floors": [{"floor_number": 1, "rooms": rooms}]}
+
+
+def test_run_house_pipeline_hard_gates_an_infeasible_room_program(monkeypatch):
+    # A room program that cannot physically fit a tiny plot must never be
+    # silently laid out/rendered - explicit user decision, 2026-08-27.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hfeas1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hfeas1", status="queued", plot_image_key="hfeas1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = ManyRoomsProvider()
+    run_house_pipeline("hfeas1", provider, storage, {"length": 15, "width": 15, "unit": "ft"})
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hfeas1")
+        assert house_project.status == "done"
+        assert house_project.blueprint_status == "infeasible"
+        assert house_project.floor_plan_status == "infeasible"
+        assert house_project.blueprint_keys_json is None
+        feasibility = json.loads(house_project.feasibility_json)
+        assert feasibility["verdict"] == "not_feasible"
+        assert feasibility["explanation"]
+        meta = json.loads(house_project.meta_json)
+        assert meta["feasibility_verdict"] == "not_feasible"
+
+    # The AI Concept Layout stage must also be skipped entirely - no
+    # conditioning geometry exists for an infeasible layout.
+    assert provider.floor_plan_calls == []
+    # The exterior render is still best-effort-allowed to run (a photoreal
+    # visualization of the plot itself isn't misleading the same way a
+    # blueprint of rooms that don't fit would be).
+    assert len(provider.render_calls) == 1
+
+
+def test_run_house_pipeline_injects_a_garage_room_when_requested_but_missing(monkeypatch):
+    # FakeProvider's default room_layout has no garage - mentioning "garage"
+    # in the requirements text must guarantee one exists on the ground floor
+    # rather than relying on Gemini to have included it.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hgarage1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hgarage1", status="queued", plot_image_key="hgarage1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = FakeProvider()
+    run_house_pipeline(
+        "hgarage1", provider, storage, {"length": 60, "width": 80, "unit": "ft"}, prompt="Extras: 2 car garage"
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hgarage1")
+        assert house_project.status == "done"
+        assert house_project.blueprint_status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+        room_names = [r["name"] for r in room_layout["floors"][0]["rooms"]]
+        assert "Garage" in room_names
+
+
+def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):
+    # A requested front yard must reduce the actual building footprint
+    # passed to layout_floor()/the blueprint renderers - reserved BEFORE any
+    # room is placed, not squeezed into leftover space afterward.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hyard1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hyard1", status="queued", plot_image_key="hyard1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    captured_dimensions = []
+    real_layout_floor = generate_house_module.layout_floor
+
+    def spy_layout_floor(rooms, dimensions, garage_cars=None):
+        captured_dimensions.append(dict(dimensions))
+        return real_layout_floor(rooms, dimensions, garage_cars)
+
+    monkeypatch.setattr(generate_house_module, "layout_floor", spy_layout_floor)
+
+    provider = FakeProvider()
+    run_house_pipeline(
+        "hyard1", provider, storage, {"length": 60, "width": 80, "unit": "ft"}, prompt="Extras: 20ft front yard"
+    )
+
+    assert len(captured_dimensions) == 1
+    # Width (the axis floor_layout.py treats as the plot's "depth") must be
+    # reduced by the requested 20ft - the length is untouched.
+    assert captured_dimensions[0]["length"] == 60
+    assert captured_dimensions[0]["width"] == 60
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hyard1")
+        assert house_project.status == "done"
+        assert house_project.blueprint_status == "done"

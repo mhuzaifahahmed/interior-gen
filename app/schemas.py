@@ -72,3 +72,8 @@ class HouseProjectStatusResponse(BaseModel):
     # until the render completes. See
     # app/providers/hybrid.py's get_house_render_model_label().
     render_model: Optional[str] = None
+    # Feasibility hard-gate result (app/pipeline/feasibility.py) -
+    # {"verdict": "feasible"|"tight"|"not_feasible", "required_area",
+    # "available_area", "unit", "explanation"}. None before the blueprint
+    # stage runs, or if it failed before a feasibility check could happen.
+    feasibility: Optional[dict] = None

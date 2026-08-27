@@ -859,6 +859,83 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     `fallback_room_layout()` (the never-empty path for when the Gemini call itself fails) also gained the
     same `floor_count` param, same priority-over-regex-guess treatment.
   - `HOUSE_PROMPT_VERSION` bumped to `v6`.
+- **v8 (2026-08-27): real feasibility hard-gate + guaranteed minimum room sizes + garage/front-yard
+  parsing** - driven by an external senior-architect-style spec the user supplied for the layout engine
+  (feasibility-first, min/preferred/max room dimensions, functional zoning, garage/front-yard logic,
+  validation). Two decisions were confirmed with the user before building (`AskUserQuestion`): garage/
+  front-yard requirements are parsed from the existing free-text `extras` field (NOT new structured
+  frontend fields - a Garage/Kitchen checkbox pair was already tried and dropped once, see the `v6` entry
+  above), and an infeasible request HARD GATES (blocks the blueprint/AI floor-plan stages with a plain
+  explanation) rather than degrading silently. `future-plans/feasibility-checker.md` (previously deferred,
+  pending exactly these two decisions) is now built - see that file for why it ended up pure-deterministic
+  math rather than the hybrid math+Gemini design originally recommended there.
+  - **`app/pipeline/room_specs.py`** (new) - real-world minimum room dimensions per room type (bedroom,
+    bathroom, kitchen, living, dining, garage, study, laundry, closet, foyer, default), defined in meters
+    and converted to the plot's own unit via `to_plot_unit()`. `classify_room_category()` is a lightweight
+    keyword classifier - deliberately a SEPARATE list from `blueprint_svg.py`'s furniture-dispatch
+    keywords (same real-world categories, different question: this decides room SIZE, that decides
+    furniture SYMBOLS - not unified, to avoid risking a furniture-drawing regression from a sizing-only
+    change). `garage_min_area_sqm(cars, unit)` scales a garage's minimum width per requested car count
+    (side-by-side bays), depth fixed.
+  - **`app/pipeline/floor_layout.py`'s `layout_floor()` gained a minimum-area guarantee**: previously a
+    room could shrink to an unusable sliver purely because Gemini's relative-weight guess was small next
+    to other rooms on the same floor, with zero real-world floor. Now each room's real minimum area
+    (`room_specs.min_area_for_room()`) is reserved FIRST, and only the AREA REMAINING after every room's
+    minimum is distributed proportionally to Gemini's weights - so a weight only ever controls how much
+    space a room gets ABOVE its guaranteed usable minimum, never whether it gets one at all. Falls back to
+    the original pure-weight behavior (defensively - expected to already be caught by the feasibility gate
+    below) when the sum of every room's minimum would exceed the plot's own area. Gained an optional
+    `garage_cars` param threaded through to `room_specs`. **Known limitation, stated plainly**: this only
+    guarantees minimum AREA, not minimum WIDTH/DEPTH individually - a room could theoretically still come
+    out as a thin sliver satisfying its area floor with a bad aspect ratio; a true 2D constraint solver
+    respecting width AND depth independently is a bigger, separate effort (not built).
+  - **`app/pipeline/feasibility.py`** (new) - `check_feasibility(rooms, dimensions, total_floors,
+    garage_cars)` sums every room's real minimum area (from `room_specs`) + a flat 20% circulation/wall
+    overhead (`CIRCULATION_OVERHEAD_FRACTION`) + a fixed staircase footprint allowance for multi-floor
+    buildings (`STAIRCASE_MIN_AREA_SQM` - a feasibility-only reservation; `blueprint_svg.py` still draws
+    the staircase as a symbol inside the largest room, not a dedicated reserved rectangle - giving it a
+    REAL reserved footprint is a separate, larger change, not done here), compares against the available
+    building footprint, and classifies `feasible`/`tight`/`not_feasible` with a plain-language explanation
+    quoting the actual numbers (never generic). Pure/deterministic, no I/O.
+  - **`app/pipeline/house_requirements.py`** (new) - deterministically parses garage car count and
+    front-yard depth out of the SAME free-text requirements string (`_compose_house_requirements()`'s
+    output, which folds in the `extras` field) via regex, same style as `kaggle_autocad.py`'s
+    `_parse_int_before_word()` for bedroom/bathroom counts - NOT trusted to Gemini's own probabilistic
+    inclusion of a garage room or accounting for yard space. **Known limitation, stated plainly**: this
+    project has no plot-orientation input (no "which edge faces the road" field), so a front yard is
+    reserved along a FIXED convention (the plot's `width`/y=0 edge, matching `floor_layout.py`'s own
+    coordinate convention) - a real footprint reservation, not a verified road-facing edge. When no
+    explicit depth is stated, `DEFAULT_FRONT_YARD_DEPTH_M` (3m) is used.
+  - **`app/pipeline/generate_house.py` wiring (`HOUSE_PROMPT_VERSION` bumped to `v8`)**: right after
+    `generate_room_layout()` succeeds, garage/front-yard are parsed from the requirements text; a front
+    yard reduces `building_dimensions` (a copy of `dimensions` with `width` reduced by the yard depth)
+    BEFORE any room is placed - `layout_floor()`/`render_floor_blueprint()`/`render_floor_blueprint_dxf()`
+    all use this reduced footprint, not the raw plot; a requested-but-missing garage room is injected
+    into the ground floor's room list (mutating `room_layout` in place, so `room_layout_json` reflects it
+    too). `check_feasibility()` then runs per floor against `building_dimensions`; the WORST verdict across
+    floors wins. On `not_feasible`: `blueprint_status`/`floor_plan_status` both become `"infeasible"`,
+    `blueprint_keys_json`/`blueprint_dxf_keys_json` stay empty, `provider.generate_floor_plan()` is never
+    called (no misleading AI visualization of geometry that doesn't fit) - but the exterior render step
+    still runs normally (a photoreal visualization of the plot itself isn't misleading the same way an
+    ill-fitting blueprint would be). `HouseProject.feasibility_json` (new column, additive migration)
+    stores the full result; `meta_json` also carries `feasibility_verdict` for parity with its other
+    derived booleans.
+  - **Schema/API**: `HouseProjectStatusResponse.feasibility` (new, `Optional[dict]`), built in
+    `app/main.py`'s `_house_project_to_response()`.
+  - **Frontend**: `static/app.js`'s `renderHouseFeasibilityBanner()` shows a banner above the results grid
+    - red/blocking styling for `not_feasible`, a softer `tertiary`-toned informational style for `tight`;
+    hidden entirely for `feasible`/no feasibility data (old projects predating this feature).
+  - **Tests**: `tests/test_room_specs.py`, `tests/test_feasibility.py`, `tests/test_house_requirements.py`
+    (all new, pure unit tests), `tests/test_floor_layout.py` extended (min-area guarantee, garage car-count
+    scaling; the old exact-3:1-ratio proportionality test was updated since minimum-area reservation now
+    legitimately compresses ratios between two equally-categorized rooms), `tests/test_house_pipeline.py`
+    extended (hard-gate on an infeasible program, garage injection, front-yard footprint reduction).
+    412/412 passing.
+  - **Explicitly NOT built in this pass** (real scope, separate future work, not silently skipped): a full
+    2D room-packing solver honoring width/depth independently (not just area); real staircase footprint
+    reservation + shape (straight/L/U) selection; an adjacency graph beyond the existing public/private
+    zone clustering; multi-candidate layout generation + scoring. These map directly to "Phase 3" in the
+    architecture report given to the user before this work started.
 
 ## Architecture (big picture)
 
