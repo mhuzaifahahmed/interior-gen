@@ -314,8 +314,10 @@ def _draw_windows(draw: ImageDraw.ImageDraw, rect: dict, plot_length: float, plo
 # secondary to the structure, not competing with it - and are positioned
 # toward corners/edges, away from the room label's centered position, per
 # the "furniture must not obscure labels" principle. An unrecognized or
-# purely circulatory room name (entry/foyer/hallway/storage/utility) simply
-# gets no furniture rather than a guessed icon - restraint over decoration.
+# purely circulatory room name (entry/foyer/hallway/storage) simply gets no
+# furniture rather than a guessed icon - restraint over decoration. v2
+# (Step 2 furniture enrichment) added laundry/utility (washer+dryer) and
+# closet/wardrobe/dressing (hanging-rod ticks) as two more recognized types.
 
 _FURNITURE_MIN_BOX_W = 70
 _FURNITURE_MIN_BOX_H = 60
@@ -361,7 +363,11 @@ def _draw_furniture(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_
         _furnish_study(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "garage" in name:
         _furnish_garage(draw, ix0, iy0, ix1, iy1, iw, ih)
-    # entry/foyer/hallway/storage/utility/unrecognized: no furniture symbol
+    elif "laundry" in name or "utility" in name:
+        _furnish_laundry(draw, ix0, iy0, ix1, iy1, iw, ih)
+    elif "closet" in name or "wardrobe" in name or "dressing" in name:
+        _furnish_closet(draw, ix0, iy0, ix1, iy1, iw, ih)
+    # entry/foyer/hallway/storage/unrecognized: no furniture symbol
 
 
 def _furnish_bedroom(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float, cy: float) -> None:
@@ -378,7 +384,21 @@ def _furnish_bedroom(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float,
         return  # too little vertical room left below the label to draw a legible bed
     bx0, by0, bx1, by1 = x0, y1 - bed_h, x0 + bed_w, y1
     draw.rectangle([bx0, by0, bx1, by1], outline=FURNITURE_COLOR, width=1)
-    draw.line([(bx0, by0 + bed_h * 0.22), (bx1, by0 + bed_h * 0.22)], fill=FURNITURE_COLOR, width=1)  # pillow line
+    # Two pillows (rounded rectangles, side by side) instead of a plain
+    # pillow line - reads as an actual made bed, not just a labeled box.
+    pillow_h = bed_h * 0.18
+    pillow_gap = bed_w * 0.06
+    pillow_w = (bed_w - 3 * pillow_gap) / 2
+    for i in range(2):
+        px0 = bx0 + pillow_gap + i * (pillow_w + pillow_gap)
+        draw.rounded_rectangle(
+            [px0, by0 + bed_h * 0.06, px0 + pillow_w, by0 + bed_h * 0.06 + pillow_h],
+            radius=min(pillow_w, pillow_h) * 0.3, outline=FURNITURE_COLOR, width=1,
+        )
+    # A folded-back blanket line near the foot of the bed.
+    draw.line(
+        [(bx0, by0 + bed_h * 0.7), (bx1, by0 + bed_h * 0.7)], fill=FURNITURE_COLOR, width=1
+    )
     nightstand = min(w, h) * 0.12
     if bx1 + nightstand + 4 <= x1:
         draw.rectangle([bx1 + 4, by0, bx1 + 4 + nightstand, by0 + nightstand], outline=FURNITURE_COLOR, width=1)
@@ -389,13 +409,22 @@ def _furnish_bedroom(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float,
 
 def _furnish_living(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
     depth = min(w, h) * 0.18
-    draw.rectangle([x0, y0, x0 + w * 0.55, y0 + depth], outline=FURNITURE_COLOR, width=1)  # sofa back run
+    sofa_len = w * 0.55
+    draw.rectangle([x0, y0, x0 + sofa_len, y0 + depth], outline=FURNITURE_COLOR, width=1)  # sofa back run
+    # Cushion divider ticks along the sofa back - reads as an actual sofa,
+    # not just an unmarked bench box.
+    cushion_count = max(2, int(sofa_len // (depth * 1.4)))
+    for i in range(1, cushion_count):
+        cx = x0 + sofa_len * i / cushion_count
+        draw.line([(cx, y0 + 2), (cx, y0 + depth - 2)], fill=FURNITURE_COLOR, width=1)
     draw.rectangle([x0, y0, x0 + depth, y0 + h * 0.5], outline=FURNITURE_COLOR, width=1)  # sofa side arm
     table = min(w, h) * 0.14
     tx, ty = x0 + w * 0.35, y0 + h * 0.62
     draw.rectangle([tx, ty, tx + table, ty + table], outline=FURNITURE_COLOR, width=1)
-    chair = min(w, h) * 0.12
-    draw.rectangle([x1 - chair, y1 - chair, x1, y1], outline=FURNITURE_COLOR, width=1)
+    chair = min(w, h) * 0.15
+    draw.rounded_rectangle(
+        [x1 - chair, y1 - chair, x1, y1], radius=chair * 0.2, outline=FURNITURE_COLOR, width=1
+    )  # armchair, rounded to read distinct from the sofa's square corners
 
 
 def _furnish_dining(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
@@ -418,8 +447,22 @@ def _furnish_kitchen(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float,
     sink_r = depth * 0.3
     scx = x0 + w * 0.3
     draw.ellipse([scx - sink_r, y0 + depth * 0.2, scx + sink_r, y0 + depth * 0.8], outline=FURNITURE_COLOR, width=1)
+    # Four stove burners on the counter run, opposite the sink - a plain
+    # counter box read as "some furniture-shaped rectangle"; burners make it
+    # unmistakably a stove.
+    burner_r = depth * 0.14
+    stove_cx = x0 + w * 0.62
+    for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+        bx = stove_cx + dx * burner_r * 1.6
+        by = y0 + depth * 0.5 + dy * burner_r * 1.6
+        draw.ellipse([bx - burner_r, by - burner_r, bx + burner_r, by + burner_r], outline=FURNITURE_COLOR, width=1)
     fridge = depth * 1.4
     draw.rectangle([x0, y1 - fridge, x0 + fridge * 0.7, y1], outline=FURNITURE_COLOR, width=1)
+    # Fridge door split line - a plain box reads as generic; the split line
+    # is the one detail that makes it legible as a fridge specifically.
+    draw.line(
+        [(x0 + fridge * 0.35, y1 - fridge), (x0 + fridge * 0.35, y1)], fill=FURNITURE_COLOR, width=1
+    )
 
 
 def _furnish_bathroom(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
@@ -428,10 +471,23 @@ def _furnish_bathroom(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float
     draw.rectangle([x0, y1 - toilet_w * 1.6, x0 + toilet_w, y1 - toilet_w * 1.3], outline=FURNITURE_COLOR, width=1)
     basin_w = min(w, h) * 0.3
     draw.rectangle([x1 - basin_w, y0, x1, y0 + basin_w * 0.55], outline=FURNITURE_COLOR, width=1)
+
     tub = min(w, h) * 0.42
     draw.rectangle([x0, y0, x0 + tub, y0 + tub * 0.6], outline=FURNITURE_COLOR, width=1)
     draw.line([(x0, y0), (x0 + tub, y0 + tub * 0.6)], fill=FURNITURE_COLOR, width=1)
     draw.line([(x0 + tub, y0), (x0, y0 + tub * 0.6)], fill=FURNITURE_COLOR, width=1)
+
+    # A separate stand-up shower stall (square, diagonal drain-pan mark) in
+    # the opposite corner, only when there's real room for one alongside
+    # the tub/toilet/basin already placed - a cramped half-bath just gets
+    # those three, not a squeezed-in fourth fixture that would look wrong
+    # at small scale.
+    shower_size = min(w, h) * 0.3
+    has_room_for_shower = w > tub + shower_size + basin_w * 0.3 and h > tub * 0.6 + shower_size + toilet_w * 1.3
+    if has_room_for_shower:
+        sx0, sy0 = x1 - shower_size, y1 - shower_size
+        draw.rectangle([sx0, sy0, x1, y1], outline=FURNITURE_COLOR, width=1)
+        draw.line([(sx0, sy0), (x1, y1)], fill=FURNITURE_COLOR, width=1)
 
 
 def _furnish_study(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
@@ -448,6 +504,27 @@ def _furnish_garage(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, 
     draw.rounded_rectangle(
         [cx0, cy0, cx0 + car_w, cy0 + car_h], radius=min(car_w, car_h) * 0.15, outline=FURNITURE_COLOR, width=1
     )
+
+
+def _furnish_laundry(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+    unit = min(w, h) * 0.32
+    gap = unit * 0.15
+    for i, cx in enumerate((x0 + unit / 2, x0 + unit + gap + unit / 2)):
+        cy = y0 + unit / 2
+        draw.rectangle([cx - unit / 2, cy - unit / 2, cx + unit / 2, cy + unit / 2], outline=FURNITURE_COLOR, width=1)
+        drum_r = unit * 0.32
+        draw.ellipse([cx - drum_r, cy - drum_r, cx + drum_r, cy + drum_r], outline=FURNITURE_COLOR, width=1)
+
+
+def _furnish_closet(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+    depth = min(w, h) * 0.22
+    draw.rectangle([x0, y0, x1, y0 + depth], outline=FURNITURE_COLOR, width=1)
+    rod_y = y0 + depth * 0.55
+    draw.line([(x0 + 2, rod_y), (x1 - 2, rod_y)], fill=FURNITURE_COLOR, width=1)  # hanging rod
+    hanger_count = max(3, int((x1 - x0) // (depth * 0.9)))
+    for i in range(hanger_count):
+        hx = x0 + (x1 - x0) * (i + 0.5) / hanger_count
+        draw.line([(hx, rod_y), (hx, rod_y + depth * 0.35)], fill=FURNITURE_COLOR, width=1)
 
 
 # ---- Staircase ----
@@ -506,20 +583,34 @@ def _draw_room_label(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     area_units = rect["w"] * rect["h"]
     area_text = f"{rect['w']:.1f}x{rect['h']:.1f} {unit} ({area_units:.0f} sq {unit})"
+    # Real architectural floor plans conventionally render the room name in
+    # all-caps within its label - a small typographic change (display only,
+    # the underlying name/data is untouched) that reads as a genuine title-
+    # block entry rather than a plain UI text label.
+    display_name = rect["name"].upper()
 
-    name_bbox = draw.textbbox((0, 0), rect["name"], font=name_font)
+    name_bbox = draw.textbbox((0, 0), display_name, font=name_font)
     name_w, name_h = name_bbox[2] - name_bbox[0], name_bbox[3] - name_bbox[1]
     show_area = box_h >= 50
-    area_h = 0
+    area_w = area_h = 0
+    divider_gap = 6
     if show_area:
         area_bbox = draw.textbbox((0, 0), area_text, font=small_font)
         area_w, area_h = area_bbox[2] - area_bbox[0], area_bbox[3] - area_bbox[1]
 
-    name_x, name_y = cx - name_w / 2, cy - (name_h + (area_h + 4 if show_area else 0)) / 2
-    _draw_faux_bold_text(draw, (name_x, name_y), rect["name"], name_font, INK)
+    total_h = name_h + (divider_gap + area_h if show_area else 0)
+    name_x, name_y = cx - name_w / 2, cy - total_h / 2
+    _draw_faux_bold_text(draw, (name_x, name_y), display_name, name_font, INK)
 
     if show_area:
-        draw.text((cx - area_w / 2, name_y + name_h + 4), area_text, font=small_font, fill=INK_SOFT)
+        # A thin divider rule between name and area - the one small touch
+        # that separates "two lines of text" from "a real title-block entry".
+        divider_y = name_y + name_h + divider_gap / 2
+        divider_half_w = max(name_w, area_w) * 0.32
+        draw.line(
+            [(cx - divider_half_w, divider_y), (cx + divider_half_w, divider_y)], fill=INK_SOFT, width=1
+        )
+        draw.text((cx - area_w / 2, divider_y + divider_gap / 2), area_text, font=small_font, fill=INK_SOFT)
 
 
 def _draw_faux_bold_text(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, font: ImageFont.FreeTypeFont, fill: tuple[int, int, int]) -> None:

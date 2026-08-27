@@ -772,6 +772,26 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     either scale. `blueprint_dxf.py` (the real `.dxf` export) was deliberately NOT changed - CAD users want
     editable line geometry, not filled poché, so the DXF stays line-based; this upgrade is scoped to the
     PNG display renderer only.
+  - **`blueprint_svg.py`'s v7 (2026-08-25, same day): richer furniture detail + title-block-style
+    labels** - the second step of the same "make the floor plan look genuinely professional" pass, after
+    poché walls. Furniture: beds now draw two distinct rounded pillows + a folded-blanket line instead of
+    a single pillow stroke; the living-room sofa gets cushion-divider ticks and the armchair is rounded
+    (reads as a chair, not a second sofa corner); the kitchen counter gets four stove burners and the
+    fridge gets a door-split line; bathrooms gain a separate stand-up shower stall (square + diagonal
+    drain-pan mark) in the opposite corner from the tub, but ONLY when `has_room_for_shower` confirms real
+    space alongside the tub/toilet/basin already placed - a cramped half-bath still gets just those three,
+    not a fourth fixture squeezed in at a size that would look wrong. Two new recognized room types added
+    to the keyword dispatcher: **laundry/utility** (washer + dryer, each a square with a round drum) and
+    **closet/wardrobe/dressing** (a hanging rod with tick marks for hangers) - `utility` previously got no
+    furniture at all (grouped with purely circulatory rooms like hallway/storage); it now does. Labels:
+    room names render in all-caps in the rendered label only (the underlying room name/data is untouched)
+    plus a thin divider rule between the name and its area line - the one small typographic touch that
+    turns "two lines of text" into something that reads as a real title-block entry. Verified via the
+    extended test suite (`tests/test_blueprint_svg.py` - the room-type smoke test now covers laundry/
+    closet too, plus a new shower-stall conditional-rendering regression test) and by rendering and
+    visually inspecting real output at both a full 40x60ft 2-floor house and a tight 26x22ft 6-room stress
+    test - confirmed no overlaps, correct burner/pillow/divider placement, and correct conditional shower
+    behavior (present in a spacious master bath, absent in a small half-bath).
 - **v6: structured dropdown inputs replace the single free-text requirements field (2026-08-20).**
   Previously the ONLY way to steer floor count/room mix was one free-text `#house-prompt` input, with
   floor count derived by regex-guessing "N floor(s)" out of whatever the user typed

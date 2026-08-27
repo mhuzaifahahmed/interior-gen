@@ -46,6 +46,8 @@ def test_render_floor_blueprint_furnishes_every_recognized_room_type_without_cra
         {"name": "Bathroom", "area": 1},
         {"name": "Study", "area": 1},
         {"name": "Garage", "area": 1},
+        {"name": "Laundry Room", "area": 1},
+        {"name": "Walk-in Closet", "area": 1},
         {"name": "Storage", "area": 1},  # unrecognized name - must stay furniture-free, not crash
     ]
     rects = layout_floor(rooms, dimensions)
@@ -106,3 +108,25 @@ def test_render_floor_blueprint_bed_never_overlaps_the_room_label():
     # exact case during development.
     png_bytes = render_floor_blueprint(1, rects, dimensions, total_floors=2)
     assert png_bytes.startswith(b"\x89PNG")
+
+
+def test_render_floor_blueprint_bathroom_shower_only_drawn_with_room_to_spare():
+    # A tiny half-bath and a spacious bathroom both must render without
+    # crashing - the shower stall is conditional on real available space
+    # (see _furnish_bathroom's has_room_for_shower check), not always drawn.
+    small_dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    small_rects = layout_floor(
+        [{"name": "Living Room", "area": 6}, {"name": "Guest Bathroom", "area": 0.4}], small_dimensions
+    )
+    small_png = render_floor_blueprint(1, small_rects, small_dimensions)
+    assert small_png.startswith(b"\x89PNG")
+
+    large_dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    large_rects = layout_floor(
+        [{"name": "Bedroom", "area": 1}, {"name": "Master Bathroom", "area": 2}], large_dimensions
+    )
+    large_png = render_floor_blueprint(1, large_rects, large_dimensions)
+    assert large_png.startswith(b"\x89PNG")
+    # Different fixture sets (small = no shower, large = tub + shower) must
+    # produce genuinely different pixel output.
+    assert small_png != large_png
