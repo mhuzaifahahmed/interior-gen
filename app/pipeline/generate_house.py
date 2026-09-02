@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 
 from sqlmodel import Session
 
@@ -14,6 +15,7 @@ from app.pipeline.house_prompts import build_house_prompt
 from app.pipeline.house_requirements import mentions_garage, parse_front_yard_depth, parse_garage_cars
 from app.pipeline.room_specs import classify_room_category
 from app.providers.base import Provider
+from app.providers.session_errors import KaggleSessionUnavailableError
 from app.storage.base import Storage
 
 logger = logging.getLogger(__name__)
@@ -79,7 +81,130 @@ def _is_cancelled(session: Session, house_project: HouseProject) -> bool:
 # injected into the ground floor's room list so it's guaranteed to exist and
 # be sized for the requested car count. See app/pipeline/room_specs.py for
 # the real-world minimum room sizes this all depends on.
-HOUSE_PROMPT_VERSION = "v8"
+# v9 (2026-08-29): the staircase becomes a REAL reserved room (not a symbol
+# drawn inside whichever room happened to be biggest) on every floor of a
+# multi-floor building - see the injection block above and
+# app/pipeline/floor_layout.py's new circulation zone /
+# app/pipeline/blueprint_svg.py's dynamic straight-vs-L-shaped stair
+# rendering. Addresses spec items #16 (real staircase footprint + dynamic
+# shape) and, partially, #17 (multi-floor coordination - consistent
+# zone-relative placement + consistent sizing across floors, NOT
+# pixel-exact interior alignment, which would need a fundamentally
+# different, non-rectangular-region layout algorithm - see
+# floor_layout.py's docstring for why that's a stated limitation, not an
+# oversight). See future-plans/house-layout-spec-checklist.md for the full
+# item-by-item status.
+# v10 (2026-08-31): the AI "Concept Layout" call (generate_floor_plan, the
+# friend-hosted Kaggle notebook) and the exterior render call
+# (generate_house_render) briefly ran CONCURRENTLY via a ThreadPoolExecutor -
+# SUPERSEDED by v11 below, which decouples them entirely instead of merely
+# overlapping them. Kept here for history.
+# v11 (2026-09-01): generate_floor_plan() is now FULLY DECOUPLED from the
+# house project's "done" status, not just run concurrently with the render.
+# Real motivation: a live-measured Kaggle Concept Layout call took ~2 minutes
+# PER FLOOR (SDXL+ControlNet diffusion on a T4, sequential across floors on
+# the notebook's own side) - concurrency with the render call (v10) only
+# ever avoided ADDING the render's time on top; it could never shrink the
+# ~2min/floor number itself, and with HOUSE_RENDER_ENABLED=false (no render
+# running at all right now) there was nothing left to overlap with, so v10's
+# win was invisible in practice. Since generate_floor_plan is explicitly
+# documented as a SUPPLEMENTARY visual (see CLAUDE.md's "Concept Layout"
+# labeling requirement - never a replacement for the deterministic
+# blueprint/DXF, which stay the authoritative, accurate deliverable), there
+# is no reason the whole project's completion should wait on it at all.
+# Now: once the blueprint/DXF/feasibility stage finishes, floor_plan_status
+# is set to "running" and generate_floor_plan() is handed to a fire-and-
+# forget daemon thread (_run_floor_plan_stage below) that is NEVER joined -
+# the main pipeline immediately continues to the (still synchronous,
+# still NOT best-effort) render call and then to house_project.status =
+# "done", without waiting on the Kaggle call at all. The detached thread
+# opens its OWN fresh Session(engine) and re-fetches the row by id when it
+# eventually finishes (same "never share a session across threads" rule
+# app/pipeline/generate.py's materials ThreadPoolExecutor already
+# established) and commits floor_plan_status="done"/"not_configured" +
+# the image keys whenever the Kaggle call actually completes - the frontend
+# already polls floor_plan_status independently of the overall project
+# status (see static/app.js's renderHouseResults()), so this needed zero
+# frontend changes. generate_house_render keeps its exact prior contract
+# (still synchronous, still not best-effort, still fails the whole project
+# on error) - only generate_floor_plan changed shape. Real, accepted
+# tradeoff: cancelling a house project can no longer stop the Concept Layout
+# call once it has started (already true after v10, now permanent rather
+# than a narrow race window) - a cancelled project's detached thread may
+# still write a floor_plan image to a project the user no longer sees
+# (list_house_projects excludes cancelled rows), same "harmless orphan"
+# treatment already accepted elsewhere in this file for S3 objects.
+HOUSE_PROMPT_VERSION = "v11"
+
+
+def _run_floor_plan_stage(
+    house_project_id: str,
+    provider: Provider,
+    storage: Storage,
+    plot_description: str | None,
+    dimensions: dict,
+    prompt: str | None,
+    room_layout: dict | None,
+    key_prefix: str,
+) -> None:
+    """Runs generate_floor_plan() (the Kaggle "Concept Layout" call) on its
+    own daemon thread, fully decoupled from run_house_pipeline()'s own
+    session/lifetime - see HOUSE_PROMPT_VERSION's v11 comment for why. Opens
+    its own Session(engine) since the caller's session may already be closed
+    by the time this finishes (a real, live-measured ~2min/floor call)."""
+    floor_plan_error: str | None = None
+    try:
+        floor_plan_images = provider.generate_floor_plan(plot_description, dimensions, prompt or "", room_layout)
+    except KaggleSessionUnavailableError as exc:
+        # A real, actionable problem (the notebook session is offline) - see
+        # app/providers/session_errors.py. Logged at warning (not exception -
+        # there's no traceback worth keeping, the cause is already known) and
+        # surfaced to the user via floor_plan_status="unavailable" +
+        # floor_plan_error, instead of silently degrading the same way an
+        # unconfigured vendor does.
+        logger.warning("generate_floor_plan unavailable for house project %s: %s", house_project_id, exc)
+        floor_plan_images = None
+        floor_plan_error = str(exc)
+    except Exception:
+        logger.exception(
+            "generate_floor_plan failed for house project %s; continuing without it", house_project_id
+        )
+        floor_plan_images = None
+
+    try:
+        with Session(engine) as session:
+            house_project = session.get(HouseProject, house_project_id)
+            if house_project is None:
+                return
+            if floor_plan_images:
+                floor_plan_keys = []
+                for i, image_bytes in enumerate(floor_plan_images, start=1):
+                    key = f"{key_prefix}/{house_project_id}/floor_plan_floor{i}.png"
+                    storage.put(key, image_bytes, content_type="image/png")
+                    floor_plan_keys.append(key)
+                house_project.floor_plan_key = floor_plan_keys[0]  # legacy field, first floor only
+                house_project.floor_plan_keys_json = json.dumps(floor_plan_keys)
+                house_project.floor_plan_status = "done"
+            elif floor_plan_error:
+                house_project.floor_plan_status = "unavailable"
+                house_project.floor_plan_error = floor_plan_error
+            else:
+                house_project.floor_plan_status = "not_configured"
+            session.add(house_project)
+            session.commit()
+    except Exception:
+        # This thread is detached and never joined (see docstring) - without
+        # this, any failure here (e.g. a SQLite "database is locked" error
+        # under real write contention, a real bug hit while testing this
+        # feature - see app/db.py's `timeout=30` comment for the fix on the
+        # connection side) would kill the thread silently, leaving
+        # floor_plan_status stuck at "running" forever with zero diagnostic
+        # trail anywhere. At minimum, this must be logged so it's actually
+        # discoverable - there's no session left to update the row from here
+        # if the write itself is what failed.
+        logger.exception(
+            "failed to persist generate_floor_plan result for house project %s", house_project_id
+        )
 
 
 def run_house_pipeline(
@@ -209,6 +334,26 @@ def run_house_pipeline(
                         )
                         ground_floor_rooms.append({"name": "Garage", "area": avg_weight})
 
+                # Every floor of a multi-floor building - guarantee a REAL
+                # reserved staircase room exists (2026-08-29), not just a
+                # decorative symbol drawn inside whichever room happened to
+                # be biggest (see blueprint_svg.py's history). Participates
+                # in the same minimum-area guarantee and feasibility check as
+                # any other room via room_specs.py's "staircase" category.
+                if total_floors > 1:
+                    for floor in room_layout["floors"]:
+                        floor_rooms = floor.setdefault("rooms", [])
+                        has_staircase = any(
+                            classify_room_category(str(r.get("name") or "")) == "staircase" for r in floor_rooms
+                        )
+                        if not has_staircase:
+                            avg_weight = (
+                                sum(float(r.get("area") or 1) for r in floor_rooms) / len(floor_rooms)
+                                if floor_rooms
+                                else 1.0
+                            )
+                            floor_rooms.append({"name": "Staircase", "area": avg_weight})
+
                 # Feasibility check - HARD GATE (explicit user decision,
                 # 2026-08-27): an infeasible floor is never silently laid out
                 # or rendered - see app/pipeline/feasibility.py.
@@ -282,71 +427,54 @@ def run_house_pipeline(
             session.add(house_project)
             session.commit()
 
-            # AI "Concept Layout" floor-plan generation - best-effort/deferred,
-            # see app/providers/idealhouse.py. None (the expected path when no
-            # vendor is configured) means "not_configured", not a failure - the
-            # whole house-project must still succeed without one. room_layout
-            # (just computed above, possibly None if the blueprint step
-            # failed) is passed through so a vendor that can use it
-            # (kaggle_autocad.py) traces our real geometry via ControlNet
-            # conditioning instead of inventing its own - see
-            # future-plans/concept-layout-controlnet-conditioning.md.
-            #
-            # Same hard gate as the blueprint stage above - an infeasible
-            # program never gets an AI visualization either (it would be
-            # equally misleading), so this stage is skipped entirely rather
-            # than run with a set-of-rectangles that don't actually fit.
-            if feasibility_result and feasibility_result["verdict"] == "not_feasible":
-                house_project.floor_plan_status = "infeasible"
-                session.add(house_project)
-                session.commit()
-            else:
-                house_project.floor_plan_status = "running"
-                session.add(house_project)
-                session.commit()
-
-                try:
-                    floor_plan_images = provider.generate_floor_plan(
-                        plot_description, building_dimensions, prompt or "", room_layout
-                    )
-                except Exception:
-                    logger.exception(
-                        "generate_floor_plan failed for house project %s; continuing without it", house_project_id
-                    )
-                    floor_plan_images = None
-
-                if floor_plan_images:
-                    floor_plan_keys = []
-                    for i, image_bytes in enumerate(floor_plan_images, start=1):
-                        key = f"{key_prefix}/{house_project_id}/floor_plan_floor{i}.png"
-                        storage.put(key, image_bytes, content_type="image/png")
-                        floor_plan_keys.append(key)
-                    house_project.floor_plan_key = floor_plan_keys[0]  # legacy single-key field, first floor only
-                    house_project.floor_plan_keys_json = json.dumps(floor_plan_keys)
-                    house_project.floor_plan_status = "done"
-                else:
-                    house_project.floor_plan_status = "not_configured"
-                session.add(house_project)
-                session.commit()
-
             if _is_cancelled(session, house_project):
                 logger.info(
-                    "house project %s was cancelled before the render started - stopping", house_project_id
+                    "house project %s was cancelled before the floor-plan/render stage started - stopping",
+                    house_project_id,
                 )
                 return
 
+            # v11: the AI "Concept Layout" call is fully decoupled onto a
+            # fire-and-forget daemon thread (_run_floor_plan_stage) - see
+            # HOUSE_PROMPT_VERSION's comment for why. It is NEVER joined
+            # here; the pipeline moves straight on to the render step below
+            # without waiting for it.
+            is_infeasible = feasibility_result and feasibility_result["verdict"] == "not_feasible"
+            if is_infeasible:
+                # Same hard gate as the blueprint stage above - an infeasible
+                # program never gets an AI visualization either (it would be
+                # equally misleading), so this call is skipped entirely
+                # rather than run with a set of rectangles that don't
+                # actually fit.
+                house_project.floor_plan_status = "infeasible"
+            else:
+                house_project.floor_plan_status = "running"
+                threading.Thread(
+                    target=_run_floor_plan_stage,
+                    args=(
+                        house_project_id,
+                        provider,
+                        storage,
+                        plot_description,
+                        building_dimensions,
+                        prompt,
+                        room_layout,
+                        key_prefix,
+                    ),
+                    daemon=True,
+                ).start()
+            session.add(house_project)
+            session.commit()
+
             # Exterior render is NOT best-effort - it's the core paid
-            # deliverable of this feature, same treatment as the room-redesign
-            # image loop. A failure here propagates to the outer except and
-            # fails the project. Edited from the real plot photo (a photoreal
-            # "house on this actual land" picture). v4 removed the second,
-            # blueprint-sourced 3D isometric render entirely - this is now the
-            # only generate_house_render() call in the pipeline.
-            #
-            # settings.house_render_enabled is a dev-only escape hatch (see its
-            # comment in app/config.py) - when False, this whole step (and the
-            # ONLY OpenAI/Kaggle call in the house pipeline) is skipped, so the
-            # project still completes as "done" with whatever else succeeded.
+            # deliverable of this feature, same treatment as the
+            # room-redesign image loop. An exception here still propagates
+            # out to the outer except and fails the whole project.
+            # settings.house_render_enabled is a dev-only escape hatch (see
+            # its comment in app/config.py) - when False, this call (the
+            # ONLY OpenAI/Kaggle call left in the main pipeline path) is
+            # skipped, so the project still completes as "done" with
+            # whatever else succeeded.
             render_model = None
             if settings.house_render_enabled:
                 primary_prompt = build_house_prompt(dimensions, prompt, plot_description, room_layout)

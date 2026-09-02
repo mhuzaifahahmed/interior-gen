@@ -59,9 +59,56 @@ behavior instead of computing a nonsensical negative remainder - that case
 is expected to have already been caught by feasibility.check_feasibility()
 BEFORE layout_floor() is ever called (see generate_house.py's hard gate),
 so this fallback is a defensive backstop, not the normal path.
+
+REAL CIRCULATION CORRIDOR (2026-09-02, real user feedback: "I don't want
+crisp, I want an intelligent one which doesn't just make boxes and lines but
+adds some true meaning to the map"). Diagnosis: the AI Concept Layout model
+can't add this "meaning" itself - it's forced to trace our own geometry
+almost exactly (see kaggle_autocad.py's controlnet_conditioning_scale), so
+the fix has to be here, in the deterministic engine. Before this, every
+private-zone room just touched its neighbor directly (bedroom-to-bedroom
+doors, purely an artifact of the slice-and-dice split, not a real design
+choice). Now: the top-level public/circulation-vs-private split (previously
+just an ordering trick within one big recursive `_slice()` call - zones were
+never actually separate boxes) becomes a REAL one-time box split
+(`_split_box()`), giving the private zone its own real sub-box. When that
+box holds at least MIN_ROOMS_FOR_CORRIDOR rooms and has room to spare, a
+real hallway strip (HALLWAY_WIDTH_M) is reserved along whichever edge
+borders the public/circulation zone (so it's actually reachable from there),
+and the remaining rooms are packed in their EXISTING input order along the
+corridor via `_pack_row()` - preserving the previously-established "master
+bedroom next to its own ensuite bathroom" adjacency automatically, with no
+separate suite-detection logic needed, since sequential packing keeps
+sequential neighbors adjacent to EACH OTHER as well as to the corridor.
+blueprint_svg.py then suppresses the direct door between two adjacent
+non-bathroom private rooms whenever a hallway exists, so bedrooms open onto
+the hallway instead of into each other. Explicitly NOT attempted here (real,
+harder problems, left for later - see future-plans/house-layout-spec-checklist.md):
+non-rectangular/L-shaped rooms, a double-loaded (two-facing-rows) corridor,
+plumbing-zone vertical stacking across floors, a full adjacency-graph
+solver. Small private zones (fewer than MIN_ROOMS_FOR_CORRIDOR rooms, or not
+enough depth left after reserving the corridor) fall back unchanged to the
+plain `_slice()` behavior that existed before this - confirmed by the
+pre-existing test_layout_floor_preserves_relative_order_within_a_zone test
+(only 2 private rooms) continuing to pass untouched.
 """
 
-from app.pipeline.room_specs import min_area_for_room
+from app.pipeline.room_specs import min_area_for_room, to_plot_unit
+
+# A real, standard single-loaded corridor width - reserved along whichever
+# edge of the private zone's box borders the public/circulation zone, so the
+# hallway is actually reachable from there, not just present.
+HALLWAY_WIDTH_M = 1.1
+
+# Below this many private rooms, a corridor adds overhead without much real
+# benefit (a 1-2 room private zone can just connect directly) - falls back to
+# the original plain _slice() behavior instead.
+MIN_ROOMS_FOR_CORRIDOR = 3
+
+# After reserving the hallway's width, the remaining row depth must still fit
+# a usable room - a conservative fixed floor (not tied to any one room type's
+# own minimum, since the row holds a mix of room types).
+MIN_ROW_DEPTH_M = 2.0
 
 MIN_WEIGHT = 0.01
 
@@ -79,10 +126,33 @@ _PUBLIC_ZONE_KEYWORDS = (
     "study", "office",
 )
 
+# A THIRD zone, added 2026-08-29 alongside the real staircase-as-a-room
+# feature (see generate_house.py's per-floor injection): a staircase sits
+# BETWEEN public and private in the sort order on every floor, not lumped
+# into either. Since _slice() always splits a CONTIGUOUS sublist (see the
+# public/private docstring above), sorting every floor's rooms the same way
+# - public, then staircase, then private - means the staircase lands in a
+# consistent RELATIVE region of the plot across floors even though nothing
+# here can guarantee pixel-exact interior alignment (this project's
+# rectangular slice-and-dice algorithm can't reserve an arbitrary interior
+# rectangle at the exact same coordinates across floors without a
+# fundamentally different, non-rectangular-region layout algorithm - a real,
+# stated limitation, not silently glossed over). This is what "multi-floor
+# coordination" means in this codebase today: consistent zone-relative
+# placement + consistent guaranteed sizing (see room_specs.py's "staircase"
+# entry), not pixel-identical positioning. Exterior wall alignment across
+# floors is already exact for a different, simpler reason - every floor
+# renders the identical plot boundary at the identical canvas position.
+_CIRCULATION_ZONE_KEYWORDS = ("stair",)
+
 
 def _zone_key(room_name: str) -> int:
     name = room_name.lower()
-    return 0 if any(keyword in name for keyword in _PUBLIC_ZONE_KEYWORDS) else 1
+    if any(keyword in name for keyword in _PUBLIC_ZONE_KEYWORDS):
+        return 0
+    if any(keyword in name for keyword in _CIRCULATION_ZONE_KEYWORDS):
+        return 1
+    return 2
 
 
 def layout_floor(rooms: list[dict], dimensions: dict, garage_cars: int | None = None) -> list[dict]:
@@ -131,7 +201,47 @@ def layout_floor(rooms: list[dict], dimensions: dict, garage_cars: int | None = 
         # rather than a nonsensical negative remainder.
         weights = raw_weights
 
-    return _slice(names, weights, 0.0, 0.0, length, width, sum(weights))
+    # Real circulation corridor (see module docstring) - find where the
+    # private zone starts in the (already zone-sorted) list. If there's no
+    # real public/circulation-vs-private boundary (everything is one zone,
+    # or there are no private rooms at all), there's nothing to split
+    # specially - same single recursive _slice() call as before.
+    private_start = next((i for i, name in enumerate(names) if _zone_key(name) == 2), len(names))
+    if private_start == 0 or private_start == len(names):
+        return _slice(names, weights, 0.0, 0.0, length, width, sum(weights))
+
+    front_names, private_names = names[:private_start], names[private_start:]
+    front_weights, private_weights = weights[:private_start], weights[private_start:]
+    front_total, private_total = sum(front_weights), sum(private_weights)
+    left_fraction = front_total / (front_total + private_total) if (front_total + private_total) else 0.5
+
+    front_box, private_box, split_along_width = _split_box(0.0, 0.0, length, width, left_fraction)
+    front_rects = _slice(front_names, front_weights, *front_box, front_total)
+    private_rects = _layout_private_zone(
+        private_names, private_weights, *private_box, unit, split_along_width
+    )
+    return front_rects + private_rects
+
+
+def _split_box(
+    x: float, y: float, w: float, h: float, left_fraction: float
+) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float], bool]:
+    """Splits one box into two along its LONGER side (same convention as
+    _slice()'s own inline splitting, factored out here so it can also be
+    called once, manually, for the real public/circulation-vs-private zone
+    boundary in layout_floor()). Returns (left_box, right_box,
+    split_along_width) - each box is (x, y, w, h); split_along_width tells
+    the caller which axis was used, since the "right" box's shared edge with
+    the "left" box is always its own left edge (if split along width) or its
+    own top edge (if split along height) - this is what
+    _layout_private_zone() uses to know which edge of its own box actually
+    borders the front zone."""
+    if w >= h:
+        left_w = w * left_fraction
+        return (x, y, left_w, h), (x + left_w, y, w - left_w, h), True
+    else:
+        left_h = h * left_fraction
+        return (x, y, w, left_h), (x, y + left_h, w, h - left_h), False
 
 
 def _slice(
@@ -147,16 +257,106 @@ def _slice(
     right_total = sum(right_weights)
     left_fraction = left_total / total_weight if total_weight else 0.5
 
-    if w >= h:
-        left_w = w * left_fraction
-        return _slice(left_names, left_weights, x, y, left_w, h, left_total) + _slice(
-            right_names, right_weights, x + left_w, y, w - left_w, h, right_total
+    left_box, right_box, _ = _split_box(x, y, w, h, left_fraction)
+    return _slice(left_names, left_weights, *left_box, left_total) + _slice(
+        right_names, right_weights, *right_box, right_total
+    )
+
+
+def _layout_private_zone(
+    names: list[str],
+    weights: list[float],
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    unit: str,
+    split_along_width: bool,
+) -> list[dict]:
+    """Lays out the private zone's own box - either with a real hallway
+    corridor (see module docstring) when there's enough room count/space to
+    justify one, or falling back to the original plain _slice() otherwise
+    (small private zones, e.g. a single bedroom+bathroom, keep direct
+    adjacency - there's no benefit to a corridor there, and this is what
+    keeps the pre-existing "master bedroom next to its own ensuite bathroom"
+    test passing unchanged).
+
+    split_along_width tells us which edge of THIS box borders the
+    public/circulation zone (see _split_box()'s docstring) - the hallway is
+    reserved along that same edge so it's actually reachable from there, not
+    just present somewhere in the private zone.
+    """
+    hallway_width = to_plot_unit(HALLWAY_WIDTH_M, unit)
+    min_row_depth = to_plot_unit(MIN_ROW_DEPTH_M, unit)
+    # The row's depth is the box's dimension PERPENDICULAR to the corridor's
+    # run direction - that's h when the corridor runs along the width axis
+    # (split_along_width True, box is wide/short relative to the front zone)
+    # and w when it runs along the height axis.
+    cross_dim = h if split_along_width else w
+
+    if len(names) < MIN_ROOMS_FOR_CORRIDOR or cross_dim - hallway_width < min_row_depth:
+        return _slice(names, weights, x, y, w, h, sum(weights))
+
+    total_weight = sum(weights)
+    if split_along_width:
+        # Front zone is to the LEFT (private box's own left edge borders it)
+        # - hallway is a vertical strip along that left edge, rooms stack
+        # vertically (packed along y) to its right.
+        hallway_rect = {"name": "Hallway", "x": x, "y": y, "w": hallway_width, "h": h}
+        room_rects = _pack_row(
+            names, weights, x + hallway_width, y, w - hallway_width, h, total_weight, along_width=False
         )
     else:
-        left_h = h * left_fraction
-        return _slice(left_names, left_weights, x, y, w, left_h, left_total) + _slice(
-            right_names, right_weights, x, y + left_h, w, h - left_h, right_total
+        # Front zone is ABOVE (private box's own top edge borders it) -
+        # hallway is a horizontal strip along that top edge, rooms line up
+        # horizontally (packed along x) below it.
+        hallway_rect = {"name": "Hallway", "x": x, "y": y, "w": w, "h": hallway_width}
+        room_rects = _pack_row(
+            names, weights, x, y + hallway_width, w, h - hallway_width, total_weight, along_width=True
         )
+
+    return [hallway_rect] + room_rects
+
+
+def _pack_row(
+    names: list[str],
+    weights: list[float],
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    total_weight: float,
+    along_width: bool,
+) -> list[dict]:
+    """Packs rooms SEQUENTIALLY, in their existing input order, along one
+    fixed axis (along_width: cut along x, each room gets the full h; else
+    cut along y, each room gets the full w) - unlike the general _slice(),
+    this never flips axis based on aspect ratio, since a corridor row's
+    orientation is fixed by definition. Preserving input order (rather than
+    _slice()'s own weight-balanced recursive splitting) is what keeps
+    sequential neighbors (e.g. a master bedroom immediately followed by its
+    own ensuite bathroom) adjacent to each other, same as the pre-existing
+    zone-grouping guarantee elsewhere in this module."""
+    if not names:
+        return []
+    rects = []
+    pos = x if along_width else y
+    far_edge = (x + w) if along_width else (y + h)
+    for i, (name, weight) in enumerate(zip(names, weights)):
+        # Last room snaps to the exact far edge instead of a proportionally-
+        # computed span, so floating-point rounding across many rooms can
+        # never leave a gap or overlap at the boundary - same "exact tiling
+        # by construction" guarantee _slice()'s own recursive halving has.
+        if i == len(names) - 1:
+            span = far_edge - pos
+        else:
+            span = (w if along_width else h) * (weight / total_weight if total_weight else 1 / len(names))
+        if along_width:
+            rects.append({"name": name, "x": pos, "y": y, "w": span, "h": h})
+        else:
+            rects.append({"name": name, "x": x, "y": pos, "w": w, "h": span})
+        pos += span
+    return rects
 
 
 def _balanced_split_index(weights: list[float]) -> int:

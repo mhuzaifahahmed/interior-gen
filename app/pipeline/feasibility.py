@@ -13,7 +13,7 @@ answer "does this actually fit" with the same numbers layout_floor() uses
 to guarantee room sizes, not a second, inconsistent set of assumptions.
 """
 
-from app.pipeline.room_specs import min_area_for_room
+from app.pipeline.room_specs import classify_room_category, min_area_for_room
 
 # Rule-of-thumb overhead for interior walls + circulation (hallways,
 # clearances) that a pure sum of room areas doesn't account for - real
@@ -22,15 +22,15 @@ from app.pipeline.room_specs import min_area_for_room
 # item in the user's spec - a bigger, separate effort left for later).
 CIRCULATION_OVERHEAD_FRACTION = 0.20
 
-# A compact straight/L-shaped staircase + landing footprint, in square
-# meters - added once per floor whenever the building has more than one
-# floor (every floor needs the vertical connection). Converted to the
-# plot's unit alongside everything else in room_specs.to_plot_unit(). This
-# is a feasibility-only area reservation - blueprint_svg.py still draws the
-# staircase as a symbol inside the largest room rather than a dedicated
-# reserved rectangle; giving it a REAL reserved footprint in layout_floor()
-# itself is a bigger, separate change (see the architecture report this
-# module was built from).
+# Fallback-only staircase overhead, in square meters - a real "Staircase"
+# room is now injected into every floor's room list BEFORE this function is
+# called (see generate_house.py), where it's counted like any other room via
+# min_area_for_room()'s "staircase" category. This flat addition only fires
+# when the room list DOESN'T already contain one (e.g. a caller that invokes
+# check_feasibility() directly, bypassing the pipeline's injection - see the
+# `has_staircase` check below) - a defensive backstop against undercounting,
+# not the normal path, so it's never double-counted once the real room
+# exists.
 STAIRCASE_MIN_AREA_SQM = 4.5
 
 
@@ -65,7 +65,8 @@ def check_feasibility(
 
     required_room_area = sum(min_area_for_room(r.get("name") or "", unit, garage_cars) for r in rooms)
     required_area = required_room_area * (1 + CIRCULATION_OVERHEAD_FRACTION)
-    if total_floors and total_floors > 1:
+    has_staircase = any(classify_room_category(str(r.get("name") or "")) == "staircase" for r in rooms)
+    if total_floors and total_floors > 1 and not has_staircase:
         from app.pipeline.room_specs import to_plot_unit
 
         required_area += to_plot_unit(STAIRCASE_MIN_AREA_SQM, unit)

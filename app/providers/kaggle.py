@@ -12,6 +12,7 @@ from app.pipeline.prompts import (
     build_kaggle_prompt,
     extract_style_and_palette,
 )
+from app.providers.session_errors import classify_kaggle_failure
 
 logger = logging.getLogger(__name__)
 
@@ -150,13 +151,25 @@ class KaggleImageProvider:
 
         # Serialized - see _request_lock's module-level comment for the real
         # concurrent-request failure this guards against.
-        with _request_lock:
-            response = httpx.post(
-                _generate_url(settings.kaggle_api_url),
-                json=payload,
-                timeout=REQUEST_TIMEOUT_SECONDS,
-            )
-        response.raise_for_status()
+        try:
+            with _request_lock:
+                response = httpx.post(
+                    _generate_url(settings.kaggle_api_url),
+                    json=payload,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
+            response.raise_for_status()
+        except Exception as exc:
+            # See app/providers/session_errors.py - raising this specific
+            # type instead of the raw httpx error doesn't change behavior
+            # (HybridProvider still catches it and falls back to OpenAI
+            # exactly as before), it just makes the resulting log line
+            # (logger.exception in hybrid.py) say plainly "session appears
+            # offline" instead of a generic connection traceback.
+            session_error = classify_kaggle_failure(exc, "room-redesign")
+            if session_error:
+                raise session_error from exc
+            raise
 
         data = response.json()
         image_b64_out = data.get("generated_image_base64")
@@ -227,12 +240,18 @@ class KaggleImageProvider:
         # No _request_lock needed here - the notebook's own generation_lock
         # serializes GPU access server-side, and this submit call is
         # near-instant anyway (nothing left to serialize client-side).
-        submit_response = httpx.post(
-            _generate_batch_url(settings.kaggle_api_url),
-            json=payload,
-            timeout=BATCH_SUBMIT_TIMEOUT_SECONDS,
-        )
-        submit_response.raise_for_status()
+        try:
+            submit_response = httpx.post(
+                _generate_batch_url(settings.kaggle_api_url),
+                json=payload,
+                timeout=BATCH_SUBMIT_TIMEOUT_SECONDS,
+            )
+            submit_response.raise_for_status()
+        except Exception as exc:
+            session_error = classify_kaggle_failure(exc, "room-redesign")
+            if session_error:
+                raise session_error from exc
+            raise
 
         submit_data = submit_response.json()
         job_id = submit_data.get("job_id")
@@ -251,8 +270,14 @@ class KaggleImageProvider:
 
             time.sleep(BATCH_POLL_INTERVAL_SECONDS)
 
-            poll_response = httpx.get(status_url, timeout=BATCH_POLL_TIMEOUT_SECONDS)
-            poll_response.raise_for_status()
+            try:
+                poll_response = httpx.get(status_url, timeout=BATCH_POLL_TIMEOUT_SECONDS)
+                poll_response.raise_for_status()
+            except Exception as exc:
+                session_error = classify_kaggle_failure(exc, "room-redesign")
+                if session_error:
+                    raise session_error from exc
+                raise
             job = poll_response.json()
             status = job.get("status")
 
@@ -309,12 +334,24 @@ class KaggleImageProvider:
         image_b64 = base64.b64encode(image_bytes).decode()
         payload = {"image_base64": image_b64, "prompt": prompt}
 
-        response = httpx.post(
-            _generate_url(settings.kaggle_house_api_url),
-            json=payload,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
+        try:
+            response = httpx.post(
+                _generate_url(settings.kaggle_house_api_url),
+                json=payload,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            # UNLIKE the room-redesign methods above, generate_house_render
+            # is NOT best-effort (see run_house_pipeline's docstring) - this
+            # exception propagates all the way to house_project.error and is
+            # shown to the user verbatim via showHouseError() in
+            # static/app.js, so a friendly, actionable message here matters
+            # even more than for the room-redesign path's log-only benefit.
+            session_error = classify_kaggle_failure(exc, "house-render")
+            if session_error:
+                raise session_error from exc
+            raise
 
         data = response.json()
         image_b64_out = data.get("generated_image_base64")

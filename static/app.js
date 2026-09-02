@@ -1580,6 +1580,16 @@ function renderHistoryHouseCard(project) {
   if (project.images.plot) thumbs.push([project.images.plot, "Plot"]);
   if (project.images.render) thumbs.push([project.images.render, "Render"]);
   (project.blueprint_urls || []).forEach((url, i) => thumbs.push([url, `Floor ${i + 1}`]));
+  // Real vendor output (app/providers/kaggle_autocad.py) - was missing here
+  // entirely (a real gap: a project whose Concept Layout call finished AFTER
+  // the main results page stopped polling, see pollFloorPlanCatchUp(), had
+  // NO way to ever see it without this), unlike the live results page which
+  // already showed it via renderHouseResults().
+  if (project.floor_plan_status === "done") {
+    (project.floor_plan_urls || []).forEach((url, i) =>
+      thumbs.push([url, project.floor_plan_urls.length > 1 ? `Concept Layout ${i + 1}` : "Concept Layout"])
+    );
+  }
 
   const thumbsHtml = thumbs.map(([url, label]) => renderHistoryThumb(url, label)).join("");
 
@@ -2067,10 +2077,50 @@ async function pollHouseProject(houseProjectId) {
       renderHouseResults(data);
       showHouseState("results");
     });
+    lastDisplayedHouseProjectId = houseProjectId;
+    // v11 (app/pipeline/generate_house.py) decoupled the Concept Layout call
+    // from the project's own "done" status - it can still be "running" here
+    // (a real, live-observed gap: without this, the card simply never
+    // appeared unless the user manually reloaded the page). Keep a light,
+    // separate catch-up poll going just for that one field, without
+    // re-entering the progress UI.
+    if (data.floor_plan_status === "running") {
+      setTimeout(() => pollFloorPlanCatchUp(houseProjectId), 3000);
+    }
     return;
   }
 
   setTimeout(() => pollHouseProject(houseProjectId), 3000);
+}
+
+// Guards pollFloorPlanCatchUp() from clobbering a NEWER generation's results
+// if the user starts another one before the previous project's Concept
+// Layout call finishes catching up.
+let lastDisplayedHouseProjectId = null;
+
+async function pollFloorPlanCatchUp(houseProjectId) {
+  if (houseProjectId !== lastDisplayedHouseProjectId) return;
+
+  let data;
+  try {
+    const res = await authFetch(apiUrl(`/api/house-projects/${houseProjectId}`));
+    if (!res.ok) return; // best-effort catch-up only - not worth surfacing an error for this
+    data = await res.json();
+  } catch (err) {
+    return;
+  }
+
+  if (houseProjectId !== lastDisplayedHouseProjectId) return; // re-check after the await
+
+  if (data.floor_plan_status === "running") {
+    setTimeout(() => pollFloorPlanCatchUp(houseProjectId), 3000);
+    return;
+  }
+
+  // Settled (done/unavailable/not_configured) - refresh the results view to
+  // pick up the Concept Layout card (or its "unavailable" notice), same
+  // idempotent render used for the initial completion.
+  renderHouseResults(data);
 }
 
 /* ---------- Results ---------- */
@@ -2213,6 +2263,29 @@ function renderHouseResults(data) {
       card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
       houseResultsGrid.appendChild(card);
     });
+  }
+
+  // "unavailable" (distinct from "not_configured") means a vendor WAS
+  // configured but the live call failed in a way that looks like the Kaggle
+  // notebook session being offline (app/providers/session_errors.py) - a
+  // real, actionable problem, so it gets a visible note instead of the card
+  // just silently never appearing (which is the correct, silent behavior
+  // for "not_configured" - no vendor set up at all). Styled like the "tight
+  // fit" feasibility banner above (informational, not blocking) - see
+  // renderHouseFeasibilityBanner() - spans the full grid width via inline
+  // style since houseResultsGrid is a CSS grid of image cards, not a place
+  // this text block would otherwise sit correctly among them.
+  if (data.floor_plan_status === "unavailable") {
+    const notice = document.createElement("div");
+    notice.className = "px-6 py-4 border bg-tertiary-container/40 border-tertiary/40";
+    notice.style.gridColumn = "1 / -1";
+    notice.innerHTML = `
+      <p class="font-headline-sm text-on-tertiary-container font-semibold mb-1 text-center">Concept Layout unavailable</p>
+      <p class="font-body-md text-on-surface-variant text-sm text-center">${
+        data.floor_plan_error || "The AI model's Kaggle session appears to be offline."
+      }</p>
+    `;
+    houseResultsGrid.appendChild(notice);
   }
 }
 

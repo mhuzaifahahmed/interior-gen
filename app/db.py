@@ -15,9 +15,25 @@ if _is_sqlite and _db_path and _db_path != ":memory:":
 # check_same_thread=False is a SQLite-only connect arg (works around SQLite's
 # single-thread default so FastAPI's threaded request handling doesn't error)
 # - psycopg2 rejects it outright when DATABASE_URL points at Postgres instead.
+# timeout=30 (real bug hit 2026-09-02, not just a theoretical concern): SQLite's
+# default busy_timeout is effectively 0 - any writer that finds the file
+# locked by another connection fails IMMEDIATELY with "database is locked"
+# instead of waiting. This was always a latent risk for anything writing from
+# more than one thread, but became a REAL one once
+# generate_house.py's _run_floor_plan_stage (v11) started opening its own
+# Session(engine) on a detached background thread that can genuinely overlap
+# a project's own main-thread writes (and, in tests, other tests' still-
+# running detached threads sharing the same real dev DB file - see CLAUDE.md's
+# "Resilient loading" testing note). Without a busy timeout, a lock collision
+# there silently kills the thread mid-write (no error handling wraps the DB
+# section, only the provider call) - the row is left stuck at
+# floor_plan_status="running" forever, with nothing surfaced anywhere. 30s
+# gives SQLite real room to retry/wait instead of failing on the first
+# collision - psycopg2 has its own, separate connection-pooling story and
+# doesn't take this kwarg, hence still gated on _is_sqlite.
 engine = create_engine(
     _resolved_database_url,
-    connect_args={"check_same_thread": False} if _is_sqlite else {},
+    connect_args={"check_same_thread": False, "timeout": 30} if _is_sqlite else {},
 )
 
 # Columns added after the initial table was created. create_all() only creates
@@ -54,6 +70,7 @@ _NEW_COLUMNS_BY_TABLE = {
         ("house_inputs_json", "TEXT"),
         ("render_model", "TEXT"),
         ("feasibility_json", "TEXT"),
+        ("floor_plan_error", "TEXT"),
         # render_layout_key (the 3D isometric render) was added here, was
         # briefly live (committed to git), then removed once that feature was
         # dropped - deliberately NOT listed here anymore. A dev DB that ran

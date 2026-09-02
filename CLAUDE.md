@@ -936,6 +936,268 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     reservation + shape (straight/L/U) selection; an adjacency graph beyond the existing public/private
     zone clustering; multi-candidate layout generation + scoring. These map directly to "Phase 3" in the
     architecture report given to the user before this work started.
+- **v9 (2026-08-29): the staircase becomes a REAL reserved room, not a symbol.** Previously
+  `blueprint_svg.py` drew a staircase symbol INSIDE whichever room ended up largest on a multi-floor
+  building - no real footprint, not counted by feasibility beyond a flat area guess. Now:
+  - **`app/pipeline/room_specs.py`** gained a `"staircase"` category (1.2m x 2.7m minimum - a compact
+    run + landing) and a `"stair"` keyword classifier entry.
+  - **`app/pipeline/floor_layout.py`'s zoning extended from 2 tiers to 3**: public (0) → circulation (1,
+    staircase only) → private (2), via `_zone_key()`. Since `_slice()` always splits a CONTIGUOUS sublist
+    (unchanged, see the existing public/private docstring), sorting every floor the same way gives the
+    staircase a CONSISTENT relative position across floors - explicitly documented as NOT pixel-exact
+    interior alignment (this project's rectangular slice-and-dice algorithm can't reserve an identical
+    interior rectangle on every floor without a fundamentally different, non-rectangular-region layout
+    algorithm - a stated limitation, not an oversight). Exterior wall alignment across floors was already
+    exact for an unrelated, simpler reason (every floor renders the identical plot boundary).
+  - **`app/pipeline/generate_house.py`** injects a `"Staircase"` room into EVERY floor's room list (not
+    just ground floor, unlike garage) whenever `total_floors > 1` and no room already classifies as one -
+    same pattern as garage injection, right before the feasibility check, so it's counted like any other
+    room via the real minimum-area guarantee. `feasibility.py`'s old flat `STAIRCASE_MIN_AREA_SQM`
+    overhead is now CONDITIONAL - only applied when the room list doesn't already contain a real
+    staircase room (avoids double-counting once the pipeline's own injection runs; still protects a
+    direct/test caller that bypasses it).
+  - **`app/pipeline/blueprint_svg.py`**: the old `_draw_staircase()` (searched for the largest room) is
+    gone, replaced by `_furnish_staircase()` in the normal furniture dispatch (triggered by `"stair"` in
+    the room name, like every other room type) - it only decides HOW to draw the run, not WHERE the room
+    goes. Shape is chosen DYNAMICALLY from the room's own real post-layout aspect ratio (not guessed in
+    advance): elongated → `_draw_straight_stair_run()`, squarer → `_draw_l_shaped_stair_run()` (two
+    flights meeting at a landing). UP/DN direction logic (already correct) is unchanged, just threaded
+    through the furniture pass instead of a separate post-hoc call. `blueprint_dxf.py` needed NO changes -
+    it already draws whatever rects `layout_floor()` returns generically, no special-casing per room type.
+  - **Tests**: `tests/test_blueprint_svg.py` updated (the two staircase tests now include a real
+    `"Staircase"` room in their rects, since a symbol is no longer drawn without one) + a new dynamic-shape
+    test; `tests/test_floor_layout.py` gained a direct `_zone_key()` ordering test (the actual guarantee -
+    a concrete geometric adjacency test is a regression case for one room mix, NOT a general proof, since
+    the slice-and-dice split doesn't guarantee a circulation room touches both neighboring zones for every
+    possible weight combination - documented plainly rather than overclaimed); `tests/test_house_pipeline.py`
+    gained per-floor injection + single-floor-skips-injection tests. 417/417 passing. Visually verified
+    both the straight-run and L-shaped-run cases render correctly with real doors connecting to
+    neighboring rooms (inherited for free from the existing door-drawing logic, since the staircase is now
+    a real room like any other).
+  - Addresses `future-plans/house-layout-spec-checklist.md` items #16 (now ✅ done) and #17 (now 🟡
+    partial - see that file for exactly what's still missing).
+- **v10 (2026-08-31): the AI Concept Layout call and the exterior render call now run CONCURRENTLY**,
+  requested directly by the user chasing Build a House's ~5min generation time. Confirmed first that
+  neither call's inputs depend on the other's output (`build_house_prompt()` only needs `dimensions`/
+  `prompt`/`plot_description`/`room_layout`, all already computed by the time either call would start) -
+  they were only ever sequential because the code happened to be written that way, not because of a real
+  dependency. `run_house_pipeline()` now submits both `provider.generate_floor_plan(...)` and
+  `provider.generate_house_render(...)` to a `ThreadPoolExecutor(max_workers=2)` before collecting either
+  result, dropping wall time for this pair from `t(floor_plan) + t(render)` to roughly
+  `max(t(floor_plan), t(render))`. Same "worker threads only call the provider, the main thread does every
+  `session.add()`/`commit()` after `future.result()`" pattern already established by `generate.py`'s
+  materials `ThreadPoolExecutor` - no worker thread here ever touches `session`/`house_project`, so there's
+  no new SQLAlchemy thread-safety concern. The two calls keep their EXACT prior error-handling asymmetry:
+  `generate_floor_plan` stays best-effort (an exception still only degrades to
+  `floor_plan_status="not_configured"`, never fails the project), `generate_house_render` stays NOT
+  best-effort (`future.result()` re-raises its exception, which still propagates to the outer
+  try/except and fails the whole project, unchanged). **Accepted tradeoff**: the single cancellation
+  checkpoint that used to sit strictly between these two calls ("before render started") now sits BEFORE
+  both are launched instead - cancelling can no longer stop render once floor_plan has already started (or
+  vice versa). The frontend needed ZERO changes - `deriveHouseStageIndex()`/`computeHouseProgressTarget()`
+  (`static/app.js`) were already purely real-signal-driven and monotonic (never regress, only advance on
+  new evidence), so they handle the two stages completing in whatever order/overlap naturally without any
+  edits. `HOUSE_PROMPT_VERSION` bumped to `v10`. Tests:
+  `test_run_house_pipeline_runs_floor_plan_and_render_concurrently` (new) is a REAL timing-based regression
+  guard (both fake calls sleep 0.3s; asserts total wall time stays well under the 0.6s a sequential
+  implementation would take) - not just "behavior is unchanged," a test that would actually catch a
+  silent regression back to sequential. 418/418 passing. Room-redesign's own generation pipeline
+  (`app/pipeline/generate.py`) was checked too - its 3 tiers already run concurrently via
+  `generate_images_batch()`/a per-tier `ThreadPoolExecutor`, so there was no analogous sequential-that-
+  could-be-parallel gap to fix there; see `future-plans/todo-and-pending-checks.md` for what IS still
+  pending on the room-redesign speed side (waiting on a real timing report from the user).
+- **v11 (2026-09-01): `generate_floor_plan()` (the Kaggle "Concept Layout" call) is fully DECOUPLED from
+  the house project's `done` status, superseding v10's mere concurrency.** Real motivation: a live,
+  measured call against the friend-hosted notebook took **~2 minutes per floor** (SDXL+ControlNet
+  diffusion on a T4, floors generated sequentially on the notebook's own side, not parallelizable there) -
+  v10's concurrency with the exterior render could only ever avoid ADDING the render's time on top of
+  that; it could never shrink the ~2min/floor number itself, and with `HOUSE_RENDER_ENABLED=false` (no
+  render running at all in current dev config) there was nothing left to overlap with, so v10's win was
+  invisible in practice. Since `generate_floor_plan` is explicitly documented as a SUPPLEMENTARY visual
+  (see "Concept Layout" labeling requirement below - never a replacement for the deterministic
+  blueprint/DXF, which stay the authoritative, accurate deliverable), there's no reason the whole
+  project's completion should wait on it. Now: once the blueprint/DXF/feasibility stage finishes,
+  `floor_plan_status` is set to `"running"` and `generate_floor_plan()` is handed to a new
+  `_run_floor_plan_stage()` helper running on a **fire-and-forget daemon thread that is NEVER joined** -
+  the main pipeline immediately continues to the (still synchronous, still NOT best-effort) render call
+  and then to `house_project.status = "done"`, without waiting on the Kaggle call at all. The detached
+  thread opens its OWN fresh `Session(engine)` and re-fetches the row by id whenever it eventually
+  finishes, committing `floor_plan_status="done"`/`"not_configured"` + the image keys - the frontend
+  already polls `floor_plan_status` independently of overall project status
+  (`renderHouseResults()`/`deriveHouseStageIndex()` in `static/app.js`), so this needed **zero frontend
+  changes**. `generate_house_render` keeps its exact prior contract (synchronous, not best-effort, still
+  fails the whole project on error) - the `ThreadPoolExecutor` from v10 was removed entirely since only
+  one call remains that the main thread needs to wait for. **Accepted tradeoff**: cancelling a house
+  project can no longer stop the Concept Layout call once it has started (already true after v10 as a
+  narrow race window; now permanent) - a cancelled project's detached thread may still write a
+  floor-plan image after the fact, same "harmless orphan" treatment already accepted elsewhere in this
+  file for S3 objects, since `list_house_projects` excludes cancelled rows from view regardless.
+  `HOUSE_PROMPT_VERSION` bumped to `v11`.
+  **Real test-infrastructure lesson hit while building this**: `_run_floor_plan_stage`'s detached thread
+  is the first place in this codebase that opens a genuinely concurrent second `Session` against a test's
+  in-memory SQLite engine while the main thread is ALSO still writing to it. A bare `sqlite://` (`:memory:`)
+  engine gives each thread its own separate, table-less database (the lesson already recorded once for a
+  room-redesign cancellation test); forcing `StaticPool` (one shared connection) to work around THAT then
+  causes a DIFFERENT failure - two threads issuing real concurrent writes over one shared sqlite3
+  connection object corrupted each other's transaction state, observed live as a spurious
+  `StaleDataError: 0 rows matched`. Fixed by giving `tests/test_house_pipeline.py`'s `make_test_engine()`
+  a real temp **file** database instead of `:memory:` (`tempfile.gettempdir()/interior_gen_test_<uuid>.db`)
+  - a real file gives each thread its own actual connection, with SQLite's normal file-level locking
+  serializing concurrent writers, which is more faithful to how production actually works (a real sqlite
+  file or Postgres) than either single-connection in-memory workaround. Tests that assert on
+  `floor_plan_status`/`floor_plan_key` now poll (`wait_for_floor_plan_status()` in
+  `test_house_pipeline.py`, `_poll_until_floor_plan_settled()` in `test_house_api.py`) instead of asserting
+  immediately after `run_house_pipeline()`/the create request returns, since that field specifically may
+  still read `"running"` for a brief moment - every other field (`status`, `render_key`, `blueprint_*`) is
+  still guaranteed settled synchronously and needed no such change. 418/418 passing, confirmed stable
+  across repeated full-suite runs (the race was real and would show up intermittently under load, not on
+  every run).
+- **Live-measured Kaggle Concept Layout timing (2026-09-01, `scripts/test_autocad_kaggle_labels.py`
+  against a real tunnel)**: **~2 minutes per floor**, submit-then-poll, single-floor request (6 rooms). A
+  multi-floor request takes proportionally longer since the notebook generates floors sequentially in its
+  own `for f in range(1, floors+1)` loop - there is no floor-level parallelism available on the notebook
+  side today (a single T4 GPU under one `generation_lock`). This is the number the v11 decoupling above
+  responds to - see `future-plans/todo-and-pending-checks.md` for the live verification detail of the v3
+  token-budget-fixed prompt (contrast/vignette fixed, poché walls and residual scribble-text still open).
+- **Kaggle session-offline detection (2026-09-01)**, `app/providers/session_errors.py` (new, shared by
+  every Kaggle-backed provider). Real trigger: a Build a House generation that looked "stuck forever with
+  no error" turned out to be caused by the friend-hosted Kaggle notebook's session having stopped - the
+  old code had no way to tell "the tunnel has nothing listening behind it" apart from any other
+  unexpected exception; both just logged a traceback and silently degraded (best-effort calls) or failed
+  with a raw httpx error message (the non-best-effort render call). `classify_kaggle_failure(exc,
+  vendor_label)` recognizes two specific failure shapes as "the session is offline": any
+  `httpx.TransportError` (ConnectError/ConnectTimeout/ReadTimeout/etc. - httpx couldn't complete the
+  request at all) and an `httpx.HTTPStatusError` with a Cloudflare-tunnel-shaped status code (502, 503,
+  521-526, 530 - codes Cloudflare's own edge returns when the tunnel is up but nothing answers behind it,
+  never codes the notebook's own FastAPI app would return itself) - genuinely unexpected errors (a bug
+  inside a running notebook, a malformed response) are deliberately NOT reclassified this way, so a real,
+  different bug is never hidden behind a misleading "session is offline" message. When classified, raises
+  `KaggleSessionUnavailableError` with a plain-language, actionable message ("Start/restart the Kaggle
+  notebook...") instead of the raw exception.
+  - **`kaggle_autocad.py`'s `generate_floor_plan()`** (Concept Layout, best-effort): now raises
+    `KaggleSessionUnavailableError` for a classified failure instead of silently returning `None` (same as
+    "vendor not configured") - genuinely unclassified errors still return `None`, unchanged.
+    `_run_floor_plan_stage()` (`app/pipeline/generate_house.py`) catches this specific exception and sets
+    a NEW, distinct `floor_plan_status="unavailable"` + `floor_plan_error=<message>` (additive column,
+    migration in `db.py`), separate from `"not_configured"` (no vendor URL set at all - an expected,
+    silent state with nothing to explain). Exposed via
+    `HouseProjectStatusResponse.floor_plan_error`/`floor_plan_status`. `static/app.js`'s
+    `renderHouseResults()` shows a visible notice ("Concept Layout unavailable - <message>", styled like
+    the existing "tight fit" feasibility banner, spanning the full results-grid width) when
+    `floor_plan_status === "unavailable"` - `"not_configured"` still renders nothing, unchanged (that's
+    the correct, silent behavior for a feature that was never set up at all).
+  - **`kaggle.py`'s `generate_image`/`generate_images_batch`/`generate_house_render`**: same
+    classification applied at each `httpx` call site. For the room-redesign methods (best-effort from
+    `HybridProvider`'s perspective - it already falls back to OpenAI on any exception), this changes
+    nothing user-visible (the fallback still fires identically) but makes the resulting `logger.exception`
+    call in `hybrid.py` say plainly "session appears offline" instead of a generic connection traceback -
+    a real operator-visibility win with zero behavior change. For `generate_house_render` (NOT
+    best-effort - its exception propagates to `house_project.error` and is shown verbatim via
+    `showHouseError()`), this directly improves what the user sees on a real failure, not just server logs.
+  - **Real test-infra lesson hit while adding this**: an existing test
+    (`test_generate_floor_plan_returns_none_on_request_exception` in `tests/test_kaggle_autocad.py`)
+    encoded the OLD silent-swallow behavior for exactly the failure shape (`httpx.ConnectError`) this
+    feature changes - updated to
+    `test_generate_floor_plan_raises_session_unavailable_on_connection_error` (asserts the new `raises`
+    behavior) plus a new `test_generate_floor_plan_returns_none_on_unclassified_exception` (confirms
+    genuinely unrelated errors still degrade silently, unchanged).
+- **Real circulation corridor for the private zone (2026-09-02)** - real user feedback: "I don't want
+  crisp, I want an intelligent one which doesn't just make boxes and lines but adds some true meaning to
+  the map." Diagnosis: the Kaggle Concept Layout AI model can't add this on its own - it's forced to
+  trace our own geometry almost exactly (`controlnet_conditioning_scale=0.95`), so "meaning" has to come
+  from the deterministic layout engine itself, not further AI prompting/tuning. User's explicit choice
+  (`AskUserQuestion`, two options offered: loosen the AI's conditioning freedom vs. improve the
+  deterministic engine): **"Both, but engine first."** Before this, every private-zone room just touched
+  whichever neighbor the slice-and-dice split happened to put next to it - `blueprint_svg.py`'s generic
+  door logic then drew a door at every shared wall, including straight from one bedroom into the next,
+  which reads as arbitrary box-slicing rather than a real design.
+  - **`app/pipeline/floor_layout.py`**: the public/circulation-vs-private split (previously just an
+    ordering trick inside one big recursive `_slice()` call - zones were never actually separate boxes)
+    is now a REAL one-time box split. `_split_box()` (extracted from `_slice()`'s own inline "cut along
+    the longer side" logic, unchanged behavior) is called once, manually, at the real zone boundary
+    (`private_start`, the index in the zone-sorted room list where rooms become private) - `front_box`
+    (public+circulation) still recurses through `_slice()` exactly as before; `private_box` routes into
+    a new `_layout_private_zone()`. That function only builds a corridor when there are at least
+    `MIN_ROOMS_FOR_CORRIDOR` (3) private rooms AND enough depth remains after reserving a real
+    `HALLWAY_WIDTH_M` (1.1m/~3.6ft, a standard single-loaded corridor width) strip along whichever edge
+    of the private box borders the front zone (so it's actually reachable from there, not just present
+    somewhere) - otherwise it falls back unchanged to the original plain `_slice()` (this is what keeps
+    the pre-existing `test_layout_floor_preserves_relative_order_within_a_zone` test, which only has 2
+    private rooms, passing completely untouched). The remaining rooms are packed via a new `_pack_row()`
+    - a simplified, single-axis-only version of `_slice()`'s splitting (always cuts along the row's
+    length axis, never flips based on aspect ratio) that packs rooms in their EXISTING input order,
+    which automatically preserves the pre-existing "master bedroom next to its own ensuite bathroom"
+    adjacency with no separate suite-detection logic needed, since sequential packing keeps sequential
+    neighbors adjacent to each other as well as to the corridor. A synthetic `{"name": "Hallway", ...}`
+    rect is inserted into the returned list alongside the real rooms.
+  - **`app/pipeline/blueprint_svg.py`**: with a real Hallway rect now present, the existing generic
+    `combinations(rects, 2)` + `_shared_edge()` door logic already draws a door between the hallway and
+    every room touching it, for free. A new `_should_suppress_direct_door(a, b)` stops it from ALSO
+    drawing a direct door between two adjacent private-zone rooms when a hallway exists on the floor -
+    UNLESS at least one of them is a bathroom (`room_specs.classify_room_category`), which keeps a
+    realistic bedroom+ensuite-bathroom direct door while removing "bedroom opens straight into bedroom."
+    No suppression at all when there's no hallway (small private zones keep the original "any shared
+    edge gets a door" behavior, since direct adjacency is their only way in). Needed new imports
+    (`_zone_key` from `floor_layout.py`, `classify_room_category` from `room_specs.py`) - blueprint_svg.py
+    was previously fully self-contained.
+  - **Real bug hit and fixed via visual inspection, not just unit tests** (this project's own
+    documented lesson, applied again): a corridor row's rooms each span the row's FULL depth, so a
+    shared side-wall between two such rooms now spans nearly the room's entire height/width - the door's
+    old exact-midpoint placement collided visually with the room's own CENTERED label
+    (`_draw_room_label`). Fixed by biasing the door position to 30% along the shared edge
+    (`_DOOR_POSITION_FRACTION`) instead of the exact 50% midpoint - clears the small label-clearance zone
+    on corridor-row edges while remaining a plausible door position on shorter, pre-existing
+    (non-corridor) edges too. Confirmed by rendering a real mixed public+private room program and
+    visually inspecting: a real hallway strip, doors from each private room onto it, no direct
+    bedroom-to-bedroom doors, bathroom-adjacent doors kept and no longer overlapping their room labels.
+  - **Zero changes needed** in `blueprint_dxf.py` (already draws whatever rects `layout_floor()` returns
+    generically - the Hallway rect just becomes another labeled room outline in the `.dxf`, which is
+    correct), `conditioning_image.py`/`kaggle_autocad.py`'s label compositing (same generic-iteration
+    reason - the AI Concept Layout card gets the corridor "for free" as a bonus, since it traces our real
+    geometry), `feasibility.py` (the existing flat 20% circulation-overhead fraction already approximates
+    this, erring toward stricter feasibility now that a real corridor exists, never falsely-permissive),
+    or `blueprint_svg.py`'s furniture dispatch (a room literally named "Hallway" already fell through to
+    "no furniture symbol" via the pre-existing entry/foyer/hallway/storage catch-all).
+  - **Explicitly NOT attempted this pass** (real, harder problems, left for later - see
+    `future-plans/house-layout-spec-checklist.md`): non-rectangular/L-shaped rooms, a double-loaded
+    (two-facing-rows) corridor, plumbing-zone vertical stacking across floors, a full adjacency-graph
+    solver. AI conditioning-freedom tuning (the other half of the user's "both" choice) is a separate,
+    not-yet-started next step.
+  - **Real production robustness bug found and fixed while adding this**: the new tests (more detached
+    `_run_floor_plan_stage` threads running per test session) turned an intermittent full-suite flake
+    into a consistent failure - `floor_plan_status` stuck at `"running"` forever, never settling. Root
+    cause traced to `app/db.py`'s SQLite engine having no `busy_timeout` set - any writer that finds the
+    file locked by another connection fails IMMEDIATELY (`sqlite3.OperationalError: database is locked`)
+    instead of waiting, and `_run_floor_plan_stage`'s DB-write section had no error handling around it at
+    all, so that exception silently killed the detached thread mid-write with zero diagnostic trail. This
+    was always a latent risk for any multi-threaded writer, not something v11 introduced, but v11's
+    detached thread made real overlapping writes far more likely to actually occur (and, in tests, share
+    the same real dev DB file other tests' still-running threads were also writing to - see the
+    "Resilient loading" testing note above). Fixed with two changes: `connect_args={"check_same_thread":
+    False, "timeout": 30}` on the SQLite engine (gives real room to wait/retry on a lock collision instead
+    of failing on the first one - psycopg2 doesn't take this kwarg, so it's gated on `_is_sqlite` same as
+    `check_same_thread`), and `_run_floor_plan_stage`'s Session block wrapped in its own try/except that
+    logs (`logger.exception`) rather than letting a failure there vanish silently - there's no session
+    left to update the row from if the write itself is what failed, so logging is the only thing that
+    keeps this diagnosable. Confirmed fixed via 5 consecutive full-suite runs, all 431/431 passing
+    (previously flaked ~1 in 3-4 runs under full-suite load).
+  - **Real frontend gap found and fixed the same day, live-reported by the user** ("where is the picture
+    of kaggle model?? nope not there as well" on a project the DB confirmed had a real, successful
+    `floor_plan_status="done"` result): `pollHouseProject()` (`static/app.js`) stops polling entirely the
+    instant the OVERALL project reaches `status="done"` - correct before v11 (every stage was already
+    settled by then), but v11 deliberately decouples the Concept Layout call from that status, so it's
+    now common for `floor_plan_status` to still be `"running"` at that exact moment. The card was
+    rendered once with whatever snapshot existed then, and never revisited - the CLAUDE.md v11 entry's
+    claim that "the frontend already polls floor_plan_status independently... needed zero frontend
+    changes" was WRONG (only true while the project itself was still in progress). Fixed with a light,
+    separate `pollFloorPlanCatchUp()` loop that starts only when results have just been shown with
+    `floor_plan_status === "running"`, re-fetches every 3s, and calls the already-idempotent
+    `renderHouseResults(data)` again once it settles - guarded by `lastDisplayedHouseProjectId` so a
+    late catch-up poll can never clobber a NEWER generation's UI if the user starts another one first.
+    Found a SECOND, related gap while investigating: `renderHistoryHouseCard()` (the History modal) never
+    included Concept Layout thumbnails at all, in any state, past or present - fixed by adding
+    `floor_plan_urls` thumbnails there too (gated on `floor_plan_status === "done"`), reusing the same
+    `_house_project_to_response()` fields `list_house_projects()` already returns.
 
 ## Architecture (big picture)
 

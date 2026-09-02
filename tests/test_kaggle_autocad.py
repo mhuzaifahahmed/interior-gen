@@ -4,8 +4,11 @@ import io
 import httpx
 from PIL import Image
 
+import pytest
+
 import app.providers.kaggle_autocad as kaggle_autocad_module
 from app.providers.kaggle_autocad import generate_floor_plan
+from app.providers.session_errors import KaggleSessionUnavailableError
 
 
 class FakeResponse:
@@ -139,11 +142,29 @@ def test_generate_floor_plan_returns_none_when_submit_response_has_no_job_id(mon
     assert result is None
 
 
-def test_generate_floor_plan_returns_none_on_request_exception(monkeypatch):
+def test_generate_floor_plan_raises_session_unavailable_on_connection_error(monkeypatch):
+    # 2026-09-01: a connection-shaped failure (the tunnel/notebook session
+    # being offline) is no longer silently swallowed to None - it's real,
+    # actionable, and gets surfaced to the user (see
+    # app/providers/session_errors.py, app/pipeline/generate_house.py's
+    # _run_floor_plan_stage). Genuinely unexpected/unclassified errors still
+    # degrade to None, unchanged - see the next test.
     monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
 
     def fake_post(url, json=None, timeout=None):
         raise httpx.ConnectError("tunnel is down")
+
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "post", fake_post)
+
+    with pytest.raises(KaggleSessionUnavailableError):
+        generate_floor_plan("a plot", {"length": 40, "width": 60, "unit": "ft"}, "1 floor")
+
+
+def test_generate_floor_plan_returns_none_on_unclassified_exception(monkeypatch):
+    monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+
+    def fake_post(url, json=None, timeout=None):
+        raise ValueError("some unrelated bug")
 
     monkeypatch.setattr(kaggle_autocad_module.httpx, "post", fake_post)
 

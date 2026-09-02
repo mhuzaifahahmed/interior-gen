@@ -83,6 +83,7 @@ from PIL import Image, ImageDraw, ImageFont
 from app.config import settings
 from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box, render_conditioning_edge_map
 from app.pipeline.floor_layout import layout_floor
+from app.providers.session_errors import KaggleSessionUnavailableError, classify_kaggle_failure
 from app.providers.gemini import _explicit_floor_count
 
 logger = logging.getLogger(__name__)
@@ -200,10 +201,16 @@ def generate_floor_plan(
         ]
 
     try:
-        submit = httpx.post(
-            f"{base_url.rstrip('/')}/generate_floorplans", json=payload, timeout=SUBMIT_TIMEOUT_SECONDS
-        )
-        submit.raise_for_status()
+        try:
+            submit = httpx.post(
+                f"{base_url.rstrip('/')}/generate_floorplans", json=payload, timeout=SUBMIT_TIMEOUT_SECONDS
+            )
+            submit.raise_for_status()
+        except Exception as exc:
+            session_error = classify_kaggle_failure(exc, "Concept Layout")
+            if session_error:
+                raise session_error from exc
+            raise
         job_id = submit.json().get("job_id")
         if not job_id:
             logger.error("unexpected kaggle_autocad submit response shape (no job_id)")
@@ -218,8 +225,14 @@ def generate_floor_plan(
                 return None
 
             time.sleep(POLL_INTERVAL_SECONDS)
-            poll = httpx.get(status_url, timeout=POLL_TIMEOUT_SECONDS)
-            poll.raise_for_status()
+            try:
+                poll = httpx.get(status_url, timeout=POLL_TIMEOUT_SECONDS)
+                poll.raise_for_status()
+            except Exception as exc:
+                session_error = classify_kaggle_failure(exc, "Concept Layout")
+                if session_error:
+                    raise session_error from exc
+                raise
             job = poll.json()
             status = job.get("status")
 
@@ -251,6 +264,8 @@ def generate_floor_plan(
                 return None
 
             # status == "running" (or any other in-progress value) - keep polling.
+    except KaggleSessionUnavailableError:
+        raise
     except Exception:
         logger.exception("kaggle_autocad generate_floor_plan failed")
         return None

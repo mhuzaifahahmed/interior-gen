@@ -59,6 +59,9 @@ from itertools import combinations
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app.pipeline.floor_layout import _zone_key
+from app.pipeline.room_specs import classify_room_category
+
 # ---- Canvas layout ----
 TARGET_PLOT_LONGEST_SIDE_PX = 780
 MARGIN_LEFT_PX = 150   # room for the left dimension line + labels
@@ -103,9 +106,12 @@ FURNITURE_COLOR = INK_SOFT  # softer than WALL_COLOR - visually secondary to str
 def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dict, total_floors: int = 1) -> bytes:
     """rects: output of floor_layout.layout_floor - [{"name","x","y","w","h"}, ...]
     in the same real-world unit as dimensions. total_floors: the building's
-    total floor count - a staircase symbol is drawn (in the largest room,
-    a heuristic placement like doors/windows above) only when > 1, since a
-    single-storey building has nothing to connect. Returns PNG bytes."""
+    total floor count. When > 1, generate_house.py has already injected a
+    REAL "Staircase" room into `rects` (see floor_layout.py's circulation
+    zone) - this function just draws the UP/DN stair symbol INSIDE that
+    room like any other furniture (see _furnish_staircase()), it doesn't
+    pick where the room goes. A single-storey building has no such room and
+    nothing is drawn. Returns PNG bytes."""
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
     unit = dimensions.get("unit", "") or "units"
@@ -140,18 +146,24 @@ def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dic
     for rect in rects:
         _carve_room(draw, _room_bbox(rect, plot_x0, plot_y0, scale))
 
+    # The staircase's UP/DN direction (None on a single-storey building,
+    # where there's no "Staircase" room to begin with) - threaded into the
+    # furniture pass so _furnish_staircase() can draw the right arrow/label
+    # inside whichever rect is actually named "Staircase" (see
+    # floor_layout.py/generate_house.py for how that room gets reserved).
+    stair_direction = ("UP" if floor_number < total_floors else "DN") if total_floors > 1 else None
     for rect in rects:
-        _draw_furniture(draw, rect, plot_x0, plot_y0, scale)
-
-    if total_floors > 1:
-        direction = "UP" if floor_number < total_floors else "DN"
-        _draw_staircase(draw, rects, plot_x0, plot_y0, scale, small_font, direction)
+        _draw_furniture(draw, rect, plot_x0, plot_y0, scale, small_font, stair_direction)
 
     door_len_px = max(10.0, min(26.0, 2.6 * scale))
+    has_hallway = any(r["name"] == "Hallway" for r in rects)
     for a, b in combinations(rects, 2):
         edge = _shared_edge(a, b)
-        if edge is not None:
-            _draw_door(draw, edge, plot_x0, plot_y0, scale, door_len_px)
+        if edge is None:
+            continue
+        if has_hallway and _should_suppress_direct_door(a, b):
+            continue
+        _draw_door(draw, edge, plot_x0, plot_y0, scale, door_len_px)
 
     for rect in rects:
         _draw_windows(draw, rect, length, width, plot_x0, plot_y0, scale)
@@ -223,17 +235,53 @@ def _shared_edge(a: dict, b: dict) -> dict | None:
     return None
 
 
+def _should_suppress_direct_door(a: dict, b: dict) -> bool:
+    """Real circulation corridor (see floor_layout.py's module docstring):
+    when a Hallway rect exists on this floor, a direct door between two
+    adjacent private-zone rooms is suppressed UNLESS at least one of them is
+    a bathroom - two bedrooms (or other private rooms) shouldn't open
+    straight into each other, they should each open onto the hallway
+    instead (which the generic door loop above already draws for free,
+    since the hallway shares a wall with every room it serves). A
+    bedroom-bathroom pair keeps its direct door (a realistic ensuite),
+    same "master bedroom next to its own ensuite bathroom" adjacency
+    floor_layout.py's _pack_row() already preserves. Only called when
+    has_hallway is True - a private zone with no corridor (too few rooms,
+    or not enough space) keeps the original "any shared edge gets a door"
+    behavior unconditionally, since direct adjacency is its only way in."""
+    if a["name"] == "Hallway" or b["name"] == "Hallway":
+        return False
+    if _zone_key(a["name"]) != 2 or _zone_key(b["name"]) != 2:
+        return False
+    return classify_room_category(a["name"]) != "bathroom" and classify_room_category(b["name"]) != "bathroom"
+
+
+# Real bug hit and fixed via visual inspection (2026-09-02): the real
+# circulation corridor (see floor_layout.py) packs private-zone rooms in a
+# row, each spanning the row's FULL depth - so a shared side-wall between
+# two such rooms now spans nearly the room's entire height/width, putting
+# the edge's exact midpoint right where the room's own CENTERED label sits
+# (_draw_room_label), producing a door swing that visually collides with the
+# label text. Biasing the door off the exact 50% midpoint clears that
+# collision zone (the label's own clearance band is small relative to a
+# full room edge) while remaining a plausible door position on shorter,
+# pre-existing (non-corridor) edges too - not worth a more complex
+# label-aware placement for a heuristic, "okayish accuracy" mark.
+_DOOR_POSITION_FRACTION = 0.3
+
+
 def _draw_door(draw: ImageDraw.ImageDraw, edge: dict, plot_x0: float, plot_y0: float, scale: float, nominal_len_px: float) -> None:
     """Erases a gap in the shared wall and draws a standard door symbol (a
-    leaf line + a quarter-circle swing arc) - heuristically placed at the
-    segment's midpoint. Not construction-grade, just a legible "there is a
-    door here" mark, per the user's own "okayish accuracy" bar."""
+    leaf line + a quarter-circle swing arc) - heuristically placed off-center
+    along the segment (see _DOOR_POSITION_FRACTION). Not construction-grade,
+    just a legible "there is a door here" mark, per the user's own "okayish
+    accuracy" bar."""
     seg_len_px = (edge["end"] - edge["start"]) * scale
     leaf_len_px = min(nominal_len_px, seg_len_px * 0.7)
     if leaf_len_px < 6:
         return
 
-    mid_units = (edge["start"] + edge["end"]) / 2
+    mid_units = edge["start"] + (edge["end"] - edge["start"]) * _DOOR_POSITION_FRACTION
     gap_start_units = mid_units - (leaf_len_px / scale) / 2
 
     if edge["orientation"] == "vertical":
@@ -334,7 +382,15 @@ _FURNITURE_MIN_BOX_H = 60
 _LABEL_CLEARANCE_PX = 26
 
 
-def _draw_furniture(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_y0: float, scale: float) -> None:
+def _draw_furniture(
+    draw: ImageDraw.ImageDraw,
+    rect: dict,
+    plot_x0: float,
+    plot_y0: float,
+    scale: float,
+    font: ImageFont.FreeTypeFont | None = None,
+    stair_direction: str | None = None,
+) -> None:
     x0, y0, x1, y1 = _room_bbox(rect, plot_x0, plot_y0, scale)
     box_w, box_h = x1 - x0, y1 - y0
     if box_w < _FURNITURE_MIN_BOX_W or box_h < _FURNITURE_MIN_BOX_H:
@@ -367,6 +423,8 @@ def _draw_furniture(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_
         _furnish_laundry(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "closet" in name or "wardrobe" in name or "dressing" in name:
         _furnish_closet(draw, ix0, iy0, ix1, iy1, iw, ih)
+    elif "stair" in name and stair_direction and font is not None:
+        _furnish_staircase(draw, ix0, iy0, ix1, iy1, iw, ih, stair_direction, font)
     # entry/foyer/hallway/storage/unrecognized: no furniture symbol
 
 
@@ -528,47 +586,95 @@ def _furnish_closet(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, 
 
 
 # ---- Staircase ----
+# A REAL reserved room (2026-08-29), not a decorative mark inside whichever
+# room happened to be biggest - see floor_layout.py's circulation zone and
+# generate_house.py's per-floor injection. _furnish_staircase() draws INSIDE
+# that room's own real bounds, same as every other _furnish_* function -
+# it only decides HOW to draw the run, not WHERE the room goes.
 
 
-def _draw_staircase(
+def _furnish_staircase(
     draw: ImageDraw.ImageDraw,
-    rects: list[dict],
-    plot_x0: float,
-    plot_y0: float,
-    scale: float,
-    font: ImageFont.FreeTypeFont,
+    x0: float, y0: float, x1: float, y1: float, w: float, h: float,
     direction: str,
+    font: ImageFont.FreeTypeFont,
 ) -> None:
-    """Heuristically placed in the largest room's corner - same "legible mark,
-    not a construction-grade layout" precedent as doors/windows above, since
-    there's no reserved circulation space to place it in exactly."""
-    if not rects:
-        return
-    largest = max(rects, key=lambda r: r["w"] * r["h"])
-    x0, y0, x1, y1 = _room_bbox(largest, plot_x0, plot_y0, scale)
-    box_w, box_h = x1 - x0, y1 - y0
-    if box_w < 90 or box_h < 90:
-        return
-
-    stair_w = min(box_w * 0.28, 70.0)
-    stair_h = min(box_h * 0.5, 140.0)
-    sx0, sy0 = x1 - stair_w - 8, y1 - stair_h - 8
-    sx1, sy1 = sx0 + stair_w, sy0 + stair_h
-
-    draw.rectangle([sx0, sy0, sx1, sy1], outline=WALL_COLOR, width=1)
-    steps = max(4, int(stair_h // 14))
-    for i in range(1, steps):
-        y = sy0 + stair_h * i / steps
-        draw.line([(sx0, y), (sx1, y)], fill=WALL_COLOR, width=1)
-
-    ax = (sx0 + sx1) / 2
-    if direction == "UP":
-        draw.line([(ax, sy1 - 8), (ax, sy0 + 10)], fill=WALL_COLOR, width=2)
-        draw.polygon([(ax, sy0 + 4), (ax - 5, sy0 + 12), (ax + 5, sy0 + 12)], fill=WALL_COLOR)
+    """Shape is chosen DYNAMICALLY from the room's own actual (post-layout)
+    aspect ratio, not guessed in advance: an elongated rectangle gets a
+    straight run; a squarer one gets an L-shaped run with a landing, since a
+    straight run wouldn't fit comfortably. direction is "UP" (every floor
+    except the top) or "DN" (top floor only)."""
+    aspect = w / h if h else 1.0
+    elongated = aspect > 1.7 or aspect < 1 / 1.7
+    if elongated:
+        _draw_straight_stair_run(draw, x0, y0, x1, y1, w, h, direction, font)
     else:
-        draw.line([(ax, sy0 + 8), (ax, sy1 - 10)], fill=WALL_COLOR, width=2)
-        draw.polygon([(ax, sy1 - 4), (ax - 5, sy1 - 12), (ax + 5, sy1 - 12)], fill=WALL_COLOR)
-    _draw_centered_text(draw, (ax, sy0 - 10), direction, font, WALL_COLOR)
+        _draw_l_shaped_stair_run(draw, x0, y0, x1, y1, w, h, direction, font)
+
+
+def _draw_straight_stair_run(
+    draw: ImageDraw.ImageDraw,
+    x0: float, y0: float, x1: float, y1: float, w: float, h: float,
+    direction: str,
+    font: ImageFont.FreeTypeFont,
+) -> None:
+    horizontal = w >= h
+    if horizontal:
+        steps = max(4, int(w // 16))
+        for i in range(1, steps):
+            x = x0 + w * i / steps
+            draw.line([(x, y0), (x, y1)], fill=FURNITURE_COLOR, width=1)
+        ay = (y0 + y1) / 2
+        if direction == "UP":
+            draw.line([(x1 - 8, ay), (x0 + 10, ay)], fill=FURNITURE_COLOR, width=2)
+            draw.polygon([(x0 + 4, ay), (x0 + 12, ay - 5), (x0 + 12, ay + 5)], fill=FURNITURE_COLOR)
+        else:
+            draw.line([(x0 + 8, ay), (x1 - 10, ay)], fill=FURNITURE_COLOR, width=2)
+            draw.polygon([(x1 - 4, ay), (x1 - 12, ay - 5), (x1 - 12, ay + 5)], fill=FURNITURE_COLOR)
+    else:
+        steps = max(4, int(h // 16))
+        for i in range(1, steps):
+            y = y0 + h * i / steps
+            draw.line([(x0, y), (x1, y)], fill=FURNITURE_COLOR, width=1)
+        ax = (x0 + x1) / 2
+        if direction == "UP":
+            draw.line([(ax, y1 - 8), (ax, y0 + 10)], fill=FURNITURE_COLOR, width=2)
+            draw.polygon([(ax, y0 + 4), (ax - 5, y0 + 12), (ax + 5, y0 + 12)], fill=FURNITURE_COLOR)
+        else:
+            draw.line([(ax, y0 + 8), (ax, y1 - 10)], fill=FURNITURE_COLOR, width=2)
+            draw.polygon([(ax, y1 - 4), (ax - 5, y1 - 12), (ax + 5, y1 - 12)], fill=FURNITURE_COLOR)
+    # Corner label, not centered - the room's own name/area label (drawn
+    # afterward, centered) would otherwise collide with a centered direction
+    # marker.
+    draw.text((x0 + 4, y0 + 2), direction, font=font, fill=FURNITURE_COLOR)
+
+
+def _draw_l_shaped_stair_run(
+    draw: ImageDraw.ImageDraw,
+    x0: float, y0: float, x1: float, y1: float, w: float, h: float,
+    direction: str,
+    font: ImageFont.FreeTypeFont,
+) -> None:
+    """Two short flights meeting at a corner landing - flight 1 runs along
+    the top edge to the landing, flight 2 continues down the side to the
+    bottom. A legible mark of "this is an L-shaped run", not a
+    construction-grade layout, same precedent as doors/windows elsewhere in
+    this module."""
+    landing = min(w, h) * 0.35
+    flight1_x1 = x0 + w - landing
+    flight1_steps = max(3, int((flight1_x1 - x0) // 14))
+    for i in range(1, flight1_steps):
+        x = x0 + (flight1_x1 - x0) * i / flight1_steps
+        draw.line([(x, y0), (x, y0 + landing)], fill=FURNITURE_COLOR, width=1)
+
+    flight2_y0 = y0 + landing
+    flight2_steps = max(3, int((y1 - flight2_y0) // 14))
+    for i in range(1, flight2_steps):
+        y = flight2_y0 + (y1 - flight2_y0) * i / flight2_steps
+        draw.line([(flight1_x1, y), (x1, y)], fill=FURNITURE_COLOR, width=1)
+
+    draw.rectangle([flight1_x1, y0, x1, y0 + landing], outline=FURNITURE_COLOR, width=1)
+    draw.text((x0 + 4, y0 + 2), direction, font=font, fill=FURNITURE_COLOR)
 
 
 # ---- Labels ----

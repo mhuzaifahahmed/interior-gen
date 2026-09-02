@@ -43,6 +43,12 @@ class HouseProjectStatusResponse(BaseModel):
     plot_description: Optional[str] = None
     images: dict[str, Optional[str]]
     floor_plan_status: str = "idle"
+    # Set only when floor_plan_status == "unavailable" - a human-readable
+    # explanation (see app/providers/session_errors.py) of why the Concept
+    # Layout vendor call failed in a way that looks like the Kaggle notebook
+    # session being offline, distinct from "not_configured" (no vendor URL
+    # set at all - an expected, silent state with no error to show).
+    floor_plan_error: Optional[str] = None
     # Real vendor output (app/providers/kaggle_autocad.py, see CLAUDE.md) -
     # one URL per floor, floor-ordered, same convention as blueprint_urls.
     # images["floor_plan"] is kept populated with the FIRST floor's URL only,

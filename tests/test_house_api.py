@@ -1,5 +1,6 @@
 import io
 import json
+import time
 import uuid
 
 from fastapi.testclient import TestClient
@@ -23,7 +24,7 @@ class FakeProvider:
     def analyze_plot(self, image_bytes, dimensions):
         return "A rectangular plot facing north."
 
-    def generate_floor_plan(self, plot_description, dimensions, prompt):
+    def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None):
         return None
 
     def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
@@ -60,6 +61,24 @@ def _sample_image_bytes() -> bytes:
     return buf.getvalue()
 
 
+def _poll_until_floor_plan_settled(client, house_project_id, timeout=10.0):
+    """generate_floor_plan (v11, app/pipeline/generate_house.py) now runs on
+    a detached daemon thread that the request/BackgroundTask never joins -
+    TestClient's synchronous BackgroundTask execution guarantees the rest of
+    the project (status/blueprint/render) is done by the time the create
+    response returns, but floor_plan_status specifically may still read
+    "running" for a brief moment after. Poll instead of asserting on a
+    single GET."""
+    deadline = time.monotonic() + timeout
+    body = None
+    while time.monotonic() < deadline:
+        body = client.get(f"/api/house-projects/{house_project_id}").json()
+        if body["floor_plan_status"] != "running":
+            return body
+        time.sleep(0.02)
+    return body
+
+
 def test_full_house_upload_and_poll_flow(monkeypatch):
     monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
     monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
@@ -77,7 +96,7 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
 
         status_res = client.get(f"/api/house-projects/{house_project_id}")
         assert status_res.status_code == 200
-        body = status_res.json()
+        body = _poll_until_floor_plan_settled(client, house_project_id)
         assert body["status"] == "done"
         assert body["plot_description"] == "A rectangular plot facing north."
         assert body["floor_plan_status"] == "not_configured"
@@ -122,7 +141,7 @@ def test_house_api_exposes_one_floor_plan_url_per_floor(monkeypatch):
         assert create_res.status_code == 200
         house_project_id = create_res.json()["house_project_id"]
 
-        body = client.get(f"/api/house-projects/{house_project_id}").json()
+        body = _poll_until_floor_plan_settled(client, house_project_id)
         assert body["floor_plan_status"] == "done"
         assert len(body["floor_plan_urls"]) == 2
         assert body["floor_plan_urls"][0] != body["floor_plan_urls"][1]

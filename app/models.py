@@ -126,7 +126,19 @@ class HouseProject(SQLModel, table=True):
     # past floor 1 for any multi-floor request.
     floor_plan_key: Optional[str] = None
     floor_plan_keys_json: Optional[str] = None
-    floor_plan_status: str = Field(default="idle")  # idle | running | not_configured | done | failed
+    # "unavailable" (2026-09-01) is distinct from "not_configured" - the
+    # latter means no vendor URL is set at all (an expected, silent state);
+    # "unavailable" means a vendor WAS configured but a live call failed in a
+    # way that looks like the Kaggle notebook session is offline (see
+    # app/providers/session_errors.py) - a real, actionable problem the user
+    # should be told about, not silently treated the same as "not built yet".
+    floor_plan_status: str = Field(
+        default="idle"
+    )  # idle | running | not_configured | unavailable | done | failed
+    # Human-readable explanation, set only when floor_plan_status ==
+    # "unavailable" - see _run_floor_plan_stage() in
+    # app/pipeline/generate_house.py.
+    floor_plan_error: Optional[str] = None
 
     render_key: Optional[str] = None
     # Which provider produced render_key - "our model" or "OpenAI", see

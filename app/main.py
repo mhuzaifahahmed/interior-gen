@@ -574,6 +574,7 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
         plot_description=house_project.plot_description,
         images=images,
         floor_plan_status=house_project.floor_plan_status,
+        floor_plan_error=house_project.floor_plan_error,
         floor_plan_urls=floor_plan_urls,
         blueprint_status=house_project.blueprint_status,
         blueprint_urls=blueprint_urls,

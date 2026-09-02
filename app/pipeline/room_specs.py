@@ -38,6 +38,13 @@ ROOM_SIZE_SPECS_M: dict[str, dict[str, float]] = {
     "laundry": {"min_width": 1.8, "min_depth": 2.1},
     "closet": {"min_width": 1.2, "min_depth": 1.5},
     "foyer": {"min_width": 1.5, "min_depth": 1.8},
+    # A real reserved footprint for a compact stair run + landing (2026-08-29
+    # - see floor_layout.py/generate_house.py for how this room gets
+    # injected). 1.2m width is a comfortable single-run clearance; 2.7m depth
+    # fits either a straight run or the two shorter flights of an L-shaped
+    # run - blueprint_svg.py picks which shape to draw from the room's own
+    # REAL resulting aspect ratio after layout, not guessed here.
+    "staircase": {"min_width": 1.2, "min_depth": 2.7},
     "default": {"min_width": 2.1, "min_depth": 2.1},
 }
 
@@ -55,6 +62,7 @@ _CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("laundry", ("laundry", "utility")),
     ("closet", ("closet", "wardrobe", "dressing")),
     ("foyer", ("foyer", "entry", "lobby")),
+    ("staircase", ("stair",)),
 )
 
 

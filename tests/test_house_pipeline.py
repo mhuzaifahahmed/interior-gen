@@ -1,4 +1,8 @@
 import json
+import tempfile
+import time
+import uuid
+from pathlib import Path
 
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -54,9 +58,42 @@ class FakeStorage:
 
 
 def make_test_engine():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    # A real temp FILE database, not sqlite:// (:memory:) - required now that
+    # _run_floor_plan_stage (app/pipeline/generate_house.py, v11) opens its
+    # own Session(engine) on a detached daemon thread for every non-
+    # infeasible house project, genuinely concurrent with the main thread's
+    # own writes. A bare in-memory engine gives each thread its own separate,
+    # table-less database (the lesson CLAUDE.md's "Resilient loading" note
+    # already recorded once); forcing StaticPool (one shared connection) to
+    # work around THAT then causes a DIFFERENT problem - two threads issuing
+    # real concurrent writes over one shared sqlite3 connection object can
+    # corrupt the other's transaction state (observed live as a spurious
+    # `StaleDataError: 0 rows matched`). A real file gives each thread its
+    # own actual connection, with SQLite's normal file-level locking
+    # serializing concurrent writers - the same shape production already
+    # relies on (a real sqlite file or Postgres), so this is more faithful
+    # to production than either single-connection workaround.
+    db_path = Path(tempfile.gettempdir()) / f"interior_gen_test_{uuid.uuid4().hex}.db"
+    engine = create_engine(
+        f"sqlite:///{db_path}", connect_args={"check_same_thread": False, "timeout": 30}
+    )
     SQLModel.metadata.create_all(engine)
     return engine
+
+
+def wait_for_floor_plan_status(engine, house_project_id, expected, timeout=10.0):
+    """generate_floor_plan (v11) now runs on a detached daemon thread that
+    run_house_pipeline() never joins - tests that care about its outcome
+    (not just that the project completed without it) must poll instead of
+    asserting immediately after run_house_pipeline() returns."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with Session(engine) as session:
+            house_project = session.get(HouseProject, house_project_id)
+            if house_project.floor_plan_status == expected:
+                return house_project
+        time.sleep(0.02)
+    raise AssertionError(f"floor_plan_status never reached {expected!r} within {timeout}s")
 
 
 def test_run_house_pipeline_success_without_floor_plan_vendor(monkeypatch):
@@ -77,14 +114,12 @@ def test_run_house_pipeline_success_without_floor_plan_vendor(monkeypatch):
     dimensions = {"length": 40, "width": 60, "unit": "ft"}
     run_house_pipeline("h1", provider, storage, dimensions, prompt="2 floors, modern style")
 
-    with Session(engine) as session:
-        house_project = session.get(HouseProject, "h1")
-        assert house_project.status == "done"
-        assert house_project.plot_description == "A rectangular plot facing north."
-        assert house_project.floor_plan_status == "not_configured"
-        assert house_project.floor_plan_key is None
-        assert house_project.render_key == "local.output/h1/render.png"
-        assert storage.get(house_project.render_key) == b"fake-render-bytes"
+    house_project = wait_for_floor_plan_status(engine, "h1", "not_configured")
+    assert house_project.status == "done"
+    assert house_project.plot_description == "A rectangular plot facing north."
+    assert house_project.floor_plan_key is None
+    assert house_project.render_key == "local.output/h1/render.png"
+    assert storage.get(house_project.render_key) == b"fake-render-bytes"
 
     assert len(provider.plot_calls) == 1
     assert len(provider.floor_plan_calls) == 1
@@ -114,12 +149,10 @@ def test_run_house_pipeline_stores_floor_plan_when_vendor_available(monkeypatch)
     provider = FakeProvider(floor_plan_images=[b"fake-floor-plan-bytes"])
     run_house_pipeline("h2", provider, storage, {"length": 40, "width": 60, "unit": "ft"})
 
-    with Session(engine) as session:
-        house_project = session.get(HouseProject, "h2")
-        assert house_project.floor_plan_status == "done"
-        assert house_project.floor_plan_key == "local.output/h2/floor_plan_floor1.png"
-        assert storage.get(house_project.floor_plan_key) == b"fake-floor-plan-bytes"
-        assert json.loads(house_project.floor_plan_keys_json) == ["local.output/h2/floor_plan_floor1.png"]
+    house_project = wait_for_floor_plan_status(engine, "h2", "done")
+    assert house_project.floor_plan_key == "local.output/h2/floor_plan_floor1.png"
+    assert storage.get(house_project.floor_plan_key) == b"fake-floor-plan-bytes"
+    assert json.loads(house_project.floor_plan_keys_json) == ["local.output/h2/floor_plan_floor1.png"]
 
 
 def test_run_house_pipeline_stores_one_floor_plan_image_per_floor(monkeypatch):
@@ -141,20 +174,18 @@ def test_run_house_pipeline_stores_one_floor_plan_image_per_floor(monkeypatch):
     provider = FakeProvider(floor_plan_images=[b"floor1-bytes", b"floor2-bytes", b"floor3-bytes"])
     run_house_pipeline("h9", provider, storage, {"length": 40, "width": 60, "unit": "ft"}, prompt="3 floors")
 
-    with Session(engine) as session:
-        house_project = session.get(HouseProject, "h9")
-        assert house_project.floor_plan_status == "done"
-        keys = json.loads(house_project.floor_plan_keys_json)
-        assert keys == [
-            "local.output/h9/floor_plan_floor1.png",
-            "local.output/h9/floor_plan_floor2.png",
-            "local.output/h9/floor_plan_floor3.png",
-        ]
-        assert storage.get(keys[0]) == b"floor1-bytes"
-        assert storage.get(keys[1]) == b"floor2-bytes"
-        assert storage.get(keys[2]) == b"floor3-bytes"
-        # Legacy single-key field stays populated with the first floor only.
-        assert house_project.floor_plan_key == keys[0]
+    house_project = wait_for_floor_plan_status(engine, "h9", "done")
+    keys = json.loads(house_project.floor_plan_keys_json)
+    assert keys == [
+        "local.output/h9/floor_plan_floor1.png",
+        "local.output/h9/floor_plan_floor2.png",
+        "local.output/h9/floor_plan_floor3.png",
+    ]
+    assert storage.get(keys[0]) == b"floor1-bytes"
+    assert storage.get(keys[1]) == b"floor2-bytes"
+    assert storage.get(keys[2]) == b"floor3-bytes"
+    # Legacy single-key field stays populated with the first floor only.
+    assert house_project.floor_plan_key == keys[0]
 
 
 def test_run_house_pipeline_marks_failed_on_render_error(monkeypatch):
@@ -588,6 +619,83 @@ def test_run_house_pipeline_injects_a_garage_room_when_requested_but_missing(mon
         assert "Garage" in room_names
 
 
+class TwoFloorProvider(FakeProvider):
+    """Returns a real 2-floor room_layout, neither floor including a
+    staircase - used to verify the real per-floor staircase injection
+    (2026-08-29)."""
+
+    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+        return {
+            "floors": [
+                {
+                    "floor_number": 1,
+                    "rooms": [{"name": "Living Room", "area": 2}, {"name": "Kitchen", "area": 1}],
+                },
+                {
+                    "floor_number": 2,
+                    "rooms": [{"name": "Bedroom 1", "area": 2}, {"name": "Bedroom 2", "area": 2}],
+                },
+            ]
+        }
+
+
+def test_run_house_pipeline_injects_a_staircase_on_every_floor_of_a_multi_floor_building(monkeypatch):
+    # Neither floor in TwoFloorProvider's room_layout includes a staircase -
+    # a real one (not just a symbol) must be guaranteed on EVERY floor, not
+    # just the ground floor (unlike garage, which only makes sense there).
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hstair1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hstair1", status="queued", plot_image_key="hstair1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = TwoFloorProvider()
+    run_house_pipeline(
+        "hstair1", provider, storage, {"length": 60, "width": 80, "unit": "ft"}, prompt="2 floors, modern style"
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hstair1")
+        assert house_project.status == "done"
+        assert house_project.blueprint_status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+        for floor in room_layout["floors"]:
+            room_names = [r["name"] for r in floor["rooms"]]
+            assert "Staircase" in room_names
+        blueprint_keys = json.loads(house_project.blueprint_keys_json)
+        assert len(blueprint_keys) == 2
+
+
+def test_run_house_pipeline_does_not_inject_staircase_for_single_floor(monkeypatch):
+    # A single-storey building has nothing to connect - no staircase room
+    # should be injected.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hstair2/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hstair2", status="queued", plot_image_key="hstair2/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = FakeProvider()  # default: single floor, Living Room + Bedroom
+    run_house_pipeline("hstair2", provider, storage, {"length": 60, "width": 80, "unit": "ft"})
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hstair2")
+        room_layout = json.loads(house_project.room_layout_json)
+        room_names = [r["name"] for r in room_layout["floors"][0]["rooms"]]
+        assert "Staircase" not in room_names
+
+
 def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):
     # A requested front yard must reduce the actual building footprint
     # passed to layout_floor()/the blueprint renderers - reserved BEFORE any
@@ -627,3 +735,59 @@ def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):
         house_project = session.get(HouseProject, "hyard1")
         assert house_project.status == "done"
         assert house_project.blueprint_status == "done"
+
+
+def test_run_house_pipeline_does_not_wait_for_floor_plan_before_completing(monkeypatch):
+    # v11 (2026-09-01): real regression guard for the decoupling - a live
+    # Kaggle Concept Layout call was measured at ~2min/floor, and the whole
+    # point of v11 is that the house project must NOT wait on it.
+    # generate_floor_plan sleeps a full 2s (deliberately large - the real
+    # file-backed test engine, see make_test_engine()'s docstring, has
+    # genuine per-commit disk I/O overhead that a tight sub-second threshold
+    # flaked against) - if it were still awaited (v10's concurrent-but-joined
+    # design, or a sequential regression), the pipeline would take >=2s. It
+    # should return in well under that, since only generate_house_render
+    # (0.1s) is actually awaited.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hconcurrent1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hconcurrent1", status="queued", plot_image_key="hconcurrent1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    class SlowProvider(FakeProvider):
+        def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None):
+            time.sleep(2.0)
+            return super().generate_floor_plan(plot_description, dimensions, prompt, room_layout)
+
+        def generate_house_render(self, image_bytes, prompt):
+            time.sleep(0.1)
+            return super().generate_house_render(image_bytes, prompt)
+
+    provider = SlowProvider(floor_plan_images=[b"floor1-bytes"])
+    start = time.monotonic()
+    run_house_pipeline("hconcurrent1", provider, storage, {"length": 40, "width": 60, "unit": "ft"})
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.5, (
+        f"run_house_pipeline took {elapsed:.2f}s - expected it to return without waiting on the "
+        "2s generate_floor_plan call at all"
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hconcurrent1")
+        assert house_project.status == "done"
+        assert house_project.render_key is not None
+        # The detached thread hasn't necessarily finished yet - "running" is
+        # the expected state immediately after the pipeline itself completes.
+        assert house_project.floor_plan_status == "running"
+
+    # Give the detached thread time to finish and commit on its own (it sleeps
+    # 2.0s itself, so the default wait_for_floor_plan_status timeout needs
+    # real headroom above that).
+    house_project = wait_for_floor_plan_status(engine, "hconcurrent1", "done", timeout=4.0)
+    assert house_project.floor_plan_key is not None
