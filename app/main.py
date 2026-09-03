@@ -5,9 +5,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, UploadFile, File
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import Request
 
 from app.auth import AuthUser, require_user
 from app.config import settings
@@ -65,38 +69,41 @@ if settings.storage_backend == "local":
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
+@app.exception_handler(StarletteHTTPException)
+async def custom_404_handler(request: Request, exc: StarletteHTTPException):
+    """Only real page navigations get the styled static/404.html - API
+    callers (/api/...) still get FastAPI's normal {"detail": ...} JSON (a
+    frontend fetch() checking res.ok/res.status must not have to parse HTML),
+    and /static or /media misses stay plain 404s too (those are asset
+    requests, not page navigations, so a full HTML page for a missing image
+    would be actively wrong)."""
+    if exc.status_code == 404 and not request.url.path.startswith(("/api/", "/static/", "/media/")):
+        return FileResponse("static/404.html", status_code=404)
+    return await http_exception_handler(request, exc)
+
+
 @app.get("/")
 def index():
-    from fastapi.responses import FileResponse
-
     return FileResponse("static/index.html")
 
 
 @app.get("/login")
 def login_page():
-    from fastapi.responses import FileResponse
-
     return FileResponse("static/login.html")
 
 
 @app.get("/signup")
 def signup_page():
-    from fastapi.responses import FileResponse
-
     return FileResponse("static/signup.html")
 
 
 @app.get("/terms")
 def terms():
-    from fastapi.responses import FileResponse
-
     return FileResponse("static/terms.html")
 
 
 @app.get("/privacy")
 def privacy():
-    from fastapi.responses import FileResponse
-
     return FileResponse("static/privacy.html")
 
 
@@ -381,7 +388,7 @@ def list_projects(session: Session = Depends(get_session), user: AuthUser = Depe
 @app.post("/api/house-projects", response_model=HouseProjectCreateResponse)
 async def create_house_project(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
     length: float | None = Form(None),
     width: float | None = Form(None),
     unit: str = Form("m"),
@@ -400,6 +407,16 @@ async def create_house_project(
     submission) - dimensions.json degrades to an empty dict rather than
     rejecting the request.
 
+    The plot photo itself is ALSO optional (2026-09) - unlike Room Redesign,
+    where the uploaded photo is the thing being edited (mandatory, always
+    was), Build a House's floor plan/blueprint/DXF/Concept Layout are all
+    computed purely from dimensions + room program and never touch the
+    photo; only the best-effort analyze_plot() text call and the (currently
+    disabled, see settings.house_render_enabled) exterior render actually
+    use it. See CLAUDE.md's "Image-input investigation" entry for the full
+    reasoning. When `file` is omitted, `plot_image_key` stays None and
+    run_house_pipeline() skips both of those steps cleanly.
+
     floor_count/bedrooms/bathrooms/extras are the structured inputs that
     replaced the old single free-text `prompt` field (see static/index.html's
     "Plot Parameters" panel) - _compose_house_requirements() turns them into a
@@ -415,12 +432,14 @@ async def create_house_project(
     with neither is simply "no specific requirements", same as before this
     feature existed.
     """
-    if file.content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(400, f"unsupported file type: {file.content_type}")
+    data: bytes | None = None
+    if file is not None:
+        if file.content_type not in ALLOWED_CONTENT_TYPES:
+            raise HTTPException(400, f"unsupported file type: {file.content_type}")
 
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(400, "file too large (max 15MB)")
+        data = await file.read()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(400, "file too large (max 15MB)")
 
     # Sanity-clamp, same "silently correct obvious nonsense rather than
     # error the whole request" treatment as _compute_room_dimensions() above.
@@ -466,12 +485,16 @@ async def create_house_project(
     session.commit()
     session.refresh(house_project)
 
+    # storage_namespace is needed below (metadata.json key, background task)
+    # regardless of whether a photo was uploaded - only plot_image_key itself
+    # is conditional on data being present.
     storage_namespace = _storage_namespace(user.id, display_name)
-    plot_image_key = f"users/{storage_namespace}/buildAHouse/input/{house_project.id}/plot.png"
-    storage.put(plot_image_key, data, content_type=file.content_type)
-    house_project.plot_image_key = plot_image_key
-    session.add(house_project)
-    session.commit()
+    if data is not None:
+        plot_image_key = f"users/{storage_namespace}/buildAHouse/input/{house_project.id}/plot.png"
+        storage.put(plot_image_key, data, content_type=file.content_type)
+        house_project.plot_image_key = plot_image_key
+        session.add(house_project)
+        session.commit()
 
     # Best-effort: mirror the chosen inputs into S3 next to the plot upload,
     # same parity/reasoning as Room Redesign's input metadata.json above -

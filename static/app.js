@@ -846,16 +846,6 @@ async function restorePendingGeneration() {
   }
 }
 
-// A real in-flight generation takes priority over a merely-drafted form (the
-// two shouldn't normally coexist, but if they somehow do, resuming a
-// generation that's actually running beats restoring unsubmitted field
-// values).
-if (localStorage.getItem(ACTIVE_GENERATION_KEY)) {
-  resumeActiveGeneration();
-} else {
-  restorePendingGeneration();
-}
-
 const TIERS = [
   { key: "original", label: "Original", desc: "Your uploaded room." },
   { key: "economical", label: "Economical", desc: "Fresh paint and clean practical finishes." },
@@ -1667,10 +1657,21 @@ historyModalOverlay.addEventListener("click", (e) => {
   if (e.target === historyModalOverlay) closeHistoryModal();
 });
 
+// Backend's get_image_model_label() can return "our model + OpenAI" when the
+// 3 room tiers genuinely used different providers (a per-tier runtime
+// fallback - see app/providers/hybrid.py). Collapsed here to a single clean
+// statement rather than exposing the split to the user - "our model" wins
+// when it produced anything at all, since that's the more distinctive claim.
+function displayModelLabel(rawLabel) {
+  if (!rawLabel) return null;
+  return rawLabel.includes("our model") ? "our model" : rawLabel;
+}
+
 function renderResults(data) {
   roomDescriptionEl.textContent = data.room_description ? `"${data.room_description}"` : "";
-  if (data.image_model) {
-    imageModelNoteEl.textContent = `Generated with ${data.image_model}`;
+  const modelLabel = displayModelLabel(data.image_model);
+  if (modelLabel) {
+    imageModelNoteEl.textContent = `Generated using ${modelLabel}`;
     imageModelNoteEl.hidden = false;
   } else {
     imageModelNoteEl.hidden = true;
@@ -1790,15 +1791,14 @@ function showState(state) {
 
 let houseSelectedFile = null;
 
-// Generate Concept must stay disabled until a plot photo AND both dimensions
-// are present - a photo alone isn't enough for the render prompt to carry
-// real length/width context.
+// Generate Concept only requires both dimensions - the plot photo is
+// optional (2026-09, see CLAUDE.md's "Image-input investigation" entry):
+// the floor plan/blueprint/DXF/Concept Layout are computed purely from
+// dimensions + room program and never touch the photo, so there's no reason
+// to block generation on it. A photo, when given, still improves the
+// (currently disabled) exterior render and the best-effort plot analysis.
 function updateHouseGenerateBtnState() {
-  houseGenerateBtn.disabled = !(
-    houseSelectedFile &&
-    houseLengthInput.value.trim() &&
-    houseWidthInput.value.trim()
-  );
+  houseGenerateBtn.disabled = !(houseLengthInput.value.trim() && houseWidthInput.value.trim());
 }
 
 function setHouseSelectedFile(file) {
@@ -1857,7 +1857,6 @@ houseDropzone.addEventListener("drop", (e) => {
 
 houseForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!houseSelectedFile) return;
 
   houseGenerateBtn.disabled = true; // belt-and-suspenders against double-submit
 
@@ -1865,7 +1864,10 @@ houseForm.addEventListener("submit", async (e) => {
   startHouseProgress();
 
   const formData = new FormData();
-  formData.append("file", houseSelectedFile);
+  // Plot photo is optional - only append when the user actually selected one
+  // (see updateHouseGenerateBtnState()'s comment for why this is no longer
+  // a hard requirement).
+  if (houseSelectedFile) formData.append("file", houseSelectedFile);
   if (houseLengthInput.value) formData.append("length", houseLengthInput.value);
   if (houseWidthInput.value) formData.append("width", houseWidthInput.value);
   formData.append("unit", houseUnitInput.value);
@@ -1883,9 +1885,9 @@ houseForm.addEventListener("submit", async (e) => {
     });
     if (res.status === 401) {
       savePendingGeneration("house", {
-        fileName: houseSelectedFile.name,
-        fileType: houseSelectedFile.type,
-        fileDataUrl: housePreviewImg.src,
+        fileName: houseSelectedFile ? houseSelectedFile.name : undefined,
+        fileType: houseSelectedFile ? houseSelectedFile.type : undefined,
+        fileDataUrl: houseSelectedFile ? housePreviewImg.src : undefined,
         length: houseLengthInput.value,
         width: houseWidthInput.value,
         unit: houseUnitInput.value,
@@ -2158,7 +2160,9 @@ function renderHouseFeasibilityBanner(feasibility) {
 function renderHouseResults(data) {
   plotDescriptionEl.textContent = data.plot_description ? `"${data.plot_description}"` : "";
   if (data.render_model) {
-    houseImageModelNoteEl.textContent = `Generated with ${data.render_model}`;
+    // House rendering has no runtime fallback (unlike room tiers), so
+    // render_model is always a single value - no "+" collapsing needed here.
+    houseImageModelNoteEl.textContent = `Generated using ${data.render_model}`;
     houseImageModelNoteEl.hidden = false;
   } else {
     houseImageModelNoteEl.hidden = true;
@@ -2478,5 +2482,37 @@ if (typeof gsap !== "undefined" && !prefersReducedMotion) {
         toggleActions: "restart reverse restart reverse",
       },
     });
+  });
+}
+
+// A real in-flight generation takes priority over a merely-drafted form (the
+// two shouldn't normally coexist, but if they somehow do, resuming a
+// generation that's actually running beats restoring unsubmitted field
+// values). Deliberately placed at the very end of this file, after every
+// module-level const/let/function it depends on (roomProgressFill,
+// houseProgressFill, all the tab/dropdown/input elements, etc.) - this used
+// to run near the top of the file (right after resumeActiveGeneration()/
+// restorePendingGeneration() were defined) and crashed with a temporal-dead-
+// zone ReferenceError the moment resumeActiveGeneration() reached
+// startProgressMessages()'s roomProgressFill.start() call, since that const
+// wasn't initialized yet at that point in the file. Because that crash
+// happened inside an unawaited async function, it silently aborted AFTER
+// already switching to the progress tab/card but BEFORE starting the
+// progress fill or the first poll - a real, reported bug: refreshing mid-
+// generation left the page stuck showing 0% forever, un-recoverable without
+// manually clearing localStorage. The try/catch below is an extra safety
+// net so a future bug in either resume path degrades to a clean upload
+// screen instead of a stuck/broken page.
+// Both target functions are async - a plain try/catch around the call
+// wouldn't catch a rejection surfacing after their first internal await, so
+// .catch() on the returned promise is the correct safety net here.
+if (localStorage.getItem(ACTIVE_GENERATION_KEY)) {
+  resumeActiveGeneration().catch((err) => {
+    console.error("Failed to resume active generation:", err);
+    clearActiveGeneration();
+  });
+} else {
+  restorePendingGeneration().catch((err) => {
+    console.error("Failed to restore pending generation:", err);
   });
 }

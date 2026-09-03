@@ -1237,6 +1237,45 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     included Concept Layout thumbnails at all, in any state, past or present - fixed by adding
     `floor_plan_urls` thumbnails there too (gated on `floor_plan_status === "done"`), reusing the same
     `_house_project_to_response()` fields `list_house_projects()` already returns.
+- **v12 (2026-09-03): the plot photo is now OPTIONAL.** Investigated at the user's request (they
+  suspected the image input wasn't actually being used and floated removing it entirely). Real finding:
+  the photo IS load-bearing, but only in two places, both of which already had "no photo" as a valid,
+  handled case elsewhere in this codebase - `analyze_plot()` (best-effort Gemini vision → 
+  `plot_description`, already degrades to `None` on failure) and `generate_house_render()` (the
+  photoreal exterior render, an image-EDIT call - currently DISABLED anyway via
+  `settings.house_render_enabled=False` in `.env`). The floor plan, blueprint, `.dxf` export, and the
+  Kaggle "Concept Layout" card use ONLY dimensions + room program and have NEVER touched the photo -
+  confirmed by reading `generate_house.py` directly, not assumed. Recommendation given to the user:
+  make the photo optional for Build a House specifically (Room Redesign's photo stays mandatory - it's
+  the thing gpt-image-1/Kaggle actually edit there, not decorative) so users aren't blocked by an input
+  that, with the render disabled, only ever fed a best-effort text description. Approved and built:
+  - `app/main.py::create_house_project`'s `file` param changed from `UploadFile = File(...)` to
+    `UploadFile | None = File(None)`; validation/`storage.put` for the plot image now only run when a
+    file was actually given. Found and fixed a real latent bug while doing this: `storage_namespace`
+    (needed unconditionally for the metadata.json key and the background task, not just the plot-image
+    key) had been computed inline right next to the plot-image `storage.put` call - moved it out so it's
+    always computed regardless of whether a photo was uploaded.
+  - `app/pipeline/generate_house.py::run_house_pipeline`: `plot_bytes` is `None` when
+    `house_project.plot_image_key` is `None` (no upload happened) - `analyze_plot` is skipped entirely
+    (not called-then-caught) when `plot_bytes is None`, and the exterior render step gained a third skip
+    condition (alongside the existing `house_render_enabled` dev toggle): `plot_bytes is None` → logs and
+    skips, same "project still completes as done with whatever else succeeded" treatment as the existing
+    toggle-off case.
+  - `static/index.html`'s house dropzone label gained a small "Optional — your floor plan works from
+    dimensions alone" line. `static/app.js`: `updateHouseGenerateBtnState()` no longer requires
+    `houseSelectedFile` (only both dimensions); the submit handler only appends `file` to `FormData` when
+    one was actually selected, and the 401→`savePendingGeneration()` path guards every `houseSelectedFile.*`
+    read since the file may now genuinely be absent.
+  - Covered by `tests/test_house_api.py::test_full_house_upload_without_photo_still_completes` - asserts
+    the project reaches `status="done"` with `plot_description`/`images.plot`/`images.render` all `None`,
+    and uses a `FakeProvider` subclass whose `analyze_plot`/`generate_house_render` methods `raise
+    AssertionError` if called at all (not just "return None" - a genuine call-count guard, not a
+    behavior-only check).
+  - **Deliberately deferred** (per user's explicit instruction, tracked in
+    `future-plans/subscription-and-access-roadmap.md`, NOT built yet): making the photo conditionally
+    REQUIRED based on subscription plan/chosen model (e.g. "upload only if using OpenAI, optional on
+    Kaggle"). That's a plan-specific rule for the future subscription phase - this pass only makes the
+    photo unconditionally optional for every user, on every plan, right now.
 
 ## Architecture (big picture)
 
@@ -1742,6 +1781,28 @@ was fake.
     `applyPollUpdate()`/`applyHousePollUpdate()` gained one `setProgress(confirmed, ceiling)` call each,
     computed fresh every poll.
 
+### Real bug fixed (2026-09-03): refresh mid-generation left the progress bar stuck at 0% forever
+
+The reconnect mechanism below (`resumeActiveGeneration()`) was already resuming polling correctly, but
+the dispatch call that invokes it (`if (localStorage.getItem(ACTIVE_GENERATION_KEY)) { resumeActive
+Generation(); } else { restorePendingGeneration(); }`) lived near the TOP of `static/app.js` (right after
+both functions were defined), which ran BEFORE several `const`s those functions depend on were
+initialized further down the file — specifically `roomProgressFill`/`houseProgressFill`
+(`createSignalFill(...)`, declared ~120 lines later). Accessing a `const` before its initializing line
+throws a real JS temporal-dead-zone `ReferenceError`. Since `resumeActiveGeneration()` is `async` and was
+called without `await`/`.catch()`, that error surfaced as a silently unhandled promise rejection — the
+function had ALREADY switched to the progress tab and shown the progress card (that part runs before the
+crash point) but never reached `startProgressMessages()`'s `roomProgressFill.start()` successfully, and
+never started polling. Net effect: a real, reported bug — refresh during generation left the page frozen
+on the progress screen at 0%, unrecoverable without manually clearing `localStorage`.
+**Fix**: moved the entire resume/restore dispatch block to the literal end of `static/app.js` (after
+every module-level `const`/`let`/function it touches), and replaced the bare unawaited calls with
+`.catch()` handlers that log the error and fall back to a clean state (`clearActiveGeneration()` for the
+resume path) — so a future bug in either path degrades to the upload screen instead of a stuck page.
+Covered by manual testing (refresh mid-generation on both tabs); no automated test exists for this
+specific ordering bug since it's a page-load/module-evaluation-order issue, not something the existing
+`TestClient`-based test suite exercises.
+
 ## Resilient loading (reconnect on reload/navigation) + Cancel generating…
 
 Generation was already a server-side FastAPI `BackgroundTask` (`app/main.py`'s `create_project`/
@@ -1830,10 +1891,28 @@ split" above) is exactly what ran.
   no crash. The label is stored on a new nullable column (`Project.image_model` / `HouseProject.render_model`,
   additive migration in `app/db.py`) AND inside the existing `meta_json` blob, and exposed on
   `ProjectStatusResponse.image_model` / `HouseProjectStatusResponse.render_model`.
-- **Frontend**: `renderResults()`/`renderHouseResults()` (`static/app.js`) show `"Generated with {label}"`
+- **Frontend**: `renderResults()`/`renderHouseResults()` (`static/app.js`) show `"Generated using {label}"`
   in a small line under the room/plot description (`#image-model-note` / `#house-image-model-note` in
   `static/index.html`) whenever the field is present; hidden otherwise (e.g. old projects generated before
-  this feature, where the column is `None`).
+  this feature, where the column is `None`). Wording is "using" (2026-09-03, matching the exact requested
+  copy) — was "with" before. `renderResults()`'s `displayModelLabel()` collapses the rare
+  `"our model + OpenAI"` combined room label down to a single `"our model"` before display — the user only
+  ever sees one clean claim, never the per-tier split (`get_house_render_model_label()` never has a `"+"`
+  case at all, so `renderHouseResults()` doesn't need the same collapsing).
+
+## Custom 404 page (2026-09-03)
+
+Previously an unknown route (`/anything`) returned FastAPI's bare default `{"detail":"Not Found"}` JSON —
+no styling, generic. `static/404.html` is a real page built from `index.html`'s ACTUAL current head/header/
+footer markup (Tailwind CDN + the same inline `tailwind.config` token block, Fraunces+Poppins,
+`bg-background`/`primary`/`night` tokens) — not from `terms.html`/`privacy.html`, which CLAUDE.md's own
+"Frontend" section already flags as a stale, unretouched theme; matching those would have propagated the
+same staleness into a brand-new page. `app/main.py`'s `custom_404_handler()` (a
+`StarletteHTTPException` handler registered via `@app.exception_handler`) serves it for any 404 whose path
+does NOT start with `/api/`, `/static/`, or `/media/` — API callers still get FastAPI's normal JSON 404
+(a frontend `fetch()` checking `res.ok`/parsing JSON must never receive an HTML body), and static/media
+asset misses stay plain 404s too (a missing image shouldn't return a full HTML page). Covered by
+`tests/test_api.py`'s `test_unknown_page_serves_styled_404`/`test_unknown_api_route_still_returns_json_404`.
 
 ## Testing convention
 

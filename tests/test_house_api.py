@@ -118,6 +118,40 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
         assert body["blueprint_dxf_urls"][0].endswith(".dxf")
 
 
+def test_full_house_upload_without_photo_still_completes(monkeypatch):
+    # Plot photo is optional (2026-09) - the deterministic floor plan/
+    # blueprint/DXF/Concept Layout are computed purely from dimensions + room
+    # program and never touch the photo. analyze_plot and the exterior
+    # render (an image-EDIT call with nothing to edit) must both skip
+    # cleanly rather than erroring the whole project.
+    class NoCallProvider(FakeProvider):
+        def analyze_plot(self, image_bytes, dimensions):
+            raise AssertionError("analyze_plot must not be called when no photo was uploaded")
+
+        def generate_house_render(self, image_bytes, prompt):
+            raise AssertionError("generate_house_render must not be called when no photo was uploaded")
+
+    monkeypatch.setattr(main_module, "get_provider", lambda: NoCallProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        create_res = client.post(
+            "/api/house-projects",
+            data={"length": "40", "width": "60", "unit": "ft", "prompt": "2 floors, modern style"},
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        body = _poll_until_floor_plan_settled(client, house_project_id)
+        assert body["status"] == "done"
+        assert body["plot_description"] is None
+        assert body["images"]["plot"] is None
+        assert body["images"]["render"] is None
+        assert body["blueprint_status"] == "done"
+        assert len(body["blueprint_urls"]) == 1
+
+
 def test_house_api_exposes_one_floor_plan_url_per_floor(monkeypatch):
     # Real vendor path (app/providers/kaggle_autocad.py in production) -
     # generate_floor_plan() returning multiple images must surface as

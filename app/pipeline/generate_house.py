@@ -246,15 +246,23 @@ def run_house_pipeline(
         session.commit()
 
         try:
-            plot_bytes = storage.get(house_project.plot_image_key)
+            # The plot photo is optional (2026-09 - see CLAUDE.md's "Image-
+            # input investigation" entry) - a project can be created with
+            # dimensions/room-program only. plot_bytes stays None in that
+            # case, which cleanly skips both analyze_plot (best-effort
+            # already, same as any other analyze_plot failure) and the
+            # exterior render step below (there's no photo to edit).
+            plot_bytes = storage.get(house_project.plot_image_key) if house_project.plot_image_key else None
 
-            try:
-                plot_description = provider.analyze_plot(plot_bytes, dimensions)
-            except Exception:
-                logger.exception(
-                    "analyze_plot failed for house project %s; continuing without it", house_project_id
-                )
-                plot_description = None
+            plot_description = None
+            if plot_bytes is not None:
+                try:
+                    plot_description = provider.analyze_plot(plot_bytes, dimensions)
+                except Exception:
+                    logger.exception(
+                        "analyze_plot failed for house project %s; continuing without it", house_project_id
+                    )
+                    plot_description = None
 
             house_project.plot_description = plot_description
             session.add(house_project)
@@ -466,17 +474,33 @@ def run_house_pipeline(
             session.add(house_project)
             session.commit()
 
-            # Exterior render is NOT best-effort - it's the core paid
-            # deliverable of this feature, same treatment as the
-            # room-redesign image loop. An exception here still propagates
-            # out to the outer except and fails the whole project.
-            # settings.house_render_enabled is a dev-only escape hatch (see
-            # its comment in app/config.py) - when False, this call (the
-            # ONLY OpenAI/Kaggle call left in the main pipeline path) is
-            # skipped, so the project still completes as "done" with
-            # whatever else succeeded.
+            # Exterior render is NOT best-effort when a plot photo IS
+            # available - it's the core paid deliverable of this feature,
+            # same treatment as the room-redesign image loop, and an
+            # exception here still propagates out to the outer except and
+            # fails the whole project. But the render is an image-EDIT call
+            # (see app/providers/openai.py/kaggle.py's generate_house_render)
+            # - it has no photo to edit when the plot photo was skipped
+            # (optional as of 2026-09), so it's cleanly skipped in that case
+            # instead of erroring, exactly like the house_render_enabled
+            # dev-only escape hatch below already does for a different
+            # reason. settings.house_render_enabled (see app/config.py) -
+            # when False, this call (the ONLY OpenAI/Kaggle call left in the
+            # main pipeline path) is skipped too, so the project still
+            # completes as "done" with whatever else succeeded.
             render_model = None
-            if settings.house_render_enabled:
+            if not settings.house_render_enabled:
+                logger.info(
+                    "house_render_enabled is False - skipping the render step for house project %s",
+                    house_project_id,
+                )
+            elif plot_bytes is None:
+                logger.info(
+                    "no plot photo was uploaded for house project %s - skipping the exterior "
+                    "render step (it has no photo to edit)",
+                    house_project_id,
+                )
+            else:
                 primary_prompt = build_house_prompt(dimensions, prompt, plot_description, room_layout)
                 render_bytes = provider.generate_house_render(plot_bytes, primary_prompt)
                 render_key = f"{key_prefix}/{house_project_id}/render.png"
@@ -488,11 +512,6 @@ def run_house_pipeline(
                 # get_house_render_model_label() docstring.
                 render_model = getattr(provider, "get_house_render_model_label", lambda: None)()
                 house_project.render_model = render_model
-            else:
-                logger.info(
-                    "house_render_enabled is False - skipping the render step for house project %s",
-                    house_project_id,
-                )
             session.add(house_project)
             session.commit()
 

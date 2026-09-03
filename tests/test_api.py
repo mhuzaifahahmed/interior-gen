@@ -580,3 +580,20 @@ def test_privacy_page_serves():
         res = client.get("/privacy")
         assert res.status_code == 200
         assert "Privacy" in res.text
+
+
+def test_unknown_page_serves_styled_404():
+    with TestClient(app) as client:
+        res = client.get("/this-page-does-not-exist")
+        assert res.status_code == 404
+        assert "text/html" in res.headers["content-type"]
+        assert "Page not found" in res.text
+
+
+def test_unknown_api_route_still_returns_json_404():
+    # /api/... callers do fetch(...).ok/status checks and may json()-parse
+    # the body - they must never get the styled HTML 404 page.
+    with TestClient(app) as client:
+        res = client.get("/api/this-does-not-exist")
+        assert res.status_code == 404
+        assert res.headers["content-type"].startswith("application/json")
