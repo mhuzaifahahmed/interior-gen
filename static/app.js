@@ -2265,6 +2265,32 @@ function renderHouseResults(data) {
     });
   }
 
+  // Real, visible placeholder while Model B (the Kaggle Concept Layout call)
+  // is still generating - v11 (app/pipeline/generate_house.py) deliberately
+  // decoupled it from the project's own "done" status (a live ~2min/floor
+  // Kaggle call was making the WHOLE page wait), but that meant the card
+  // just silently appeared later with zero on-screen indication anything was
+  // still happening. Reuses the same shimmer-skeleton visual language as the
+  // Room Redesign concept-preview cards (components.css's .concept-skeleton)
+  // for consistency, instead of a bare spinner. Gets replaced automatically
+  // the next time renderHouseResults() runs (pollFloorPlanCatchUp() calls it
+  // again once floor_plan_status settles) - no separate removal logic needed
+  // since the whole grid is rebuilt from scratch each call.
+  if (data.floor_plan_status === "running") {
+    const card = document.createElement("div");
+    card.className = "result-card";
+    card.innerHTML = `
+      <div class="concept-card">
+        <div class="concept-skeleton"></div>
+      </div>
+      <div class="caption">
+        <p class="tier-name">Concept Layout</p>
+        <p class="tier-desc">Still generating - this can take a couple of minutes. The rest of your results are ready below.</p>
+      </div>
+    `;
+    houseResultsGrid.appendChild(card);
+  }
+
   // "unavailable" (distinct from "not_configured") means a vendor WAS
   // configured but the live call failed in a way that looks like the Kaggle
   // notebook session being offline (app/providers/session_errors.py) - a
