@@ -5,6 +5,15 @@ the feature at that point - not a full changelog, just enough to know what a giv
 like without re-checking by hand. Add a new entry each time a commit is checked and confirmed (or found
 lacking) - newest first.
 
+- **`874f928`** (2026-09-03) — **Real structured `.dxf` export.** Direct user feedback on the previous
+  commit's DXF: "its just making the boxes to the side... no structure or intelligence involved" - fair,
+  v1 only wrote bare room rectangles + labels. Now serializes the SAME wall/door/window geometry
+  `blueprint_svg.py` already computes for the PNG into real DXF entities: real-thickness walls
+  (`const_width` LWPOLYLINEs), actual door gaps (leaf + swing arc, same hallway-suppression rule as the
+  PNG), window gaps on exterior walls. Verified with `ezdxf`'s own `doc.audit()` (0 errors) and by
+  inspecting real coordinates directly. Also this session: 4 individually-verified Kaggle Concept Layout
+  seeds (7, 123, 2024, 555) replace one hardcoded seed (42) that silently rendered a room with NO walls at
+  all - a real, live-caught bug, not theoretical. 434/434 passing.
 - **`79a6873`** (2026-09-02) — **Best Build a House result so far.** Room labels/text stay clean (unchanged
   from `de216a8`) and doors no longer collide visually with them (a real bug hit and fixed while building
   this). New this commit: the deterministic layout gained real, if modest, architectural intelligence - a

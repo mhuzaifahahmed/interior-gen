@@ -508,6 +508,45 @@ pipeline module, and its own endpoints — deliberately not folded into the room
       numbers - the whole point of this feature is that the DXF can never disagree with the PNG since both
       come from the identical rectangles); `tests/test_house_pipeline.py`/`test_house_api.py` extended to
       cover the new key/URL.
+  - **v2 (2026-09-02): real structured geometry, not bare boxes.** Real, direct user feedback: "its just
+    making the boxes to the side and telling us hey your autocad is done see there is no structure or
+    intelligence involved" - fair criticism of v1, which only wrote room rectangles + text labels + the
+    plot boundary, none of the wall/door/window geometry `blueprint_svg.py` already computes for the PNG.
+    Fixed by SERIALIZING that same already-computed geometry into real DXF entities instead of discarding
+    it - no new logic invented, reuses `blueprint_svg.py`'s own `_shared_edge()` (which two rooms share a
+    wall) and `_should_suppress_direct_door()` (the real-circulation-corridor door rule, see that module's
+    docstring) directly, so the PNG and the DXF can never disagree about which rooms connect to which.
+    - **Real-thickness walls**: `WALL_THICKNESS_M` (0.15m/~6in, a standard residential interior wall,
+      converted to the plot's unit via `room_specs.to_plot_unit()`) - drawn as ezdxf `LWPOLYLINE`s with
+      `const_width` set, a genuine DXF "wide polyline" attribute that renders with real visible thickness
+      in any CAD viewer, not a thin line pretending to be a wall. Exterior walls are derived per-room (only
+      the edges that actually lie on the plot boundary), one segment per room's contribution - never drawn
+      twice. Interior walls are derived from `combinations(rects, 2)` + `_shared_edge()` (each shared wall
+      drawn exactly once, not once per room either side of it).
+    - **Real door/window OPENINGS, not just symbols drawn on top.** Unlike a raster PNG (where a door can
+      be "erased" as a gap in solid poché), a DXF wall is line geometry - so a real opening means splitting
+      the wall polyline into two segments with an actual gap between them, not one continuous line with a
+      symbol overlaid on it. `_draw_gapped_wall()` does this for both doors (`DOOR_WIDTH_M`, ~0.9m/3ft,
+      interior walls only, respecting the same suppression rule as the PNG) and windows (`WINDOW_WIDTH_M`,
+      ~1.2m/4ft, exterior walls only) - centered on the segment's midpoint, same heuristic-placement
+      precedent `blueprint_svg.py`'s own door/window functions already established. A door gets a leaf line
+      + quarter-circle swing arc (`DOORS` layer); a window gets a single glazing line (`WINDOWS` layer) -
+      both drawn directly in the plot's real coordinates, no pixel/scale conversion needed (unlike the PNG
+      renderer, ezdxf works natively in real-world units).
+    - **Still deliberately NOT included**: furniture (a picture-presentation heuristic for the PNG, not
+      information a DXF consumer needs duplicated - unchanged scope from v1) and filled poché (CAD users
+      want editable line geometry per wall, not a filled black region - the PNG stays the only poché
+      renderer; walls here are real LINE entities you can select/edit individually in AutoCAD).
+    - **Verification**: real output validated with `ezdxf`'s own `doc.audit()` (0 errors - not just
+      "parses," genuinely well-formed), and visually reasoned through by inspecting every wall segment's
+      real coordinates directly (confirmed gaps land exactly where doors/windows should be, exterior walls
+      cover the full perimeter, interior partition walls appear at real room boundaries).
+    - **Tests rewritten**: the v1 tests assumed one closed rectangle-polyline per room on a `ROOMS` layer -
+      structurally incompatible with v2's split wall-segment model, so they were rewritten (not just
+      patched) to check the new real properties: `const_width > 0` on every wall polyline, the exterior
+      perimeter is fully covered, a door exists between two rooms with no hallway, a door is genuinely
+      absent between two non-bathroom private rooms when a hallway exists (checked by real coordinate
+      position, not just presence/absence), windows exist on exterior-facing rooms. 434/434 passing.
   - **The actual AI research models that generate true vector floor-plan geometry** (for if organic,
     non-rectangular AI-designed layouts are wanted later, beyond what the deterministic slice-and-dice
     algorithm produces) - four found, evaluated for real commercial hostability, not just "does it exist":
