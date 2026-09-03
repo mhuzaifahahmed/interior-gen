@@ -238,22 +238,54 @@ def _shared_edge(a: dict, b: dict) -> dict | None:
 def _should_suppress_direct_door(a: dict, b: dict) -> bool:
     """Real circulation corridor (see floor_layout.py's module docstring):
     when a Hallway rect exists on this floor, a direct door between two
-    adjacent private-zone rooms is suppressed UNLESS at least one of them is
-    a bathroom - two bedrooms (or other private rooms) shouldn't open
-    straight into each other, they should each open onto the hallway
-    instead (which the generic door loop above already draws for free,
-    since the hallway shares a wall with every room it serves). A
-    bedroom-bathroom pair keeps its direct door (a realistic ensuite),
-    same "master bedroom next to its own ensuite bathroom" adjacency
-    floor_layout.py's _pack_row() already preserves. Only called when
-    has_hallway is True - a private zone with no corridor (too few rooms,
-    or not enough space) keeps the original "any shared edge gets a door"
-    behavior unconditionally, since direct adjacency is its only way in."""
-    if a["name"] == "Hallway" or b["name"] == "Hallway":
+    adjacent private-zone rooms is suppressed so they open onto the hallway
+    instead (which the generic door loop above already draws for free, since
+    the hallway shares a wall with every room it serves) - EXCEPT a real
+    ensuite: a bathroom keeps its direct door to its OWN bedroom.
+
+    Suite-aware pairing (2026-09-03, real user feedback that a "master
+    washroom" ended up nowhere near the master bedroom): floor_layout.py's
+    _arrange_suites() now tags each bedroom+bathroom pair with a shared
+    "suite" id. A bathroom keeps a direct door ONLY to a room carrying the
+    SAME suite id - never to an unrelated neighboring bedroom it happens to
+    be packed next to, and never to a second bathroom. A standalone/common
+    bathroom (no suite id) opens only onto the hallway. This replaced the
+    old rule ("keep the door whenever either room is a bathroom"), which
+    drew a wrong door from a bathroom into whatever bedroom happened to sit
+    beside it once suites interleave bedrooms and bathrooms along the row.
+
+    Only called when has_hallway is True - a private zone with no corridor
+    (too few rooms, or not enough space) keeps the original "any shared edge
+    gets a door" behavior unconditionally, since direct adjacency is its
+    only way in."""
+    a_hall = a["name"] == "Hallway"
+    b_hall = b["name"] == "Hallway"
+    if a_hall or b_hall:
+        # An ENSUITE bathroom (a bathroom carrying a suite tag) is private to
+        # its own bedroom - it must not also open straight onto the hallway.
+        # A standalone/common bathroom (no suite tag) still does. Every other
+        # hallway door is kept (that's how rooms reach the corridor).
+        other = b if a_hall else a
+        if classify_room_category(other["name"]) == "bathroom" and other.get("suite") is not None:
+            return True
         return False
     if _zone_key(a["name"]) != 2 or _zone_key(b["name"]) != 2:
         return False
-    return classify_room_category(a["name"]) != "bathroom" and classify_room_category(b["name"]) != "bathroom"
+
+    a_bath = classify_room_category(a["name"]) == "bathroom"
+    b_bath = classify_room_category(b["name"]) == "bathroom"
+    if not a_bath and not b_bath:
+        return True  # two non-bathroom private rooms (e.g. bedroom<->bedroom) - via the hallway
+    if a_bath and b_bath:
+        return True  # two bathrooms should never interconnect
+
+    # Exactly one is a bathroom: keep the ensuite door ONLY within the same
+    # suite (both tagged, same id). No tag, or different tags, means these
+    # two rooms aren't a real pair - suppress it.
+    suite_a, suite_b = a.get("suite"), b.get("suite")
+    if suite_a is not None and suite_a == suite_b:
+        return False
+    return True
 
 
 # Real bug hit and fixed via visual inspection (2026-09-02): the real

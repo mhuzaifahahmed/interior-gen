@@ -170,8 +170,42 @@ def test_should_suppress_direct_door_between_two_bedrooms():
 
 
 def test_should_suppress_direct_door_keeps_ensuite_bathroom_connection():
-    # A bedroom-bathroom pair (a realistic ensuite) keeps its direct door.
-    assert _should_suppress_direct_door({"name": "Master Bedroom"}, {"name": "Master Bathroom"}) is False
+    # A bedroom-bathroom pair sharing a suite id (a real ensuite, tagged by
+    # floor_layout._arrange_suites) keeps its direct door.
+    assert (
+        _should_suppress_direct_door(
+            {"name": "Master Bedroom", "suite": 0}, {"name": "Master Bathroom", "suite": 0}
+        )
+        is False
+    )
+
+
+def test_should_suppress_direct_door_suppresses_bathroom_into_unrelated_bedroom():
+    # The whole point of the suite tag: a bathroom must NOT open into a
+    # bedroom it merely got packed next to (different suite id) - only into
+    # its own suite partner. This is the "master washroom ended up attached
+    # to the wrong room" bug the suite model fixes.
+    assert (
+        _should_suppress_direct_door(
+            {"name": "Master Bathroom", "suite": 0}, {"name": "Bedroom 2", "suite": 1}
+        )
+        is True
+    )
+
+
+def test_should_suppress_direct_door_suppresses_two_adjacent_bathrooms():
+    assert (
+        _should_suppress_direct_door(
+            {"name": "Bathroom 1", "suite": 0}, {"name": "Bathroom 2", "suite": 1}
+        )
+        is True
+    )
+
+
+def test_should_suppress_direct_door_suppresses_untagged_bathroom_into_bedroom():
+    # A standalone/common bathroom (no suite tag) opens onto the hallway
+    # only, never directly into an adjacent bedroom.
+    assert _should_suppress_direct_door({"name": "Bathroom"}, {"name": "Bedroom 1"}) is True
 
 
 def test_should_suppress_direct_door_never_suppresses_a_hallway_door():

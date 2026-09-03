@@ -75,15 +75,29 @@ never actually separate boxes) becomes a REAL one-time box split
 box holds at least MIN_ROOMS_FOR_CORRIDOR rooms and has room to spare, a
 real hallway strip (HALLWAY_WIDTH_M) is reserved along whichever edge
 borders the public/circulation zone (so it's actually reachable from there),
-and the remaining rooms are packed in their EXISTING input order along the
-corridor via `_pack_row()` - preserving the previously-established "master
-bedroom next to its own ensuite bathroom" adjacency automatically, with no
-separate suite-detection logic needed, since sequential packing keeps
-sequential neighbors adjacent to EACH OTHER as well as to the corridor.
-blueprint_svg.py then suppresses the direct door between two adjacent
-non-bathroom private rooms whenever a hallway exists, so bedrooms open onto
-the hallway instead of into each other. Explicitly NOT attempted here (real,
-harder problems, left for later - see future-plans/house-layout-spec-checklist.md):
+and the remaining rooms are packed along the corridor via `_pack_row()`.
+
+REAL BEDROOM+BATHROOM SUITES (2026-09-03, real user feedback: "master
+washroom has to be attached with master bedroom... all the washrooms are on
+a side and all the bedrooms are on the side with a hallway in between - it
+doesn't make sense"). Before this, the corridor packed private rooms in
+Gemini's RAW list order, so if the model returned all bedrooms first and all
+bathrooms last, they clustered on opposite ends - a "master bathroom" could
+end up nowhere near the master bedroom. `_arrange_suites()` now reorders the
+private list into real ensuite pairs ([MasterBed, MasterBath, Bed2, Bath2,
+...]) and tags each pair with a shared `suite` id carried into the packed
+rects. blueprint_svg.py's `_should_suppress_direct_door()` uses that tag to
+draw a door ONLY between a bathroom and its OWN bedroom (never into a
+neighbor it merely got packed beside), keeps an ensuite bathroom from also
+opening onto the hallway, and still sends every bedroom and every
+common/standalone bathroom onto the hallway. FRONT-OF-HOUSE ORDERING was
+added in the same pass (`_public_order_key`): the public zone's rooms are
+ordered garage/entry -> living -> dining -> study -> kitchen so the
+entrance/garage cluster lands together at the "main side" and the kitchen
+sits next to the private zone's hallway as the transition, instead of
+scattering by whatever order Gemini returned. Explicitly NOT attempted here
+(real, harder problems, left for later - see
+future-plans/house-layout-spec-checklist.md):
 non-rectangular/L-shaped rooms, a double-loaded (two-facing-rows) corridor,
 plumbing-zone vertical stacking across floors, a full adjacency-graph
 solver. Small private zones (fewer than MIN_ROOMS_FOR_CORRIDOR rooms, or not
@@ -93,7 +107,7 @@ pre-existing test_layout_floor_preserves_relative_order_within_a_zone test
 (only 2 private rooms) continuing to pass untouched.
 """
 
-from app.pipeline.room_specs import min_area_for_room, to_plot_unit
+from app.pipeline.room_specs import classify_room_category, min_area_for_room, to_plot_unit
 
 # A real, standard single-loaded corridor width - reserved along whichever
 # edge of the private zone's box borders the public/circulation zone, so the
@@ -155,6 +169,43 @@ def _zone_key(room_name: str) -> int:
     return 2
 
 
+# Front-of-house ordering WITHIN the public zone (2026-09-03, real user
+# feedback: "garage and entrances from the main side and first it is the
+# living room and then kitchen and then rooms"). The public zone is one
+# contiguous sliced region (see module docstring); ordering its rooms by
+# this real-world convention - entrance cluster first, then the social
+# rooms, then the kitchen nearest the private zone as the transition - makes
+# the garage/entry land together at one end and the kitchen sit next to the
+# bedrooms' hallway, instead of scattering them by whatever order Gemini
+# happened to return. A STABLE secondary sort key: rooms with the same rank
+# keep Gemini's own relative order.
+_PUBLIC_ORDER_RANKS = (
+    ("garage", "entry", "foyer", "lobby"),            # entrance / vehicle side (the "main side")
+    ("living", "lounge", "family", "drawing"),         # social core
+    ("dining",),                                        # dining, beside the social core
+    ("study", "office"),                                # work, quieter end of public
+    ("kitchen",),                                       # kitchen last - the transition toward the private zone
+    ("powder", "guest bath", "guest wc", "guest toilet"),
+)
+
+
+def _public_order_key(room_name: str) -> int:
+    name = room_name.lower()
+    for rank, keywords in enumerate(_PUBLIC_ORDER_RANKS):
+        if any(keyword in name for keyword in keywords):
+            return rank
+    return len(_PUBLIC_ORDER_RANKS)
+
+
+def _sort_key(room_name: str) -> tuple[int, int]:
+    """Primary key = zone (public 0 / circulation 1 / private 2). Secondary
+    key orders WITHIN the public zone by front-of-house convention (see
+    _public_order_key); circulation/private rooms all share secondary 0, so
+    their own incoming relative order is preserved by the stable sort."""
+    zone = _zone_key(room_name)
+    return (zone, _public_order_key(room_name) if zone == 0 else 0)
+
+
 def layout_floor(rooms: list[dict], dimensions: dict, garage_cars: int | None = None) -> list[dict]:
     """rooms: [{"name": str, "area": number}, ...] (area is a relative weight).
     dimensions: {"length": float, "width": float, "unit": str}. garage_cars,
@@ -172,9 +223,11 @@ def layout_floor(rooms: list[dict], dimensions: dict, garage_cars: int | None = 
     width = float(dimensions.get("width") or 1)
     unit = dimensions.get("unit") or "ft"
 
-    # Stable sort into public-then-private zones (see module docstring) -
-    # preserves each zone's own internal relative order.
-    rooms = sorted(rooms, key=lambda r: _zone_key(str(r.get("name") or "")))
+    # Stable sort into public-then-circulation-then-private zones (see module
+    # docstring), ordering rooms WITHIN the public zone by front-of-house
+    # convention (see _sort_key) - preserves each zone's own internal
+    # relative order for circulation/private rooms.
+    rooms = sorted(rooms, key=lambda r: _sort_key(str(r.get("name") or "")))
 
     names = [str(r.get("name") or f"Room {i + 1}") for i, r in enumerate(rooms)]
     raw_weights = [max(float(r.get("area") or 0), MIN_WEIGHT) for r in rooms]
@@ -263,6 +316,76 @@ def _slice(
     )
 
 
+def _is_master(name: str) -> bool:
+    return "master" in (name or "").lower()
+
+
+def _arrange_suites(
+    names: list[str], weights: list[float]
+) -> tuple[list[str], list[float], list[int | None]]:
+    """Reorders the private-zone room list into real bedroom+bathroom SUITES
+    before it's packed along the corridor, and tags each paired room with a
+    shared suite id. Real user feedback that drove this (2026-09-03): a
+    "master washroom" that isn't adjacent to the master bedroom is
+    architecturally nonsensical, and the previous behavior clustered all
+    bathrooms together and all bedrooms together (an artifact of packing
+    rooms in Gemini's raw list order, which had no bed<->bath pairing at
+    all). This pairs them explicitly:
+
+      1. A master bedroom is paired FIRST, preferring a bathroom whose own
+         name says "master"/"ensuite", else the next available bathroom.
+      2. Every remaining bedroom pairs with the next available bathroom, in
+         order, until bathrooms run out.
+      3. Leftover bathrooms (a common/shared bath with no bedroom of its
+         own) and every non-bed/bath room (storage, closet, utility...) stay
+         standalone (suite id None) and go at the END of the row.
+
+    The returned order interleaves each bedroom immediately followed by its
+    paired bathroom ([MasterBed, MasterBath, Bed2, Bath2, Bed3, ...]) so
+    _pack_row() keeps each pair physically adjacent, and the shared suite id
+    lets blueprint_svg._should_suppress_direct_door() draw a door ONLY
+    between a bathroom and its own bedroom - never into an unrelated
+    neighbor. Purely a reordering + tagging step: it never changes the set
+    of rooms or the sum of weights, so exact plot tiling is unaffected.
+    """
+    bedrooms = [i for i, n in enumerate(names) if classify_room_category(n) == "bedroom"]
+    bathrooms = [i for i, n in enumerate(names) if classify_room_category(n) == "bathroom"]
+
+    # Masters first, otherwise preserve the incoming relative order.
+    bedrooms.sort(key=lambda i: 0 if _is_master(names[i]) else 1)
+    available_baths = list(bathrooms)  # original order
+
+    ordered: list[tuple[int, int | None]] = []
+    suite_counter = 0
+    for bi in bedrooms:
+        bath = None
+        if _is_master(names[bi]):
+            bath = next(
+                (c for c in available_baths if _is_master(names[c]) or "ensuite" in names[c].lower()),
+                None,
+            )
+        if bath is None and available_baths:
+            bath = available_baths[0]
+
+        if bath is not None:
+            available_baths.remove(bath)
+            ordered.append((bi, suite_counter))
+            ordered.append((bath, suite_counter))
+            suite_counter += 1
+        else:
+            ordered.append((bi, None))  # bedroom with no bath left - opens onto the hallway
+
+    placed = {i for i, _ in ordered}
+    for i in range(len(names)):
+        if i not in placed:  # leftover baths (common) + storage/closet/utility/unrecognized rooms
+            ordered.append((i, None))
+
+    ordered_names = [names[i] for i, _ in ordered]
+    ordered_weights = [weights[i] for i, _ in ordered]
+    ordered_suites = [s for _, s in ordered]
+    return ordered_names, ordered_weights, ordered_suites
+
+
 def _layout_private_zone(
     names: list[str],
     weights: list[float],
@@ -285,6 +408,10 @@ def _layout_private_zone(
     public/circulation zone (see _split_box()'s docstring) - the hallway is
     reserved along that same edge so it's actually reachable from there, not
     just present somewhere in the private zone.
+
+    When a corridor IS built, rooms are first reordered into bedroom+bathroom
+    suites (_arrange_suites) so each bathroom lands next to its own bedroom
+    with a shared suite tag, instead of all bathrooms clustering on one side.
     """
     hallway_width = to_plot_unit(HALLWAY_WIDTH_M, unit)
     min_row_depth = to_plot_unit(MIN_ROW_DEPTH_M, unit)
@@ -297,6 +424,7 @@ def _layout_private_zone(
     if len(names) < MIN_ROOMS_FOR_CORRIDOR or cross_dim - hallway_width < min_row_depth:
         return _slice(names, weights, x, y, w, h, sum(weights))
 
+    names, weights, suite_ids = _arrange_suites(names, weights)
     total_weight = sum(weights)
     if split_along_width:
         # Front zone is to the LEFT (private box's own left edge borders it)
@@ -304,7 +432,8 @@ def _layout_private_zone(
         # vertically (packed along y) to its right.
         hallway_rect = {"name": "Hallway", "x": x, "y": y, "w": hallway_width, "h": h}
         room_rects = _pack_row(
-            names, weights, x + hallway_width, y, w - hallway_width, h, total_weight, along_width=False
+            names, weights, x + hallway_width, y, w - hallway_width, h, total_weight,
+            along_width=False, suite_ids=suite_ids,
         )
     else:
         # Front zone is ABOVE (private box's own top edge borders it) -
@@ -312,7 +441,8 @@ def _layout_private_zone(
         # horizontally (packed along x) below it.
         hallway_rect = {"name": "Hallway", "x": x, "y": y, "w": w, "h": hallway_width}
         room_rects = _pack_row(
-            names, weights, x, y + hallway_width, w, h - hallway_width, total_weight, along_width=True
+            names, weights, x, y + hallway_width, w, h - hallway_width, total_weight,
+            along_width=True, suite_ids=suite_ids,
         )
 
     return [hallway_rect] + room_rects
@@ -327,6 +457,7 @@ def _pack_row(
     h: float,
     total_weight: float,
     along_width: bool,
+    suite_ids: list[int | None] | None = None,
 ) -> list[dict]:
     """Packs rooms SEQUENTIALLY, in their existing input order, along one
     fixed axis (along_width: cut along x, each room gets the full h; else
@@ -336,7 +467,13 @@ def _pack_row(
     _slice()'s own weight-balanced recursive splitting) is what keeps
     sequential neighbors (e.g. a master bedroom immediately followed by its
     own ensuite bathroom) adjacent to each other, same as the pre-existing
-    zone-grouping guarantee elsewhere in this module."""
+    zone-grouping guarantee elsewhere in this module.
+
+    suite_ids (parallel to names, when given) tags each room's rect with a
+    "suite" id so blueprint_svg._should_suppress_direct_door() can draw an
+    ensuite door ONLY between a bathroom and its own bedroom - see
+    _arrange_suites(). A None entry means "not part of a suite" and adds no
+    tag, keeping the rect dict identical to before for standalone rooms."""
     if not names:
         return []
     rects = []
@@ -352,9 +489,12 @@ def _pack_row(
         else:
             span = (w if along_width else h) * (weight / total_weight if total_weight else 1 / len(names))
         if along_width:
-            rects.append({"name": name, "x": pos, "y": y, "w": span, "h": h})
+            rect = {"name": name, "x": pos, "y": y, "w": span, "h": h}
         else:
-            rects.append({"name": name, "x": x, "y": pos, "w": w, "h": span})
+            rect = {"name": name, "x": x, "y": pos, "w": w, "h": span}
+        if suite_ids is not None and suite_ids[i] is not None:
+            rect["suite"] = suite_ids[i]
+        rects.append(rect)
         pos += span
     return rects
 

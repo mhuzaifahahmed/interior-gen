@@ -1276,6 +1276,53 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     REQUIRED based on subscription plan/chosen model (e.g. "upload only if using OpenAI, optional on
     Kaggle"). That's a plan-specific rule for the future subscription phase - this pass only makes the
     photo unconditionally optional for every user, on every plan, right now.
+- **v13 (2026-09-03): real bedroom+bathroom SUITES + front-of-house public ordering.** Direct, detailed
+  user critique of a live layout: "master washroom has to be attached with master bedroom in order for it
+  to be called master washroom... all the washrooms are on a side and all the bedrooms are on the side of
+  house and there is a hallway in between... garage and entrances from the main side and first it is the
+  living room and then kitchen and then rooms - it doesn't make sense." Both are real root-cause bugs in
+  the deterministic engine (`app/pipeline/floor_layout.py`), NOT the AI model (the Kaggle Concept Layout
+  model just traces our geometry at `controlnet_conditioning_scale=0.95`, so "meaning" has to come from
+  the engine). Fixed two ways, visually verified by rendering the exact reported room program before/after
+  (this project's repeated lesson - not unit tests alone):
+  - **Bedroom+bathroom suites** (`_arrange_suites()` in `floor_layout.py`): the corridor previously packed
+    private-zone rooms in Gemini's RAW list order, so all-bedrooms-then-all-bathrooms input clustered them
+    on opposite ends - a "master bathroom" ended up nowhere near the master bedroom. Now the private list
+    is reordered into ensuite pairs ([MasterBed, MasterBath, Bed2, Bath2, ...] - master paired first,
+    preferring a bath whose own name says master/ensuite; remaining bedrooms pair with remaining baths in
+    order; leftover common baths + non-bed/bath rooms go standalone at the end) and each pair is tagged
+    with a shared `suite` id carried through `_pack_row()` into the rects. Purely a reorder+tag step - same
+    room set, same weight sum, so exact plot tiling is unaffected.
+  - **Suite-aware doors** (`_should_suppress_direct_door()` in `blueprint_svg.py`, also used by
+    `blueprint_dxf.py`): a bathroom now keeps a direct door ONLY to a room carrying the SAME suite id
+    (its own bedroom), never into a neighbor it merely got packed beside; two adjacent bathrooms never
+    interconnect; and a tagged ensuite bathroom is additionally kept from opening onto the hallway (it's
+    private to its bedroom), while a standalone/common bathroom (no suite tag) still opens onto the
+    hallway. This REPLACED the old rule ("keep the door whenever either adjacent room is a bathroom"),
+    which drew a wrong door from a bathroom into whatever bedroom sat beside it once suites interleave
+    bedrooms and bathrooms along the row. The pre-existing bedroom<->bedroom suppression (via the hallway)
+    is unchanged.
+  - **Front-of-house public ordering** (`_public_order_key()`/`_sort_key()` in `floor_layout.py`): the
+    public zone is one contiguous sliced region, but its rooms were placed in Gemini's arbitrary order
+    (garage bottom-center, entry top-left in the reported case). Now a stable secondary sort orders public
+    rooms garage/entry -> living -> dining -> study -> kitchen, so the entrance/garage cluster lands
+    together at the "main side" and the kitchen sits next to the private hallway as the public->private
+    transition. `_zone_key()` (the primary public/circulation/private split) is unchanged; this only
+    orders WITHIN the public zone.
+  - **Verification**: rendered the reported program (garage/entry/living/dining/kitchen + 3 bedrooms + 3
+    bathrooms) plus three edge cases (more bedrooms than bathrooms -> unpaired bedrooms open to the
+    hallway; a shared/common bathroom -> opens to the hallway while the two ensuites open only to their
+    bedrooms; a 2-storey upper floor with a staircase) and visually confirmed each. Tests:
+    `tests/test_floor_layout.py` gained `test_layout_floor_pairs_master_bathroom_with_master_bedroom` and
+    `test_layout_floor_interleaves_bathrooms_with_bedrooms_not_clustered`; `tests/test_blueprint_svg.py`'s
+    door-suppression tests were updated for the suite model (ensuite now requires a matching `suite` tag)
+    plus new cases for bathroom-into-unrelated-bedroom, two-adjacent-bathrooms, and untagged-bathroom
+    suppression. 442/442 passing.
+  - **Still NOT done** (real, harder problems - the user's "public at front / private at back" front-to-
+    back orientation is only partially honored: the public/private split still follows the plot's longer
+    axis, so on a wide plot public/private read as left/right rather than front/back; also no L-shaped/
+    non-rectangular rooms, no double-loaded corridor, no full adjacency-graph solver). See
+    `future-plans/house-layout-spec-checklist.md`.
 
 ## Architecture (big picture)
 

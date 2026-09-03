@@ -310,6 +310,49 @@ def test_layout_floor_preserves_order_within_a_corridor_row():
     assert _touch(by_name["Master Bedroom"], by_name["Master Bathroom"])
 
 
+def test_layout_floor_pairs_master_bathroom_with_master_bedroom():
+    # Real user complaint (2026-09-03): a "master washroom" ended up nowhere
+    # near the master bedroom, with all bathrooms clustered on one side. The
+    # suite arrangement must place the master bathroom directly adjacent to
+    # the master bedroom, sharing a suite tag - even when Gemini returns all
+    # bedrooms first and all bathrooms last (the worst case for the old
+    # raw-order packing).
+    rooms = [
+        {"name": "Living Room", "area": 3},
+        {"name": "Kitchen", "area": 1},
+        {"name": "Master Bedroom", "area": 2},
+        {"name": "Bedroom 2", "area": 2},
+        {"name": "Bedroom 3", "area": 2},
+        {"name": "Master Bathroom", "area": 1},
+        {"name": "Bathroom 2", "area": 1},
+    ]
+    rects = layout_floor(rooms, {"length": 45, "width": 60, "unit": "ft"})
+    by_name = {r["name"]: r for r in rects}
+
+    assert _touch(by_name["Master Bedroom"], by_name["Master Bathroom"])
+    # And they must carry the SAME suite tag (what makes the ensuite door work).
+    assert by_name["Master Bedroom"].get("suite") is not None
+    assert by_name["Master Bedroom"]["suite"] == by_name["Master Bathroom"]["suite"]
+
+
+def test_layout_floor_interleaves_bathrooms_with_bedrooms_not_clustered():
+    # Bathrooms must not all cluster on one side - each paired bathroom sits
+    # next to its own bedroom. With 2 bedrooms + 2 bathrooms, every bathroom
+    # should touch a bedroom (its ensuite partner).
+    rooms = [
+        {"name": "Living Room", "area": 3},
+        {"name": "Bedroom 1", "area": 2},
+        {"name": "Bedroom 2", "area": 2},
+        {"name": "Bathroom 1", "area": 1},
+        {"name": "Bathroom 2", "area": 1},
+    ]
+    rects = layout_floor(rooms, {"length": 45, "width": 60, "unit": "ft"})
+    bedrooms = [r for r in rects if "Bedroom" in r["name"]]
+    bathrooms = [r for r in rects if "Bathroom" in r["name"]]
+    for bath in bathrooms:
+        assert any(_touch(bath, bed) for bed in bedrooms), f"{bath['name']} touches no bedroom"
+
+
 def test_layout_floor_rectangles_tile_the_plot_exactly_with_a_corridor():
     # The extra Hallway rect must still result in EXACT tiling, no gaps/
     # overlaps from floating-point drift in _pack_row()'s sequential packing.
