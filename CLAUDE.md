@@ -1608,6 +1608,45 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     (`_fit_room_name()` unit tests for the fits-already/shrinks/wraps/single-word-can't-wrap cases, plus an
     end-to-end test reproducing the exact reported room mix and asserting the rendered label width never
     exceeds the room's own pixel box). 482/482 passing (5 new).
+- **v18 (2026-09-04): Build a House's Plot Parameters dropdowns (Unit/Floors/Bedrooms/Bathrooms/Facing)
+  now use the same "morph" GSAP dropdown as Room Redesign**, per explicit user request ("apply same
+  transition in build a house as in room redesign"). These 5 fields were plain native `<select>` elements
+  - they predated `setupMorphDropdown()` (built for Room Redesign's Interior Style/Color Palette fields,
+  see the gsap-transitions skill's "dropdown menus" convention) and were simply never migrated. Converted
+  each to the identical button+listbox markup pattern (a hidden `<input>` keeping the SAME id/name the
+  rest of `app.js`/the backend already reads, so no other code needed to change how these values are
+  read/submitted) and wired via the SAME `setupMorphDropdown()` factory - no new animation code, purely
+  reusing the existing recipe. Unit/Floors/Bedrooms/Bathrooms always have a real default (unlike Interior
+  Style/Color Palette, which start blank) - each dropdown's `.setValue()` is called once right after setup
+  so its button starts showing that default instead of the generic placeholder. Facing stays genuinely
+  optional - its "Not sure - default to South" option has `data-value=""`, and `setValue()`'s existing
+  `value || placeholder` fallback already displays that exact placeholder text for a blank value, so no
+  new logic was needed to support it doubling as an explicit "clear back to no preference" choice. Facing's
+  real option values are capitalized ("North"/"South"/...) rather than lowercase, matching
+  `setupMorphDropdown()`'s existing "value IS the display text" assumption (no separate label mechanism
+  needed) - safe because `generate_house.py` already lowercases + validates `facing` server-side
+  regardless of the exact case it receives. The pending-generation restore path (`static/app.js`, the
+  401-login-redirect handoff) was updated from raw `.value = ` assignment to each dropdown's own
+  `.setValue()`, so a restored value shows correctly in the button label too, not just in the underlying
+  hidden input. `tests/test_house_api.py`'s house facing/dimensions API round-trip tests are unaffected -
+  they POST form data directly, never through this HTML.
+- **v19 (2026-09-04): download buttons across both tools now actually download instead of opening the
+  image/DXF file in the browser.** Real, live-reported bug: every `download-btn`/DXF-link anchor already
+  had a `download="filename"` attribute, which SHOULD trigger a save-as - but per MDN, the `download`
+  attribute is silently ignored whenever the target URL is cross-origin, and every image/DXF URL this app
+  serves is a real AWS S3 URL (see the "Storage seam" section above) - a different origin from the page
+  itself. So clicking "download" just navigated to/opened the raw S3 object instead of ever saving it.
+  **Fix**: `static/app.js`'s new `triggerDownload(url, filename)` fetches the file itself, wraps the
+  response in a `blob:` URL (blob URLs are always same-origin, so `download` works on them
+  unconditionally regardless of where the original file lives), clicks a throwaway anchor pointing at
+  THAT, then revokes it - falling back to the previous "open in a new tab" behavior only if the fetch
+  itself genuinely fails (e.g. a network error), so a real failure still gives the user something rather
+  than a dead button. `wireDownloadLink(anchorEl)` reads the `href`/`download` attributes already present
+  in the rendered markup and swaps the anchor's click handler to call `triggerDownload()` with
+  `preventDefault()` (stopping the native, broken cross-origin navigation) instead of letting the browser
+  handle the click natively - applied to all 5 real call sites: Room Redesign's 3 tier images, Build a
+  House's exterior render/blueprint PNG/Concept Layout PNG, and the blueprint's `.dxf` AutoCAD export link
+  (which had the exact same cross-origin bug, just not yet reported).
 
 ## Architecture (big picture)
 

@@ -614,56 +614,91 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <label for="house-width" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Width</label>
 <input type="number" id="house-width" name="width" min="0" step="0.1" placeholder="e.g. 60" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200"/>
 </div>
-<div class="w-20">
-<label for="house-unit" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Unit</label>
-<select id="house-unit" name="unit" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
-<option value="ft">ft</option>
-<option value="m">m</option>
-</select>
+<div class="w-24">
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Unit</label>
+<div class="relative">
+<button type="button" id="house-unit-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-1 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="house-unit-btn-label" class="text-on-surface">ft</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="house-unit-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30" id="house-unit-menu" role="listbox">
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="ft" role="option">ft</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="m" role="option">m</button>
+</div>
+</div>
+<input type="hidden" id="house-unit" name="unit" value="ft"/>
 </div>
 </div>
 <div class="flex gap-4">
 <div class="flex-1">
-<label for="house-floor-count" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Floors</label>
-<select id="house-floor-count" name="floor_count" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
-<option value="1" selected>1</option>
-<option value="2">2</option>
-<option value="3">3</option>
-<option value="4">4</option>
-<option value="5">5</option>
-</select>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Floors</label>
+<div class="relative">
+<button type="button" id="house-floor-count-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-1 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="house-floor-count-btn-label" class="text-on-surface">1</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="house-floor-count-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30" id="house-floor-count-menu" role="listbox">
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="1" role="option">1</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="2" role="option">2</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="3" role="option">3</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="4" role="option">4</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="5" role="option">5</button>
+</div>
+</div>
+<input type="hidden" id="house-floor-count" name="floor_count" value="1"/>
 </div>
 <div class="flex-1">
-<label for="house-bedrooms" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bedrooms</label>
-<select id="house-bedrooms" name="bedrooms" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
-<option value="1">1</option>
-<option value="2">2</option>
-<option value="3" selected>3</option>
-<option value="4">4</option>
-<option value="5">5</option>
-<option value="6">6</option>
-</select>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bedrooms</label>
+<div class="relative">
+<button type="button" id="house-bedrooms-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-1 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="house-bedrooms-btn-label" class="text-on-surface">3</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="house-bedrooms-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30" id="house-bedrooms-menu" role="listbox">
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="1" role="option">1</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="2" role="option">2</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="3" role="option">3</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="4" role="option">4</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="5" role="option">5</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="6" role="option">6</button>
+</div>
+</div>
+<input type="hidden" id="house-bedrooms" name="bedrooms" value="3"/>
 </div>
 <div class="flex-1">
-<label for="house-bathrooms" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bathrooms</label>
-<select id="house-bathrooms" name="bathrooms" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
-<option value="1">1</option>
-<option value="2" selected>2</option>
-<option value="3">3</option>
-<option value="4">4</option>
-<option value="5">5</option>
-</select>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bathrooms</label>
+<div class="relative">
+<button type="button" id="house-bathrooms-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-1 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="house-bathrooms-btn-label" class="text-on-surface">2</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="house-bathrooms-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30" id="house-bathrooms-menu" role="listbox">
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="1" role="option">1</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="2" role="option">2</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="3" role="option">3</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="4" role="option">4</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="5" role="option">5</button>
+</div>
+</div>
+<input type="hidden" id="house-bathrooms" name="bathrooms" value="2"/>
 </div>
 </div>
 <div>
-<label for="house-facing" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Which way does the entrance face? (optional)</label>
-<select id="house-facing" name="facing" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
-<option value="" selected>Not sure - default to South</option>
-<option value="north">North</option>
-<option value="south">South</option>
-<option value="east">East</option>
-<option value="west">West</option>
-</select>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Which way does the entrance face? (optional)</label>
+<div class="relative">
+<button type="button" id="house-facing-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-2 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="house-facing-btn-label" class="text-on-surface-variant">Not sure - default to South</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="house-facing-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30" id="house-facing-menu" role="listbox">
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="" role="option">Not sure - default to South</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="North" role="option">North</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="South" role="option">South</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="East" role="option">East</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="West" role="option">West</button>
+</div>
+</div>
+<input type="hidden" id="house-facing" name="facing" value=""/>
 </div>
 <div>
 <label for="house-extras" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Anything else? (optional)</label>

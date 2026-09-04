@@ -17,6 +17,59 @@ function apiUrl(path) {
   return path;
 }
 
+// Real bug (2026-09-04, live user report): every download-btn/DXF anchor
+// below already had a `download="filename"` attribute, which should trigger
+// a save-as instead of navigation - but the browser SILENTLY IGNORES the
+// `download` attribute whenever the target URL is cross-origin (MDN: "This
+// attribute only works for same-origin URLs, or the blob:/data: schemes"),
+// and every image/DXF URL this app serves is a real AWS S3 URL (see
+// CLAUDE.md's storage-seam section) - a different origin than this page.
+// Result: clicking "download" just navigated to/opened the raw S3 object
+// instead of saving it, exactly as reported.
+// Fix: fetch the file ourselves, wrap the response in a blob: URL (blob:
+// URLs are always same-origin, so `download` works on them unconditionally),
+// click a throwaway anchor pointing at THAT, then revoke it. Falls back to
+// opening the real URL in a new tab (the previous, at-least-functional
+// behavior) only if the fetch itself fails - e.g. the file no longer exists
+// or a network error - so a real failure never leaves the user with a dead
+// button and no feedback at all.
+async function triggerDownload(url, filename) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`fetch failed with status ${response.status}`);
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(blobUrl);
+  } catch (err) {
+    console.error("download failed, opening the file directly instead", err);
+    window.open(url, "_blank", "noopener");
+  }
+}
+
+// Wires a rendered `<a class="download-btn" href=... download=...>` (or the
+// DXF `.materials-open-btn` link) to use triggerDownload() instead of its
+// native href/download behavior - reads the filename straight off the
+// attribute already rendered into the markup so call sites don't need to
+// pass it separately. e.stopPropagation() is preserved (these buttons live
+// inside a card whose own click opens the lightbox - unrelated to this fix,
+// kept exactly as it already worked).
+function wireDownloadLink(anchorEl) {
+  if (!anchorEl) return;
+  const url = anchorEl.getAttribute("href");
+  const filename = anchorEl.getAttribute("download") || "download";
+  anchorEl.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    triggerDownload(url, filename);
+  });
+}
+
 // Render's free tier spins the backend down after ~15 min idle - the first
 // request after that takes 30-60s to wake it back up. Left completely
 // unhandled, that just looks like a hang with no explanation. This shows a
@@ -535,6 +588,58 @@ const colorPaletteDropdown = setupMorphDropdown({
   placeholder: "Select a palette…",
 });
 
+// Build a House's Plot Parameters dropdowns reuse the exact same morph
+// dropdown as Room Redesign's Interior Style/Color Palette above (2026-09-04,
+// explicit user request: "apply same transition in build a house as in room
+// redesign") - these previously stayed plain native <select> elements since
+// they predate that convention. Unit/Floors/Bedrooms/Bathrooms always have a
+// real default (unlike Interior Style/Color Palette, which start blank) -
+// setValue() is called once right after setup so the button's label starts
+// showing that default instead of the placeholder. Facing stays genuinely
+// optional/blank by default, matching its previous native-<select> behavior
+// (the "Not sure - default to South" option's data-value is "" - setValue("")
+// already falls back to display the placeholder text for a falsy value, so
+// that option doubles as an explicit "clear back to no preference" choice).
+const houseUnitDropdown = setupMorphDropdown({
+  btnId: "house-unit-btn",
+  chevronId: "house-unit-chevron",
+  menuId: "house-unit-menu",
+  hiddenInputId: "house-unit",
+  placeholder: "ft",
+});
+houseUnitDropdown.setValue("ft");
+const houseFloorCountDropdown = setupMorphDropdown({
+  btnId: "house-floor-count-btn",
+  chevronId: "house-floor-count-chevron",
+  menuId: "house-floor-count-menu",
+  hiddenInputId: "house-floor-count",
+  placeholder: "1",
+});
+houseFloorCountDropdown.setValue("1");
+const houseBedroomsDropdown = setupMorphDropdown({
+  btnId: "house-bedrooms-btn",
+  chevronId: "house-bedrooms-chevron",
+  menuId: "house-bedrooms-menu",
+  hiddenInputId: "house-bedrooms",
+  placeholder: "3",
+});
+houseBedroomsDropdown.setValue("3");
+const houseBathroomsDropdown = setupMorphDropdown({
+  btnId: "house-bathrooms-btn",
+  chevronId: "house-bathrooms-chevron",
+  menuId: "house-bathrooms-menu",
+  hiddenInputId: "house-bathrooms",
+  placeholder: "2",
+});
+houseBathroomsDropdown.setValue("2");
+const houseFacingDropdown = setupMorphDropdown({
+  btnId: "house-facing-btn",
+  chevronId: "house-facing-chevron",
+  menuId: "house-facing-menu",
+  hiddenInputId: "house-facing",
+  placeholder: "Not sure - default to South",
+});
+
 const houseUploadView = document.getElementById("house-upload-view");
 const houseForm = document.getElementById("house-upload-form");
 const houseFileInput = document.getElementById("house-file-input");
@@ -819,11 +924,11 @@ async function restorePendingGeneration() {
   } else {
     houseLengthInput.value = pending.length || "";
     houseWidthInput.value = pending.width || "";
-    houseUnitInput.value = pending.unit || "ft";
-    houseFloorCountInput.value = pending.floorCount || "1";
-    houseBedroomsInput.value = pending.bedrooms || "3";
-    houseBathroomsInput.value = pending.bathrooms || "2";
-    houseFacingInput.value = pending.facing || "";
+    houseUnitDropdown.setValue(pending.unit || "ft");
+    houseFloorCountDropdown.setValue(pending.floorCount || "1");
+    houseBedroomsDropdown.setValue(pending.bedrooms || "3");
+    houseBathroomsDropdown.setValue(pending.bathrooms || "2");
+    houseFacingDropdown.setValue(pending.facing || "");
     houseExtrasInput.value = pending.extras || "";
   }
 
@@ -1715,7 +1820,7 @@ function renderResults(data) {
       ${isOriginal ? "" : renderMaterialsSection(tier.key, data)}
     `;
     card.addEventListener("click", () => openLightbox(url, tier.label));
-    card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
+    wireDownloadLink(card.querySelector(".download-btn"));
 
     const materialsEl = card.querySelector(".materials-open-btn, .materials-note");
     if (materialsEl) {
@@ -2209,7 +2314,7 @@ function renderHouseResults(data) {
       </div>
     `;
     card.addEventListener("click", () => openLightbox(url, tier.label));
-    card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
+    wireDownloadLink(card.querySelector(".download-btn"));
     houseResultsGrid.appendChild(card);
   }
 
@@ -2250,9 +2355,8 @@ function renderHouseResults(data) {
         ${dxfLinkHtml}
       `;
       card.addEventListener("click", () => openLightbox(url, label));
-      card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
-      const dxfLink = card.querySelector(".materials-open-btn");
-      if (dxfLink) dxfLink.addEventListener("click", (e) => e.stopPropagation());
+      wireDownloadLink(card.querySelector(".download-btn"));
+      wireDownloadLink(card.querySelector(".materials-open-btn"));
       houseResultsGrid.appendChild(card);
     });
   }
@@ -2284,7 +2388,7 @@ function renderHouseResults(data) {
         </div>
       `;
       card.addEventListener("click", () => openLightbox(url, label));
-      card.querySelector(".download-btn").addEventListener("click", (e) => e.stopPropagation());
+      wireDownloadLink(card.querySelector(".download-btn"));
       houseResultsGrid.appendChild(card);
     });
   }
