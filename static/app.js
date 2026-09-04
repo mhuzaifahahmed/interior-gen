@@ -1522,7 +1522,20 @@ function formatHistoryDate(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "";
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  // Fixed to Asia/Karachi (PKT) rather than the browser's own timezone -
+  // this app isn't going international, so a single fixed timezone is more
+  // useful/consistent for the team than whatever timezone a given browser
+  // happens to be set to. Includes a real time-of-day, not just the date,
+  // since multiple generations on the same day were previously indistinguishable.
+  const formatted = d.toLocaleString("en-US", {
+    timeZone: "Asia/Karachi",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${formatted} PKT`;
 }
 
 function renderHistoryThumb(url, label) {
