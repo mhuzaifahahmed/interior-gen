@@ -150,3 +150,21 @@ def garage_min_area_sqm(cars: int, unit: str) -> float:
     width_m = spec["min_width"] * cars
     depth_m = spec["min_depth"]
     return to_plot_unit(width_m, unit) * to_plot_unit(depth_m, unit)
+
+
+def garage_dimensions(cars: int, unit: str) -> tuple[float, float]:
+    """Real (width, depth) - not just area - a garage needs for `cars` to
+    actually fit, in the plot's own unit. Added 2026-09-04: real user
+    feedback that a garage produced by area-only sizing could come out
+    unusably narrow (e.g. ~6ft wide - too narrow for a real car door to even
+    open) despite having the "correct" total area, since the general
+    rectangle-slicing algorithm only ever guaranteed AREA, never width/depth
+    individually (a known, documented limitation for every OTHER room type
+    too - see floor_layout.py - but garage is the one room type where a
+    wrong SHAPE, not just a small area, makes it genuinely unusable for its
+    one specific function). Used by floor_layout.py to carve out a real,
+    correctly-proportioned rectangle for the garage before the general
+    weighted algorithm runs, instead of only ever constraining its area."""
+    cars = max(1, cars)
+    spec = ROOM_SIZE_SPECS_M["garage"]
+    return to_plot_unit(spec["min_width"] * cars, unit), to_plot_unit(spec["min_depth"], unit)

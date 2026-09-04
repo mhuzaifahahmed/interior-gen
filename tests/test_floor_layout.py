@@ -532,3 +532,65 @@ def test_layout_floor_every_facing_tiles_the_plot_exactly():
             assert r["x"] >= -1e-6 and r["y"] >= -1e-6
             assert r["x"] + r["w"] <= 37 + 1e-6
             assert r["y"] + r["h"] <= 53 + 1e-6
+
+
+def test_layout_floor_garage_gets_a_real_car_fitting_width_not_just_area():
+    # Real user-reported bug (2026-09-04): a garage previously guaranteed the
+    # right AREA but could end up too NARROW for a real car to fit (a live
+    # generation produced a 6.1ft-wide garage against a real ~8.9ft minimum
+    # for one car - a car's own width alone is ~6ft, before door clearance).
+    # The garage's rectangle must now have its real minimum WIDTH, not just
+    # the right total area.
+    from app.pipeline.room_specs import garage_dimensions
+
+    rooms = [
+        {"name": "Entry", "area": 1},
+        {"name": "Living Room", "area": 3},
+        {"name": "Dining Room", "area": 1.5},
+        {"name": "Kitchen", "area": 1.5},
+        {"name": "Garage", "area": 1},
+        {"name": "Master Bedroom", "area": 2},
+        {"name": "Master Bathroom", "area": 1},
+    ]
+    dimensions = {"length": 50, "width": 45, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, garage_cars=1)
+    garage = next(r for r in rects if r["name"] == "Garage")
+
+    real_width, real_depth = garage_dimensions(1, "ft")
+    assert abs(garage["w"] - real_width) < 1e-6
+    assert garage["h"] >= real_depth - 1e-6
+
+
+def test_layout_floor_two_car_garage_is_wider_than_one_car():
+    from app.pipeline.room_specs import garage_dimensions
+
+    rooms = [{"name": "Living Room", "area": 2}, {"name": "Garage", "area": 1}]
+    dimensions = {"length": 60, "width": 50, "unit": "ft"}
+
+    one_car = layout_floor(rooms, dimensions, garage_cars=1)
+    two_car = layout_floor(rooms, dimensions, garage_cars=2)
+    garage_1 = next(r for r in one_car if r["name"] == "Garage")
+    garage_2 = next(r for r in two_car if r["name"] == "Garage")
+
+    width_1, _ = garage_dimensions(1, "ft")
+    width_2, _ = garage_dimensions(2, "ft")
+    assert abs(garage_1["w"] - width_1) < 1e-6
+    assert abs(garage_2["w"] - width_2) < 1e-6
+    assert garage_2["w"] > garage_1["w"]
+
+
+def test_layout_floor_garage_carve_out_still_tiles_exactly():
+    rooms = [
+        {"name": "Entry", "area": 1},
+        {"name": "Living Room", "area": 3},
+        {"name": "Garage", "area": 1},
+        {"name": "Bedroom", "area": 2},
+    ]
+    dimensions = {"length": 48, "width": 40, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, garage_cars=1)
+    total_area = sum(_area(r) for r in rects)
+    assert abs(total_area - 48 * 40) < 1e-6
+    for r in rects:
+        assert r["x"] >= -1e-6 and r["y"] >= -1e-6
+        assert r["x"] + r["w"] <= 48 + 1e-6
+        assert r["y"] + r["h"] <= 40 + 1e-6

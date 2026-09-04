@@ -143,7 +143,13 @@ weight-heavy public room list could still claim a disproportionate share of
 the total footprint before the private zone's own split).
 """
 
-from app.pipeline.room_specs import classify_room_category, max_area_for_room, min_area_for_room, to_plot_unit
+from app.pipeline.room_specs import (
+    classify_room_category,
+    garage_dimensions,
+    max_area_for_room,
+    min_area_for_room,
+    to_plot_unit,
+)
 
 # A real, standard single-loaded corridor width - reserved along whichever
 # edge of the private zone's box borders the public/circulation zone, so the
@@ -394,7 +400,7 @@ def _layout_floor_core(rooms: list[dict], dimensions: dict, garage_cars: int | N
     # specially - same single recursive _slice() call as before.
     private_start = next((i for i, name in enumerate(names) if _zone_key(name) == 2), len(names))
     if private_start == 0 or private_start == len(names):
-        return _slice(names, weights, 0.0, 0.0, length, width, sum(weights))
+        return _slice_reserving_garage(names, weights, 0.0, 0.0, length, width, sum(weights), unit, garage_cars)
 
     front_names, private_names = names[:private_start], names[private_start:]
     front_weights, private_weights = weights[:private_start], weights[private_start:]
@@ -408,7 +414,7 @@ def _layout_floor_core(rooms: list[dict], dimensions: dict, garage_cars: int | N
     # zone, the hallway placement in _layout_private_zone()) is unaffected -
     # they still pick whichever axis suits that sub-region.
     front_box, private_box, split_along_width = _split_box_along_y(0.0, 0.0, length, width, front_fraction)
-    front_rects = _slice(front_names, front_weights, *front_box, front_total)
+    front_rects = _slice_reserving_garage(front_names, front_weights, *front_box, front_total, unit, garage_cars)
     private_rects = _layout_private_zone(
         private_names, private_weights, *private_box, unit, split_along_width
     )
@@ -524,6 +530,64 @@ def _clamp_to_max_and_redistribute(
         weights[i] += excess * share
 
     return weights
+
+
+def _slice_reserving_garage(
+    names: list[str],
+    weights: list[float],
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    total_weight: float,
+    unit: str,
+    garage_cars: int | None,
+) -> list[dict]:
+    """Same job as _slice() below, but when a garage is among `names`, its
+    rectangle is carved out FIRST as a real, correctly-proportioned vertical
+    strip (exact real width for the requested car count, spanning the box's
+    FULL height) instead of emerging from the general area-only weighted
+    split - see room_specs.garage_dimensions()'s docstring for the real bug
+    this fixes (a garage could previously come out too NARROW for a car to
+    actually fit, despite having the "correct" total area, since the general
+    algorithm only ever guaranteed area, never width specifically).
+
+    This does mean a garage can end up DEEPER than its bare minimum (the
+    strip's height is the box's full height, usually more than the 5.4m a
+    car alone needs) - a deliberate, documented trade-off: guaranteeing a
+    real, usable width takes priority over exact minimality for the one room
+    type where a wrong shape (not just a slightly-too-small area) makes it
+    genuinely non-functional. Every other room's sizing/redistribution logic
+    upstream of this call is completely unaffected - garage's weight/cap
+    still influenced how much area the REST of the zone had available, this
+    only changes garage's own final SHAPE.
+
+    Falls back to the plain, unchanged _slice() (no garage carve-out) when
+    there's no garage in `names`, or when the box is too narrow for the
+    carve-out to make geometric sense (defensive - expected to already be
+    caught by feasibility checks, not the normal path)."""
+    garage_index = next((i for i, name in enumerate(names) if classify_room_category(name) == "garage"), None)
+    if garage_index is None:
+        return _slice(names, weights, x, y, w, h, total_weight)
+
+    garage_width, _garage_depth = garage_dimensions(garage_cars or 1, unit)
+    if garage_width <= 0 or garage_width >= w:
+        # Box too narrow for a real carve-out to leave any room for the rest
+        # of the zone - defensive fallback, not the normal path (see
+        # docstring).
+        return _slice(names, weights, x, y, w, h, total_weight)
+
+    garage_name = names[garage_index]
+    garage_rect = {"name": garage_name, "x": x, "y": y, "w": garage_width, "h": h}
+
+    rest_names = names[:garage_index] + names[garage_index + 1 :]
+    rest_weights = weights[:garage_index] + weights[garage_index + 1 :]
+    if not rest_names:
+        return [garage_rect]
+
+    rest_total = sum(rest_weights)
+    rest_rects = _slice(rest_names, rest_weights, x + garage_width, y, w - garage_width, h, rest_total)
+    return [garage_rect] + rest_rects
 
 
 def _slice(

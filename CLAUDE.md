@@ -1457,6 +1457,40 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     test); `tests/test_house_api.py` gained a facing-persists-in-house_inputs test;
     `tests/test_kaggle_autocad.py` gained a test confirming two different facings produce genuinely
     different conditioning images (not silently ignored). 465/465 passing (11 new).
+- **v16 (2026-09-04): garage now gets a real, car-fitting WIDTH, not just the right total area.** Real,
+  specific user report (spotted directly in a live render): a garage came out 6.1ft wide against a real
+  ~8.9ft minimum for one car (a car's own width alone is ~6ft, before door-opening clearance) - the
+  garage's AREA was correct (156.9 sq ft, exactly its computed minimum) but its SHAPE wasn't, because
+  the general weighted-slicing algorithm has only ever guaranteed area, never width/depth individually
+  (a real, already-documented limitation - see `room_specs.py`'s own "Known limitation" notes - but
+  garage is the one room type where a wrong shape, not just a smaller-than-ideal area, makes it flatly
+  non-functional for its one job).
+  - **`room_specs.garage_dimensions(cars, unit) -> (width, depth)`** (new) returns garage's real minimum
+    width/depth as two numbers, not just their product - the same underlying spec numbers
+    `garage_min_area_sqm()` already used (2.7m/car width, 5.4m fixed depth), just exposed separately so
+    the layout engine can constrain SHAPE, not only area.
+  - **`floor_layout._slice_reserving_garage()`** (new, replaces the plain `_slice()` call at both of
+    `_layout_floor_core()`'s call sites) carves the garage out FIRST as a real vertical strip - exact
+    real width for the requested car count, spanning the box's FULL height - before the general weighted
+    algorithm runs on whatever rooms remain in the narrower leftover box. This guarantees garage's WIDTH
+    is always exactly correct; its DEPTH ends up being the box's full available height, which is usually
+    MORE than the bare 5.4m minimum - a deliberate trade-off (documented in the function's own
+    docstring): a real, usable width beats exact minimality for garage specifically. Every other room's
+    own sizing/redistribution logic (min/max caps, suite pairing, etc.) is completely unaffected - this
+    only changes garage's own final shape, not how much AREA the rest of the zone had available (that
+    was already correctly reduced by garage's real min-area reservation, unchanged from before).
+  - **A real, honest side effect, not silently hidden**: removing garage from the general algorithm
+    narrows the box available to the REST of the front zone, which can shift how THOSE rooms' own
+    aspect ratios come out - visually confirmed in a real render where "Entry" ended up an unusably thin
+    ~1.3ft-deep sliver as a result. This is the SAME pre-existing "area guaranteed, shape isn't"
+    limitation now surfacing for a different room, not a new category of bug - not fixed in this pass
+    (the user's explicit ask was scoped to garage specifically; this is flagged for a future pass, not
+    silently ignored).
+  - **Verification**: rendered the exact previously-buggy room program and confirmed the garage's width
+    is now exactly 8.9ft (matching `garage_dimensions(1, "ft")`), up from the buggy 6.1ft - both
+    numerically (`tests/test_floor_layout.py`'s new tests: real width regardless of surrounding rooms,
+    a 2-car garage is wider than 1-car, exact-tiling still holds with the carve-out) and visually
+    (re-rendered and inspected the PNG). 469/469 passing (4 new).
 
 ## Architecture (big picture)
 
