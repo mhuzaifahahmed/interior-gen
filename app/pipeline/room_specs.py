@@ -20,6 +20,8 @@ actual unit ("ft" or "m") via to_plot_unit() before use - so a size table
 edit never needs to know which unit a given house project happens to use.
 """
 
+import math
+
 METERS_TO_FEET = 3.280839895
 
 # min_width/min_depth: the smallest usable real-world footprint for this
@@ -46,6 +48,38 @@ ROOM_SIZE_SPECS_M: dict[str, dict[str, float]] = {
     # REAL resulting aspect ratio after layout, not guessed here.
     "staircase": {"min_width": 1.2, "min_depth": 2.7},
     "default": {"min_width": 2.1, "min_depth": 2.1},
+}
+
+# MAXIMUM multiplier on a room's own minimum area (2026-09-04, real user
+# critique: "the dining room occupies too much area relative to its
+# function... every square meter should have a clear purpose"). Before this,
+# layout_floor() guaranteed each room its minimum then handed 100% of the
+# REMAINING plot area to relative weight alone, unbounded on the high end -
+# a heavily-weighted room (e.g. dining) could balloon arbitrarily. This caps
+# how far ABOVE its minimum a room is allowed to grow before the excess is
+# redistributed elsewhere (see layout_floor()'s clamping pass) - `living`
+# gets a high cap since it's meant to be the dominant everyday social space;
+# `garage`/`staircase` get 1.0 (exactly their minimum) since their size is a
+# real functional requirement (vehicle clearance / a stair run), not
+# something that should grow just because Gemini assigned it extra weight.
+ROOM_MAX_MULTIPLIER: dict[str, float] = {
+    "bathroom": 1.5,
+    "bedroom": 1.8,
+    "kitchen": 2.2,
+    "dining": 1.8,
+    "living": 4.0,
+    "study": 1.8,
+    "garage": 1.0,
+    "laundry": 1.4,
+    "closet": 1.4,
+    "foyer": 1.6,
+    "staircase": 1.0,
+    # No real cap for an UNCLASSIFIED room name - we don't know its actual
+    # function, so there's no real-world size to bound it against (unlike
+    # every category above, each backed by a genuine functional footprint
+    # limit). math.inf is exact and self-documenting here, not a made-up
+    # "big enough" number.
+    "default": math.inf,
 }
 
 # Same category vocabulary/order as blueprint_svg.py's _draw_furniture()
@@ -93,6 +127,16 @@ def min_area_for_room(room_name: str, unit: str, cars: int | None = None) -> flo
         return garage_min_area_sqm(cars or 1, unit)
     spec = ROOM_SIZE_SPECS_M[category]
     return to_plot_unit(spec["min_width"], unit) * to_plot_unit(spec["min_depth"], unit)
+
+
+def max_area_for_room(room_name: str, unit: str, cars: int | None = None) -> float:
+    """Maximum sensible area (in the plot's unit, squared) for a room -
+    ROOM_MAX_MULTIPLIER times its own minimum (see that constant's docstring
+    for why this exists and why garage/staircase are pinned to exactly their
+    minimum). Used by layout_floor() to cap how far a room can grow beyond
+    its guaranteed minimum before the excess is redistributed elsewhere."""
+    category = classify_room_category(room_name)
+    return min_area_for_room(room_name, unit, cars) * ROOM_MAX_MULTIPLIER[category]
 
 
 def garage_min_area_sqm(cars: int, unit: str) -> float:

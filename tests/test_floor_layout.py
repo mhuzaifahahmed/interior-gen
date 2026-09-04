@@ -359,3 +359,86 @@ def test_layout_floor_rectangles_tile_the_plot_exactly_with_a_corridor():
     rects = layout_floor(_private_room_mix(), {"length": 45, "width": 55, "unit": "ft"})
     total_area = sum(_area(r) for r in rects)
     assert abs(total_area - 45 * 55) < 1e-6
+
+
+def test_layout_floor_public_zone_stays_in_the_front_low_y_band():
+    # 2026-09-04: the top-level public-vs-private split now ALWAYS cuts
+    # along the plot's y-axis (public near y=0 "front", private near y=max
+    # "back"), regardless of which side of the plot is longer - matching
+    # this project's own front-yard convention (y=0 is the road-facing
+    # edge). Every public-zone room's y-range must stay entirely below
+    # every private-zone room's y-range.
+    rooms = [
+        {"name": "Living Room", "area": 3},
+        {"name": "Kitchen", "area": 1},
+        {"name": "Bedroom 1", "area": 2},
+        {"name": "Bathroom", "area": 1},
+    ]
+    rects = layout_floor(rooms, {"length": 60, "width": 45, "unit": "ft"})  # WIDER than deep
+    public_max_y = max(r["y"] + r["h"] for r in rects if r["name"] in ("Living Room", "Kitchen"))
+    private_min_y = min(r["y"] for r in rects if r["name"] in ("Bedroom 1", "Bathroom"))
+    assert public_max_y <= private_min_y + 1e-6
+
+
+def test_layout_floor_front_back_zoning_holds_regardless_of_plot_aspect_ratio():
+    # Same guarantee, but with a plot deeper than it is wide (the opposite
+    # aspect ratio) - front-to-back orientation must not flip.
+    rooms = [
+        {"name": "Living Room", "area": 3},
+        {"name": "Kitchen", "area": 1},
+        {"name": "Bedroom 1", "area": 2},
+        {"name": "Bathroom", "area": 1},
+    ]
+    rects = layout_floor(rooms, {"length": 30, "width": 70, "unit": "ft"})  # DEEPER than wide
+    public_max_y = max(r["y"] + r["h"] for r in rects if r["name"] in ("Living Room", "Kitchen"))
+    private_min_y = min(r["y"] for r in rects if r["name"] in ("Bedroom 1", "Bathroom"))
+    assert public_max_y <= private_min_y + 1e-6
+
+
+def test_layout_floor_kitchen_and_dining_are_adjacent():
+    # 2026-09-04: dining moved next to kitchen in _PUBLIC_ORDER_RANKS
+    # (previously separated by living/study) - real user critique that the
+    # kitchen/dining/living relationship wasn't coherent.
+    rooms = [
+        {"name": "Living Room", "area": 3},
+        {"name": "Dining Room", "area": 1.5},
+        {"name": "Kitchen", "area": 1.5},
+        {"name": "Bedroom", "area": 2},
+    ]
+    rects = layout_floor(rooms, {"length": 50, "width": 45, "unit": "ft"})
+    by_name = {r["name"]: r for r in rects}
+    assert _touch(by_name["Dining Room"], by_name["Kitchen"])
+
+
+def test_layout_floor_caps_a_heavily_weighted_room_below_its_raw_proportional_share():
+    # 2026-09-04: a dining room given a huge relative weight must no longer
+    # balloon unbounded - it gets capped near its real-world maximum
+    # (ROOM_MAX_MULTIPLIER) instead of consuming most of the plot.
+    from app.pipeline.room_specs import max_area_for_room
+
+    rooms = [{"name": "Dining Room", "area": 20}, {"name": "Living Room", "area": 1}]
+    dimensions = {"length": 60, "width": 60, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions)
+    dining = next(r for r in rects if r["name"] == "Dining Room")
+    cap = max_area_for_room("Dining Room", "ft")
+    # Allow a small margin for the single-pass redistribution's documented
+    # residual overflow (see _clamp_to_max_and_redistribute()'s docstring) -
+    # the real guarantee is "nowhere near its old unbounded raw share", not
+    # a bit-exact cap.
+    assert _area(dining) < cap * 1.5
+
+
+def test_layout_floor_pinned_garage_never_absorbs_redistributed_excess():
+    # A garage (ROOM_MAX_MULTIPLIER == 1.0, "pinned") must stay at its real
+    # functional minimum even when every other room in the same zone also
+    # hits its own cap and has nowhere else to send its excess.
+    from app.pipeline.room_specs import min_area_for_room
+
+    rooms = [{"name": "Garage", "area": 1}, {"name": "Bedroom", "area": 1}]
+    dimensions = {"length": 80, "width": 80, "unit": "ft"}  # huge plot, tiny room list
+    rects = layout_floor(rooms, dimensions)
+    garage = next(r for r in rects if r["name"] == "Garage")
+    garage_min = min_area_for_room("Garage", "ft", cars=1)
+    # Within a small tolerance of its true minimum - never inflated just
+    # because the plot happens to be much bigger than the room list needs.
+    assert _area(garage) < garage_min * 1.2

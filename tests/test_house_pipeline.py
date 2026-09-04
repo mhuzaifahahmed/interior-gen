@@ -619,6 +619,36 @@ def test_run_house_pipeline_injects_a_garage_room_when_requested_but_missing(mon
         assert "Garage" in room_names
 
 
+def test_run_house_pipeline_injects_an_entry_room_when_garage_requested_but_no_foyer(monkeypatch):
+    # 2026-09-04: a garage requested but no foyer/entry/lobby room present
+    # must guarantee a real Entry room too, so blueprint_svg.py's garage-
+    # door-suppression rule has a real room to route garage traffic through
+    # instead of straight into Living Room.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hentry1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hentry1", status="queued", plot_image_key="hentry1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = FakeProvider()
+    run_house_pipeline(
+        "hentry1", provider, storage, {"length": 60, "width": 80, "unit": "ft"}, prompt="Extras: 2 car garage"
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hentry1")
+        assert house_project.status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+        room_names = [r["name"] for r in room_layout["floors"][0]["rooms"]]
+        assert "Garage" in room_names
+        assert "Entry" in room_names
+
+
 class TwoFloorProvider(FakeProvider):
     """Returns a real 2-floor room_layout, neither floor including a
     staircase - used to verify the real per-floor staircase injection

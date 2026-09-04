@@ -134,7 +134,12 @@ def _is_cancelled(session: Session, house_project: HouseProject) -> bool:
 # still write a floor_plan image to a project the user no longer sees
 # (list_house_projects excludes cancelled rows), same "harmless orphan"
 # treatment already accepted elsewhere in this file for S3 objects.
-HOUSE_PROMPT_VERSION = "v11"
+HOUSE_PROMPT_VERSION = "v12"  # v12 (2026-09-04): true front-to-back zoning, real room min/max
+# proportions, kitchen-dining adjacency reordering, and garage-buffered-by-Entry-room door
+# suppression - see floor_layout.py/blueprint_svg.py module docstrings for the full detail.
+# Entry-room auto-injection (mirroring the existing garage injection just above it in this
+# file) changes what room_layout can contain, which feeds into build_house_prompt()'s
+# room_layout summary.
 
 
 def _run_floor_plan_stage(
@@ -341,6 +346,25 @@ def run_house_pipeline(
                             else 1.0
                         )
                         ground_floor_rooms.append({"name": "Garage", "area": avg_weight})
+
+                    # Garage buffered from living space (2026-09-04, real user
+                    # critique: "do not force garage circulation through the
+                    # main living room") - guarantee a real Entry/foyer room
+                    # exists to route through, same "real data, don't leave it
+                    # to chance" pattern as the garage injection just above.
+                    # blueprint_svg.py's _should_suppress_garage_direct_door()
+                    # relies on this room actually existing to suppress a
+                    # direct Garage<->Living/Kitchen/Dining door.
+                    has_entry = any(
+                        classify_room_category(str(r.get("name") or "")) == "foyer" for r in ground_floor_rooms
+                    )
+                    if not has_entry:
+                        avg_weight = (
+                            sum(float(r.get("area") or 1) for r in ground_floor_rooms) / len(ground_floor_rooms)
+                            if ground_floor_rooms
+                            else 1.0
+                        )
+                        ground_floor_rooms.append({"name": "Entry", "area": avg_weight})
 
                 # Every floor of a multi-floor building - guarantee a REAL
                 # reserved staircase room exists (2026-08-29), not just a

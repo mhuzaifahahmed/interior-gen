@@ -1321,8 +1321,79 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   - **Still NOT done** (real, harder problems - the user's "public at front / private at back" front-to-
     back orientation is only partially honored: the public/private split still follows the plot's longer
     axis, so on a wide plot public/private read as left/right rather than front/back; also no L-shaped/
-    non-rectangular rooms, no double-loaded corridor, no full adjacency-graph solver). See
-    `future-plans/house-layout-spec-checklist.md`.
+    non-rectangular rooms, no double-loaded corridor, no full adjacency-graph solver). **Fixed the very
+    next day - see v14 immediately below**, which addresses this exact "still not done" note.
+- **v14 (2026-09-04): true front-to-back zoning, real room min/max proportions, kitchen-dining
+  adjacency, and garage buffered by a real Entry room.** A full, detailed 10-priority architectural
+  critique of a live layout (circulation → zoning → proportions → living/dining/kitchen → garage →
+  bedrooms → bathrooms → storage → doors/windows → furniture), matching this project's own
+  `future-plans/house-layout-spec-checklist.md` gaps #10/#11/#15/#18 almost exactly: garage sat in a
+  disruptive central position instead of the front, dining was oversized relative to its function, and
+  public rooms (garage/entry/living/kitchen) scattered instead of flowing front-to-back from the
+  entrance. Scoped to a Phase 1 covering the highest-leverage items buildable within the existing pure
+  rectangle slice-and-dice model (see `future-plans/house-layout-spec-checklist.md` for what's still
+  explicitly deferred - non-rectangular rooms, a real validate-regenerate loop, true road-facing
+  orientation with no plot-orientation input).
+  - **True front-to-back zoning** (`floor_layout.py`'s `_split_box_along_y()`): the ONE top-level
+    public-vs-private split now ALWAYS cuts along the plot's y-axis (public in the low-y "front" band,
+    private in the high-y "back" band), replacing the exact v13 limitation noted above where it cut
+    along whichever side of the box was longer. This project already treats y=0 as the road-facing
+    front everywhere else (`house_requirements.py`'s front-yard convention reserves depth along that
+    same edge) - this makes the layout engine consistent with its own established convention on every
+    plot, regardless of aspect ratio. Every nested split (`_slice()` within each zone, the hallway
+    placement in `_layout_private_zone()`) is unaffected - `_split_box_along_y()` returns the exact same
+    `(front_box, back_box, split_along_width=False)` shape `_split_box()` already did for its own
+    h<w branch, so `_layout_private_zone()` needed zero changes.
+  - **Real room min/max proportions, not min/unbounded** (`room_specs.ROOM_MAX_MULTIPLIER`,
+    `max_area_for_room()`, `floor_layout._clamp_to_max_and_redistribute()`): previously a room's area
+    above its guaranteed minimum was driven by Gemini's relative weight ALONE, unbounded on the high
+    end - exactly why a heavily-weighted dining room could balloon. Each category now has a real max
+    multiplier on its own minimum (bedroom 1.8×, bathroom 1.5×, kitchen 2.2×, dining 1.8×, living 4.0×
+    since it's meant to be the dominant social space, garage/staircase 1.0× - pinned to exactly their
+    functional minimum, never grown by leftover weight; unclassified/`"default"` rooms get
+    `math.inf` - no real-world size exists to bound an unknown room type against). A single clamp-then-
+    redistribute pass gives any excess taken from a capped room to other rooms that can still absorb it.
+    **A real bug caught via visual inspection, not just unit tests**: the first version redistributed
+    excess to ANY non-capped room including PINNED ones' own leftover pool, which (in a specific
+    test's room mix - a plot much bigger than a 3-room list's combined caps needed) caused ALL rooms
+    including a real "Staircase" room to hit their caps simultaneously, triggering a fallback where
+    `_slice()`'s ratio-only proportional splitting rescaled everything to fill the box - and because
+    Staircase's cap was tiny relative to Living Room's, it got squeezed into an unusable 40×0.87ft
+    sliver, falling below `_FURNITURE_MIN_BOX_H` and silently drawing no staircase symbol in EITHER
+    the single- or multi-floor render (confirmed via a real before/after pixel diff, not assumed).
+    Fixed with a three-tier redistribution (`pinned` param, parallel to weights): tier 1 = non-pinned,
+    non-capped rooms; tier 2 = non-pinned rooms even past their own cap (better to let a flexible room
+    type modestly exceed its cap than distort a pinned one); tier 3 = every room, only reachable when a
+    zone is ENTIRELY pinned rooms. Garage/staircase now never absorb redistributed excess under normal
+    circumstances, confirmed by `test_layout_floor_pinned_garage_never_absorbs_redistributed_excess`
+    (an 80×80ft plot for just a Garage+Bedroom stays pinned near its true ~157 sqft minimum, not
+    inflated by the huge plot).
+  - **Kitchen-dining adjacency** (`_PUBLIC_ORDER_RANKS` in `floor_layout.py`): dining moved to
+    immediately precede kitchen (previously separated by living/study - not even list-adjacent, so the
+    "list order → likely spatial adjacency" mechanism this whole scheme relies on never applied to
+    them). Kitchen still ranks last (closest to the hallway transition, unchanged intent).
+  - **Garage buffered from living space via a real Entry room**
+    (`generate_house.py`'s garage-injection block gained an Entry-injection sibling;
+    `blueprint_svg._should_suppress_garage_direct_door()`): when a garage was requested but no
+    foyer/entry/lobby room exists, a real "Entry" room is now guaranteed to exist (same "real data,
+    don't leave it to chance" pattern as the pre-existing garage/staircase injection). A direct door
+    between Garage and Living/Kitchen/Dining is suppressed whenever an Entry room exists on the floor -
+    garage traffic routes through Entry instead (the generic door loop already draws Garage↔Entry and
+    Entry↔Living/Kitchen/Dining doors for free, same mechanism the Hallway rect already relies on for
+    the private zone). `HOUSE_PROMPT_VERSION` bumped to `v12`.
+  - **Verification**: rendered the exact reported room program (garage/entry/living/dining/kitchen + 3
+    bedroom+bathroom suites) plus 3 edge cases (a 90×30ft wide/shallow plot stress-testing the forced
+    y-axis split, a no-garage floor confirming Entry injection/suppression correctly no-ops, and a
+    24×22ft small plot near the feasibility boundary confirming max-area capping doesn't fight the
+    min-area guarantee) and visually inspected all four - confirmed garage-to-living door correctly
+    absent (solid wall, no arc) while Garage↔Entry↔Living still connects, kitchen/dining adjacent with a
+    door between them, and front-back zoning holding on every plot aspect ratio. 454/454 tests passing
+    (12 new).
+  - **Still NOT done** (real, harder problems, left for later - see
+    `future-plans/house-layout-spec-checklist.md`): non-rectangular/L-shaped rooms, a double-loaded
+    corridor, a full adjacency-graph solver, a real validate-then-regenerate loop, true road-facing
+    orientation (no plot-orientation input exists at all), and zone-level (public-vs-private) area
+    capping (Phase 1's max-area caps are intra-zone only).
 
 ## Architecture (big picture)
 

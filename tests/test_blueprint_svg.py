@@ -2,7 +2,11 @@ from io import BytesIO
 
 from PIL import Image
 
-from app.pipeline.blueprint_svg import _should_suppress_direct_door, render_floor_blueprint
+from app.pipeline.blueprint_svg import (
+    _should_suppress_direct_door,
+    _should_suppress_garage_direct_door,
+    render_floor_blueprint,
+)
 from app.pipeline.floor_layout import layout_floor
 
 
@@ -62,8 +66,24 @@ def test_render_floor_blueprint_draws_staircase_only_for_multi_floor():
     # circulation zone / generate_house.py's injection), not a symbol drawn
     # inside whichever room happened to be biggest - so the rects passed in
     # must actually include one for a symbol to be drawn at all.
-    dimensions = {"length": 40, "width": 60, "unit": "ft"}
-    rooms = [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}, {"name": "Staircase", "area": 0.5}]
+    #
+    # Room mix deliberately has 4 front-zone rooms (not 2) and a plot small
+    # enough that not every room hits its max-area cap (see floor_layout.py's
+    # 2026-09-04 min/max proportions) - a front zone with only [Living Room,
+    # Staircase] on a large plot previously left Staircase sharing the box's
+    # FULL width against a dominant, capped Living Room, producing an
+    # unusably thin sliver (a real, pre-existing, documented limitation -
+    # area is guaranteed, aspect ratio isn't) that fell below
+    # _FURNITURE_MIN_BOX_H and silently drew no staircase symbol at all, in
+    # BOTH the single- and multi-floor case. This mix keeps Staircase's
+    # resulting box a reasonable, furniture-symbol-sized shape instead.
+    dimensions = {"length": 30, "width": 40, "unit": "ft"}
+    rooms = [
+        {"name": "Living Room", "area": 2},
+        {"name": "Kitchen", "area": 1},
+        {"name": "Bedroom", "area": 1},
+        {"name": "Staircase", "area": 1},
+    ]
     rects = layout_floor(rooms, dimensions)
 
     single_floor_png = render_floor_blueprint(1, rects, dimensions, total_floors=1)
@@ -235,5 +255,43 @@ def test_render_floor_blueprint_suppresses_bedroom_to_bedroom_doors_when_hallway
     ]
     rects = layout_floor(rooms_with_corridor, dimensions)
     assert any(r["name"] == "Hallway" for r in rects)
+    png_bytes = render_floor_blueprint(1, rects, dimensions)
+    assert png_bytes.startswith(b"\x89PNG")
+
+
+def test_should_suppress_garage_direct_door_between_garage_and_living():
+    assert _should_suppress_garage_direct_door({"name": "Garage"}, {"name": "Living Room"}) is True
+
+
+def test_should_suppress_garage_direct_door_between_garage_and_kitchen():
+    assert _should_suppress_garage_direct_door({"name": "Garage"}, {"name": "Kitchen"}) is True
+
+
+def test_should_suppress_garage_direct_door_between_garage_and_dining():
+    assert _should_suppress_garage_direct_door({"name": "Garage"}, {"name": "Dining Room"}) is True
+
+
+def test_should_suppress_garage_direct_door_keeps_garage_to_entry_connection():
+    # The garage must still be able to reach the entry - that's how it
+    # connects to the rest of the house at all.
+    assert _should_suppress_garage_direct_door({"name": "Garage"}, {"name": "Entry"}) is False
+
+
+def test_should_suppress_garage_direct_door_leaves_non_garage_pairs_untouched():
+    assert _should_suppress_garage_direct_door({"name": "Living Room"}, {"name": "Kitchen"}) is False
+
+
+def test_render_floor_blueprint_suppresses_garage_to_living_door_when_entry_present():
+    # End-to-end: with a real Entry room on the floor, the garage must not
+    # get a direct door to Living Room - confirms the door-suppression logic
+    # actually changes real rendered output, not just the unit-level helper.
+    dimensions = {"length": 50, "width": 45, "unit": "ft"}
+    rooms = [
+        {"name": "Garage", "area": 2},
+        {"name": "Entry", "area": 1},
+        {"name": "Living Room", "area": 3},
+        {"name": "Bedroom", "area": 2},
+    ]
+    rects = layout_floor(rooms, dimensions)
     png_bytes = render_floor_blueprint(1, rects, dimensions)
     assert png_bytes.startswith(b"\x89PNG")

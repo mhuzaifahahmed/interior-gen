@@ -95,19 +95,55 @@ added in the same pass (`_public_order_key`): the public zone's rooms are
 ordered garage/entry -> living -> dining -> study -> kitchen so the
 entrance/garage cluster lands together at the "main side" and the kitchen
 sits next to the private zone's hallway as the transition, instead of
-scattering by whatever order Gemini returned. Explicitly NOT attempted here
-(real, harder problems, left for later - see
-future-plans/house-layout-spec-checklist.md):
-non-rectangular/L-shaped rooms, a double-loaded (two-facing-rows) corridor,
-plumbing-zone vertical stacking across floors, a full adjacency-graph
-solver. Small private zones (fewer than MIN_ROOMS_FOR_CORRIDOR rooms, or not
-enough depth left after reserving the corridor) fall back unchanged to the
-plain `_slice()` behavior that existed before this - confirmed by the
-pre-existing test_layout_floor_preserves_relative_order_within_a_zone test
-(only 2 private rooms) continuing to pass untouched.
+scattering by whatever order Gemini returned. Small private zones (fewer
+than MIN_ROOMS_FOR_CORRIDOR rooms, or not enough depth left after reserving
+the corridor) fall back unchanged to the plain `_slice()` behavior that
+existed before this - confirmed by the pre-existing
+test_layout_floor_preserves_relative_order_within_a_zone test (only 2
+private rooms) continuing to pass untouched.
+
+TRUE FRONT-TO-BACK ZONING + REAL MIN/MAX ROOM PROPORTIONS + KITCHEN-DINING
+ADJACENCY (2026-09-04, real user critique of a live layout: garage sat in a
+disruptive central position instead of the front, the dining room was
+oversized relative to its function, and kitchen/dining/living didn't read
+as a coherent zone). Three changes:
+  1. `layout_floor()`'s ONE top-level public-vs-private split now ALWAYS
+     cuts along the plot's y-axis (`_split_box_along_y()`, public in the
+     low-y "front" band, private in the high-y "back" band) instead of
+     `_split_box()`'s "cut whichever side is longer" rule - this project
+     already treats the plot's y=0 edge as the road-facing front everywhere
+     else (house_requirements.py's front-yard convention reserves depth
+     along that same edge), so this makes the layout engine consistent with
+     its own established front-facing convention on every plot, regardless
+     of aspect ratio. Every NESTED split (`_slice()` within each zone, the
+     hallway placement in `_layout_private_zone()`) is unaffected.
+  2. `ROOM_MAX_MULTIPLIER` (room_specs.py) caps how far a room can grow
+     ABOVE its guaranteed minimum before the excess area is redistributed to
+     other rooms that haven't hit their own cap yet (`_clamp_to_max_and_
+     redistribute()`) - previously a room's area above its minimum was
+     driven by Gemini's relative weight alone, unbounded, which is exactly
+     why a heavily-weighted dining room could balloon. `garage`/`staircase`
+     are pinned to a 1.0 multiplier (exactly their functional minimum,
+     never grown by leftover weight) since their size is a real requirement
+     (vehicle clearance / a stair run), not a preference.
+  3. `_PUBLIC_ORDER_RANKS` moved `dining` to immediately precede `kitchen`
+     (previously separated by `study`/`living`, so they were never even
+     list-adjacent) - kitchen still ranks last (closest to the hallway
+     transition, unchanged intent), with dining now beside it.
+
+Explicitly NOT attempted (real, harder problems, left for later - see
+future-plans/house-layout-spec-checklist.md): non-rectangular/L-shaped
+rooms, a double-loaded (two-facing-rows) corridor, plumbing-zone vertical
+stacking across floors, a full adjacency-graph solver, a real validate-
+then-regenerate loop, true road-facing orientation (this project has no
+plot-orientation input at all - the y=0-is-front convention is a project-
+wide assumption, not a verified fact), and zone-level (public-vs-private)
+area capping (the max-area caps above are intra-zone only - an unusually
+weight-heavy public room list could still claim a disproportionate share of
+the total footprint before the private zone's own split).
 """
 
-from app.pipeline.room_specs import classify_room_category, min_area_for_room, to_plot_unit
+from app.pipeline.room_specs import classify_room_category, max_area_for_room, min_area_for_room, to_plot_unit
 
 # A real, standard single-loaded corridor width - reserved along whichever
 # edge of the private zone's box borders the public/circulation zone, so the
@@ -179,11 +215,20 @@ def _zone_key(room_name: str) -> int:
 # bedrooms' hallway, instead of scattering them by whatever order Gemini
 # happened to return. A STABLE secondary sort key: rooms with the same rank
 # keep Gemini's own relative order.
+#
+# 2026-09-04: dining and kitchen moved to ADJACENT ranks (previously
+# dining=2/kitchen=4, separated by study - not even list-adjacent, so the
+# "list order -> likely spatial adjacency" mechanism this whole scheme
+# relies on never applied to them). Real user critique: "the kitchen/dining/
+# living relationship is not sufficiently coherent." Kitchen still stays
+# LAST among these ranks (closest to the private zone's hallway, unchanged
+# intent) with dining now immediately before it, so the two are list-
+# adjacent, not living any longer.
 _PUBLIC_ORDER_RANKS = (
     ("garage", "entry", "foyer", "lobby"),            # entrance / vehicle side (the "main side")
     ("living", "lounge", "family", "drawing"),         # social core
-    ("dining",),                                        # dining, beside the social core
     ("study", "office"),                                # work, quieter end of public
+    ("dining",),                                        # dining, immediately beside the kitchen
     ("kitchen",),                                       # kitchen last - the transition toward the private zone
     ("powder", "guest bath", "guest wc", "guest toilet"),
 )
@@ -247,6 +292,23 @@ def layout_floor(rooms: list[dict], dimensions: dict, garage_cars: int | None = 
             + remaining_area * (raw_weights[i] / weight_sum if weight_sum else 1 / len(raw_weights))
             for i in range(len(names))
         ]
+        # ROOM PROPORTION CAP (2026-09-04, see module docstring's "REAL
+        # MIN/MAX ROOM PROPORTIONS" section) - clamp each room's area to its
+        # own real-world maximum and give the excess to whichever rooms
+        # haven't hit their cap yet, so one heavily-weighted room (e.g.
+        # dining) can no longer balloon just because Gemini assigned it a
+        # large relative weight.
+        max_areas = [max_area_for_room(name, unit, garage_cars) for name in names]
+        # PINNED rooms (garage/staircase, ROOM_MAX_MULTIPLIER == 1.0) must
+        # never absorb redistributed excess - their size is a real
+        # functional requirement (vehicle clearance / a stair run), not a
+        # preference, and letting them balloon past their minimum would
+        # produce an unusable shape (e.g. a stair run stretched into a thin
+        # sliver) purely as a side effect of OTHER rooms hitting their own
+        # caps. See _clamp_to_max_and_redistribute()'s docstring for exactly
+        # how this changes which rooms are eligible to receive it.
+        pinned = [classify_room_category(name) in ("garage", "staircase") for name in names]
+        weights = _clamp_to_max_and_redistribute(weights, max_areas, pinned)
     else:
         # Plot smaller than the guaranteed minimums - expected to already
         # have been caught by feasibility.check_feasibility() before this is
@@ -266,9 +328,15 @@ def layout_floor(rooms: list[dict], dimensions: dict, garage_cars: int | None = 
     front_names, private_names = names[:private_start], names[private_start:]
     front_weights, private_weights = weights[:private_start], weights[private_start:]
     front_total, private_total = sum(front_weights), sum(private_weights)
-    left_fraction = front_total / (front_total + private_total) if (front_total + private_total) else 0.5
+    front_fraction = front_total / (front_total + private_total) if (front_total + private_total) else 0.5
 
-    front_box, private_box, split_along_width = _split_box(0.0, 0.0, length, width, left_fraction)
+    # TRUE FRONT-TO-BACK ZONING (2026-09-04, see module docstring) - this ONE
+    # top-level public-vs-private split always cuts along the plot's y-axis
+    # (front/low-y for public, back/high-y for private), regardless of which
+    # side of the box is longer. Every NESTED split (_slice() within each
+    # zone, the hallway placement in _layout_private_zone()) is unaffected -
+    # they still pick whichever axis suits that sub-region.
+    front_box, private_box, split_along_width = _split_box_along_y(0.0, 0.0, length, width, front_fraction)
     front_rects = _slice(front_names, front_weights, *front_box, front_total)
     private_rects = _layout_private_zone(
         private_names, private_weights, *private_box, unit, split_along_width
@@ -295,6 +363,96 @@ def _split_box(
     else:
         left_h = h * left_fraction
         return (x, y, w, left_h), (x, y + left_h, w, h - left_h), False
+
+
+def _split_box_along_y(
+    x: float, y: float, w: float, h: float, front_fraction: float
+) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float], bool]:
+    """Splits one box along its HEIGHT axis ALWAYS (front/low-y band first,
+    back/high-y band second), regardless of which side is longer - unlike
+    _split_box()'s "always cut the longer side" rule. Used ONLY for
+    layout_floor()'s single top-level public-vs-private split (see module
+    docstring's "TRUE FRONT-TO-BACK ZONING" section) - this project already
+    treats the plot's y=0 edge as the road-facing front everywhere else
+    (house_requirements.py's front-yard convention), so orienting public/
+    private front-to-back along that same axis keeps every part of this
+    codebase consistent about which edge is "the front."
+
+    Returns (front_box, private_box, split_along_width) in the exact same
+    shape _split_box() returns, so _layout_private_zone() needs no changes -
+    a y-axis split always sets split_along_width=False (this is literally
+    _split_box()'s own w<h branch, just taken unconditionally instead of
+    only when h happens to be the shorter side)."""
+    front_h = h * front_fraction
+    return (x, y, w, front_h), (x, y + front_h, w, h - front_h), False
+
+
+def _clamp_to_max_and_redistribute(
+    weights: list[float], max_areas: list[float], pinned: list[bool]
+) -> list[float]:
+    """Clamps each room's computed area to its own real-world maximum (see
+    room_specs.ROOM_MAX_MULTIPLIER), then gives the excess taken from any
+    clamped room to whichever rooms can still absorb it - preferring
+    non-pinned rooms that haven't hit their own cap yet, split
+    proportionally to their current share of that group.
+
+    `pinned` (parallel to weights/max_areas) marks rooms whose size is a
+    real functional requirement, not a preference (garage/staircase,
+    ROOM_MAX_MULTIPLIER == 1.0 - see the caller). Pinned rooms are eligible
+    to GIVE UP excess (they're still clamped to their cap above) but are
+    NEVER a redistribution TARGET, at any tier below - a pinned room must
+    never be pushed larger than its own functional minimum just because
+    other rooms in the same zone also hit their caps.
+
+    Three-tier fallback for WHERE the excess goes, each only used if the
+    previous tier has no eligible room:
+      1. Non-pinned rooms that haven't hit their own cap yet (the common
+         case - e.g. a capped dining room's excess flows to an uncapped
+         living room).
+      2. Non-pinned rooms even if they've ALSO hit their cap (better to let
+         a flexible room type - living, bedroom, kitchen... - modestly
+         exceed its own cap than to distort a pinned room's shape).
+      3. Every room, pinned or not (only reachable when a zone consists
+         ENTIRELY of pinned rooms, e.g. a "floor" that's just a garage and a
+         staircase - genuinely has nowhere non-pinned to put the excess).
+
+    Deliberately a SINGLE redistribution pass, not an iterative solver: a
+    tier-1 room boosted by this pass could in principle end up exceeding ITS
+    OWN cap too, in which case the small residual overflow is simply
+    accepted rather than clamped again - consistent with this module's
+    existing "not a full constraint solver" honesty elsewhere (see the
+    MINIMUM-AREA GUARANTEE section above)."""
+    weights = list(weights)
+    excess = 0.0
+    capped = [False] * len(weights)
+    for i, (w, cap) in enumerate(zip(weights, max_areas)):
+        if w > cap:
+            excess += w - cap
+            weights[i] = cap
+            capped[i] = True
+
+    if excess <= 0:
+        return weights
+
+    receivers = [i for i in range(len(weights)) if not pinned[i] and not capped[i]]
+    if not receivers:
+        receivers = [i for i in range(len(weights)) if not pinned[i]]
+    if not receivers:
+        # Every room in this zone is pinned - genuinely nowhere non-pinned
+        # to put the excess. Since _slice() only ever uses these numbers as
+        # RATIOS (it always tiles 100% of whatever box it's given), leaving
+        # them under-summed here doesn't waste area - _slice() proportionally
+        # rescales everything up to fill the box, preserving the RELATIVE
+        # relationship between the capped values. Accepted as a rare,
+        # pathological edge case rather than engineered around further.
+        return weights
+
+    receiver_total = sum(weights[i] for i in receivers)
+    for i in receivers:
+        share = weights[i] / receiver_total if receiver_total else 1 / len(receivers)
+        weights[i] += excess * share
+
+    return weights
 
 
 def _slice(

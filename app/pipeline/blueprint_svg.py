@@ -157,11 +157,14 @@ def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dic
 
     door_len_px = max(10.0, min(26.0, 2.6 * scale))
     has_hallway = any(r["name"] == "Hallway" for r in rects)
+    has_entry = any(classify_room_category(r["name"]) == "foyer" for r in rects)
     for a, b in combinations(rects, 2):
         edge = _shared_edge(a, b)
         if edge is None:
             continue
         if has_hallway and _should_suppress_direct_door(a, b):
+            continue
+        if has_entry and _should_suppress_garage_direct_door(a, b):
             continue
         _draw_door(draw, edge, plot_x0, plot_y0, scale, door_len_px)
 
@@ -286,6 +289,31 @@ def _should_suppress_direct_door(a: dict, b: dict) -> bool:
     if suite_a is not None and suite_a == suite_b:
         return False
     return True
+
+
+_GARAGE_SUPPRESSED_NEIGHBORS = ("living", "kitchen", "dining")
+
+
+def _should_suppress_garage_direct_door(a: dict, b: dict) -> bool:
+    """Garage buffered from living space (2026-09-04, real user critique:
+    "the garage takes a very large and somewhat disruptive central portion
+    of the plan" / "do not force garage circulation through the main living
+    room"). When a real Entry/foyer room exists on this floor, a direct door
+    between the Garage and Living/Kitchen/Dining is suppressed - garage
+    traffic routes through the Entry room instead (the generic door loop
+    already draws Garage<->Entry and Entry<->Living/Kitchen/Dining doors for
+    free, same mechanism the Hallway rect already relies on for the private
+    zone). No suppression when there's no Entry room on the floor - direct
+    adjacency stays the only way in, same fallback philosophy as the
+    hallway-corridor threshold in _should_suppress_direct_door().
+
+    Only called when has_entry is True (see the door-drawing loop above)."""
+    a_cat, b_cat = classify_room_category(a["name"]), classify_room_category(b["name"])
+    categories = {a_cat, b_cat}
+    if "garage" not in categories:
+        return False
+    other_cat = b_cat if a_cat == "garage" else a_cat
+    return other_cat in _GARAGE_SUPPRESSED_NEIGHBORS
 
 
 # Real bug hit and fixed via visual inspection (2026-09-02): the real

@@ -38,20 +38,29 @@ more of this gets built.
    validate-then-optimize loop** - single deterministic pass only; still no double-loaded (two-row)
    corridor, non-rectangular rooms, or a true adjacency-graph solver.
 10. **Functional zoning (public/semi-public/private/service/circulation)** — 🟡 Public/private zoning
-    already existed before this pass. **Semi-public/service/circulation aren't distinct categories** -
-    folded into the coarse public/private split.
+    already existed before this pass. **2026-09-04**: the public/private split is now genuinely
+    front-to-back (`floor_layout._split_box_along_y()`), not just left/right on wide plots - see
+    CLAUDE.md's v14 entry. **Semi-public/service/circulation still aren't distinct categories** -
+    folded into the coarse public/private split (circulation/staircase is its own third zone rank, but
+    not a full semi-public/service split).
 11. **Garage (road-facing, real vehicle-clearance sizing)** — 🟡 Real minimum area scaled by car count is
-    built. **Road-facing/direct-vehicle-access is NOT guaranteed** - this project has no plot-orientation
-    input at all (documented limitation in `house_requirements.py`).
+    built, and (2026-09-04) a garage is now BUFFERED from living space by a real, auto-injected Entry
+    room, with a direct Garage↔Living/Kitchen/Dining door suppressed - see CLAUDE.md's v14 entry.
+    **Road-facing/direct-vehicle-access is still NOT guaranteed** - this project has no plot-orientation
+    input at all (documented limitation in `house_requirements.py`); the garage lands in the front
+    (low-y) public band as of v14, which is a real improvement but not a verified road-facing edge.
 12. **Front yard (reserved before building, not squeezed in after)** — 🟡 Depth is reserved before any
     room is placed. **No pedestrian-path/vehicle-movement modeling** beyond the raw area reservation.
 13. **Bedrooms (min area, exterior wall, window, door, furniture, clearance)** — 🟡 Minimum area is
-    guaranteed. Exterior-wall/window placement is the pre-existing heuristic (unchanged this pass), not a
-    new guarantee.
-14. **Bathrooms (fixture geometry, no collisions)** — 🟡 Minimum area only; fixture-collision handling
-    (shower-only-with-room-to-spare) predates this pass, unchanged.
-15. **Kitchens (counters/sink/stove/fridge, near dining)** — 🟡 Minimum area guaranteed; adjacency to
-    dining is only as good as the existing public-zone clustering, not a dedicated adjacency rule.
+    guaranteed, and (2026-09-04) a real MAXIMUM is now also enforced (`room_specs.ROOM_MAX_MULTIPLIER`),
+    so a bedroom can no longer balloon OR shrink unboundedly. Exterior-wall/window placement is the
+    pre-existing heuristic (unchanged this pass), not a new guarantee.
+14. **Bathrooms (fixture geometry, no collisions)** — 🟡 Minimum (and now maximum) area only;
+    fixture-collision handling (shower-only-with-room-to-spare) predates this pass, unchanged.
+15. **Kitchens (counters/sink/stove/fridge, near dining)** — 🟡 Minimum/maximum area guaranteed.
+    **2026-09-04**: kitchen and dining are now adjacent ranks in `_PUBLIC_ORDER_RANKS`, a real targeted
+    fix (previously separated by living/study, not even list-adjacent) - still the same soft, list-order
+    heuristic as the rest of this zoning scheme, not a hard geometric adjacency guarantee.
 16. **Staircase (real footprint, straight/L/U choice, UP/DN)** — ✅ Done (2026-08-29). A real "Staircase"
     room is now injected into every floor's room list (`generate_house.py`), participates in the same
     minimum-area guarantee and feasibility check as any other room (`room_specs.py`'s "staircase"
@@ -68,9 +77,13 @@ more of this gets built.
     an arbitrary interior rectangle at the exact same coordinates on every floor without a fundamentally
     different, non-rectangular-region layout algorithm. Plumbing-zone alignment (bathrooms/kitchens
     stacking vertically) is still not attempted at all.
-18. **Room dimensions as min/preferred/max, not fixed** — 🟡 Minimum is real. "Preferred/max" isn't an
-    explicit ceiling - Gemini's relative weight acts as an implicit preference signal on top of the
-    guaranteed minimum, but nothing caps how large a room can get.
+18. **Room dimensions as min/preferred/max, not fixed** — 🟡 Minimum was already real. **2026-09-04**: a
+    real MAXIMUM now also exists (`room_specs.ROOM_MAX_MULTIPLIER`/`max_area_for_room()`,
+    `floor_layout._clamp_to_max_and_redistribute()`) - Gemini's relative weight still acts as the
+    preference signal WITHIN that `[min, max]` band, and excess beyond a capped room's max is
+    redistributed to other rooms (never to garage/staircase, which are pinned to exactly their
+    functional minimum). See CLAUDE.md's v14 entry. **Still not "preferred" as a genuine third number**
+    distinct from min/max - the weight-driven share within the band plays that role instead.
 19. **Feasibility engine (FEASIBLE/TIGHT/NOT FEASIBLE, hard gate)** — ✅ This pass's core deliverable
     (`app/pipeline/feasibility.py`), wired as a hard gate per your explicit decision.
 20. **Validation stage (overlaps, doors, windows, stairs connect floors, garage access, etc.)** — ❌ Not
@@ -115,8 +128,11 @@ more of this gets built.
 **#9 gained a real circulation corridor (2026-09-02)** - see above for exactly what's still missing
 (double-loaded/two-row corridor, non-rectangular rooms, no validate-then-optimize loop). **#16 is now
 done, #17 is partial** (2026-08-29 - real staircase room + circulation zone; see above for
-exactly what's still missing there: pixel-exact interior alignment and plumbing-zone stacking). In
-priority order, the real remaining gaps are now: **#20/21 (a real post-generation validator + candidate
-scoring)**, **#13 (a real per-room exterior-wall/window guarantee, not just the existing heuristic)**, and
-the remaining sliver of **#17 (plumbing-zone vertical alignment)**. Everything else is either done or a
-smaller polish item.
+exactly what's still missing there: pixel-exact interior alignment and plumbing-zone stacking).
+**2026-09-04: #10/#11/#15/#18 all moved from open gaps to solid 🟡 (see CLAUDE.md's v14 entry)** - true
+front-to-back zoning, real min/max room proportions, kitchen-dining adjacency, and a garage buffered by a
+real Entry room. In priority order, the real remaining gaps are now: **#20/21 (a real post-generation
+validator + candidate scoring)**, **#13 (a real per-room exterior-wall/window guarantee, not just the
+existing heuristic)**, non-rectangular/L-shaped rooms (would unlock more realistic room shapes than the
+current pure rectangle slice-and-dice), and the remaining sliver of **#17 (plumbing-zone vertical
+alignment)**. Everything else is either done or a smaller polish item.
