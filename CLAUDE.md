@@ -1537,26 +1537,43 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     `tests/test_house_pipeline.py`) uses a `FakeProvider` subclass whose `generate_room_layout()` already
     returns a self-invented Garage room, with no "garage" mention anywhere in the pipeline's prompt text -
     asserts the persisted `room_layout_json` has no Garage room at all. 473/473 passing (1 new).
-  - **A separate, NOT-a-bug-in-this-repo question asked alongside the garage report: why does the AI
-    "Concept Layout" card (the friend-hosted Kaggle SDXL+ControlNet model, `kaggle_autocad.py`) have a
-    dark/gray background instead of white?** This is the vendor model's own rendering aesthetic, not code
-    in this repo - `app/pipeline/conditioning_image.py`'s `render_conditioning_edge_map()` sends the
-    notebook a white-lines-on-BLACK Canny-style edge map (the standard input format for that ControlNet
-    type) as its geometry conditioning; at `controlnet_conditioning_scale=0.95` (deliberately high so the
-    model traces OUR real room geometry closely - see "ControlNet conditioning" history above), the model
-    also partly inherits that dark background rather than rendering a clean white sheet. This is a
-    **known, already-tracked, NOT-yet-fully-resolved cosmetic limitation** -
-    `future-plans/todo-and-pending-checks.md`'s "Planned: make the Kaggle Concept Layout model genuinely
-    better" section has a live history of this exact fight: an original washed-out gray/vignette problem
-    WAS fixed (2026-09-01, a CLIP 77-token negative-prompt truncation bug), but a true pure-white
-    background and poché (solid-filled) walls were never achieved - suspected to be a harder ask for a
-    Canny-ControlNet-conditioned SDXL model specifically (a filled/white background fights the line-based
-    edge-map conditioning signal itself), with an MLSD ControlNet swap flagged as the next real lever if
-    ever revisited. This card is deliberately labeled "Concept Layout - not a precise blueprint" for
-    exactly this reason - the deterministic Pillow-drawn blueprint next to it (light linen background,
-    solid poché walls, real dimensions) is the accurate, authoritative one; the AI card is a supplementary
-    visual only. No code change made here - the lever, if pursued further, is entirely on the friend's
-    Kaggle notebook side (prompt/negative-prompt tuning or a ControlNet-type swap), not this repo.
+  - **A separate question asked alongside the garage report: why does the AI "Concept Layout" card
+    sometimes have a dark/gray background instead of light?** Initially diagnosed as a pure vendor/notebook
+    concern outside this repo's control (see below) - then, on the user asking whether it could be
+    constrained to one color, investigated further and found to be genuinely fixable HERE, via
+    post-processing, not the notebook.
+    - **Root cause**: the model has no fixed random seed (no `seed` field exists anywhere in the confirmed
+      `kaggle_autocad.py` request contract), so nothing pins its output to one visual style run to run.
+      Comparing multiple REAL saved samples in `scripts/output/` (not synthetic guesses) showed this isn't
+      unbounded randomness - it's a flip between near-opposite color POLARITIES of the same drawing: a
+      light background with dark line work (the desired look, mean luminance ~140-170/255 across samples)
+      versus a literal "blueprint" - white line work on a dark blue-gray background (mean ~105/255,
+      `scripts/output/latest_kaggle_floor1.png` - this is what the user's dark screenshot actually was).
+      A third style (a mid-gray "rendered slab" look with a light margin, mean ~140) is real variance too
+      but is NOT simply an inversion of the light style.
+    - **Fix**: `app/providers/kaggle_autocad.py`'s `_normalize_dark_background()` (new) computes the
+      returned image's average luminance and, when it falls below `_DARK_BACKGROUND_MEAN_THRESHOLD` (128),
+      inverts the image (`PIL.ImageOps.invert`) before compositing room labels. Deliberately
+      ONE-DIRECTIONAL - only ever lightens a dark image, never touches an already-light one - so the
+      unrelated mid-gray "rendered slab" variant (well above the threshold) is left alone rather than risk
+      a blind heuristic making it worse. Verified by inverting the actual saved dark sample and inspecting
+      the result (not just reasoned about) - it recovers a light parchment-style drawing close to the
+      desired look, confirmed visually before writing any code.
+    - **Still true, unchanged from the earlier diagnosis**: the model's ACTUAL rendering choices (which
+      polarity, contrast, whether walls are poché-filled, prompt wording) are entirely the friend's Kaggle
+      notebook's own domain, not this repo's - this fix doesn't change what the model generates, it
+      corrects the result afterward, deterministically, in code we control. If the model starts producing
+      a style this heuristic doesn't handle (a truly novel polarity, not just light-vs-dark), that would
+      need a new case here, not a notebook change.
+    - **Tests**: `tests/test_kaggle_autocad.py` gained `test_normalize_dark_background_inverts_a_dark_image`,
+      `test_normalize_dark_background_leaves_a_light_image_untouched`,
+      `test_normalize_dark_background_leaves_a_mid_gray_image_untouched` (unit tests against synthetic
+      solid-color images), and `test_generate_floor_plan_normalizes_a_dark_polarity_response` (end-to-end,
+      confirms the fix is actually wired into `generate_floor_plan()`'s return path, not just defined).
+      477/477 passing (4 new).
+    - This card stays labeled "Concept Layout - not a precise blueprint" regardless of polarity - the
+      deterministic Pillow-drawn blueprint next to it (light linen background, solid poché walls, real
+      dimensions) remains the accurate, authoritative one; the AI card is a supplementary visual only.
 
 ## Architecture (big picture)
 

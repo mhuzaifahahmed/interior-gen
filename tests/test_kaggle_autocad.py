@@ -7,7 +7,7 @@ from PIL import Image
 import pytest
 
 import app.providers.kaggle_autocad as kaggle_autocad_module
-from app.providers.kaggle_autocad import generate_floor_plan
+from app.providers.kaggle_autocad import _normalize_dark_background, generate_floor_plan
 from app.providers.session_errors import KaggleSessionUnavailableError
 
 
@@ -326,3 +326,60 @@ def test_generate_floor_plan_defaults_bedrooms_bathrooms_when_not_stated(monkeyp
 
     result = generate_floor_plan("a plot", {"length": 40, "width": 60, "unit": "ft"}, "no specific requirements")
     assert result is not None
+
+
+def test_normalize_dark_background_inverts_a_dark_image():
+    # 2026-09-04: the model has no fixed seed, so it sometimes lands on a
+    # dark-background/light-line "literal blueprint" polarity instead of the
+    # desired light-background/dark-line look - a plain inversion recovers
+    # something close to the desired style (verified against real saved
+    # model output, not just a synthetic case, before this was written).
+    dark_image = Image.new("RGB", (8, 8), (20, 20, 30))
+    result = _normalize_dark_background(dark_image)
+    # Inverted: a near-black pixel becomes a near-white one.
+    r, g, b = result.getpixel((0, 0))
+    assert r > 200 and g > 200 and b > 200
+
+
+def test_normalize_dark_background_leaves_a_light_image_untouched():
+    light_image = Image.new("RGB", (8, 8), (230, 230, 220))
+    result = _normalize_dark_background(light_image)
+    assert result.getpixel((0, 0)) == (230, 230, 220)
+
+
+def test_normalize_dark_background_leaves_a_mid_gray_image_untouched():
+    # The "rendered slab" style variant (mid-gray, mean ~140-170 in real
+    # saved samples) is real output variance too but is NOT a simple
+    # inversion of the light style - must not be touched by this heuristic.
+    mid_gray_image = Image.new("RGB", (8, 8), (150, 150, 150))
+    result = _normalize_dark_background(mid_gray_image)
+    assert result.getpixel((0, 0)) == (150, 150, 150)
+
+
+def test_generate_floor_plan_normalizes_a_dark_polarity_response(monkeypatch):
+    # End-to-end: a job response whose image is dark-polarity should come
+    # back as a light PNG, not a dark one - regression guard for the fix
+    # above actually being wired into generate_floor_plan()'s return path.
+    monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_autocad_module.time, "sleep", lambda _: None)
+
+    dark_image = Image.new("RGB", (8, 8), (20, 20, 30))
+    buffer = io.BytesIO()
+    dark_image.save(buffer, format="JPEG")
+    dark_jpeg_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(json_data={"status": "started", "job_id": "job-dark"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(json_data={"status": "done", "floors": [{"floor_number": 1, "image_base64": dark_jpeg_b64}]})
+
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "get", fake_get)
+
+    result = generate_floor_plan("a plot", {"length": 40, "width": 60, "unit": "ft"}, "no specific requirements")
+
+    assert result is not None
+    returned_image = Image.open(io.BytesIO(result[0]))
+    r, g, b = returned_image.getpixel((0, 0))
+    assert r > 200 and g > 200 and b > 200

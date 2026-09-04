@@ -78,7 +78,7 @@ import re
 import time
 
 import httpx
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
 
 from app.config import settings
 from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box, render_conditioning_edge_map
@@ -129,6 +129,36 @@ def _conditioning_images_by_floor(
             continue
         by_floor[floor_number] = layout_floor(floor.get("rooms") or [], dimensions, facing=facing)
     return by_floor
+
+
+# The model has no fixed random seed (no `seed` field exists in the
+# confirmed request contract - see module docstring), so different
+# generations can land on genuinely different color polarities. Real,
+# saved samples (scripts/output/) show this isn't unbounded randomness but
+# a flip between two near-opposite renderings of the same drawing: a light
+# background with dark line work (the desired, legible look, mean
+# luminance ~140-170/255 across saved samples) or a literal "blueprint" -
+# white line work on a dark blue-gray background (mean ~105/255,
+# scripts/output/latest_kaggle_floor1.png). A plain color inversion of the
+# dark-polarity sample recovered a result close to the light style
+# (confirmed by actually inverting that saved sample and inspecting it,
+# not just reasoned about) - so any image whose average luminance falls
+# below _DARK_BACKGROUND_MEAN_THRESHOLD gets inverted before labels are
+# composited. Deliberately ONE-DIRECTIONAL: only ever lightens a dark
+# image, never touches an already-light one - a third observed style (a
+# mid-gray "rendered slab" look with a light margin, mean ~140) is real
+# variance too but is NOT a simple inversion of the light style, so it's
+# left untouched rather than risk a blind heuristic making it worse.
+_DARK_BACKGROUND_MEAN_THRESHOLD = 128
+
+
+def _normalize_dark_background(image: Image.Image) -> Image.Image:
+    """See the module-level comment above this function for why this exists
+    and why it only ever lightens, never darkens."""
+    mean_luminance = ImageStat.Stat(image.convert("L")).mean[0]
+    if mean_luminance < _DARK_BACKGROUND_MEAN_THRESHOLD:
+        return ImageOps.invert(image)
+    return image
 
 
 def _composite_room_labels(image: Image.Image, rects: list[dict], dimensions: dict) -> Image.Image:
@@ -253,6 +283,7 @@ def generate_floor_plan(
                 for floor in floors_out:
                     jpeg_bytes = base64.b64decode(floor["image_base64"])
                     image = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
+                    image = _normalize_dark_background(image)
                     # Phase 2: composite our own accurate room labels onto the
                     # (deliberately text-free, per the updated negative prompt)
                     # AI image - only possible for floors we actually sent a
