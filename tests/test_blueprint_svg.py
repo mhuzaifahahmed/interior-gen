@@ -1,8 +1,9 @@
 from io import BytesIO
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 
 from app.pipeline.blueprint_svg import (
+    _draw_furniture,
     _should_suppress_direct_door,
     _should_suppress_garage_direct_door,
     render_floor_blueprint,
@@ -295,3 +296,43 @@ def test_render_floor_blueprint_suppresses_garage_to_living_door_when_entry_pres
     rects = layout_floor(rooms, dimensions)
     png_bytes = render_floor_blueprint(1, rects, dimensions)
     assert png_bytes.startswith(b"\x89PNG")
+
+
+def _draw_furniture_and_diff_from_blank(rect, scale):
+    """Renders _draw_furniture() for one rect onto a blank canvas and
+    returns whether any pixel changed - a direct way to check "did a
+    furniture symbol actually get drawn" without depending on the exact
+    symbol shape."""
+    image = Image.new("RGB", (200, 200), "white")
+    blank = image.copy()
+    draw = ImageDraw.Draw(image)
+    _draw_furniture(draw, rect, 0, 0, scale)
+    return ImageChops.difference(image, blank).getbbox() is not None
+
+
+def test_garage_furniture_renders_below_the_general_threshold_but_above_its_own():
+    # 2026-09-04: real bug - on a large plot, a garage's real, CORRECTLY
+    # SIZED width (see room_specs.garage_dimensions()) can scale down under
+    # the general 70px furniture-drawing threshold even though its real-world
+    # size is fine, silently suppressing the car icon. Garage gets its own,
+    # lower threshold (_GARAGE_MIN_BOX_W/H = 40) since its furniture symbol
+    # is drawn purely proportionally, safe at a smaller box than fixed-size
+    # fixtures. A 10x10 real-unit room at scale=5 renders a 50x50px box -
+    # below the general 70px gate, above garage's own 40px gate.
+    rect = {"name": "Garage", "x": 0, "y": 0, "w": 10, "h": 10}
+    assert _draw_furniture_and_diff_from_blank(rect, scale=5) is True
+
+
+def test_non_garage_furniture_still_suppressed_below_the_general_threshold():
+    # Same box size as above, but a room type NOT covered by the lower
+    # garage-specific threshold - must still be suppressed (confirms the
+    # lower threshold is genuinely garage-specific, not a global loosening).
+    rect = {"name": "Bedroom", "x": 0, "y": 0, "w": 10, "h": 10}
+    assert _draw_furniture_and_diff_from_blank(rect, scale=5) is False
+
+
+def test_garage_furniture_still_suppressed_below_its_own_lower_threshold():
+    # A garage box smaller than even ITS OWN (lower) threshold must still be
+    # suppressed - the fix lowers the bar, it doesn't remove it.
+    rect = {"name": "Garage", "x": 0, "y": 0, "w": 5, "h": 5}
+    assert _draw_furniture_and_diff_from_blank(rect, scale=5) is False

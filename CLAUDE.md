@@ -1491,6 +1491,23 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     numerically (`tests/test_floor_layout.py`'s new tests: real width regardless of surrounding rooms,
     a 2-car garage is wider than 1-car, exact-tiling still holds with the carve-out) and visually
     (re-rendered and inspected the PNG). 469/469 passing (4 new).
+  - **A SECOND, separate garage bug found the same day, on review from another AI's suggestion (verified
+    independently before applying, not blindly trusted)**: even with the real-width fix above, the car
+    icon itself could still fail to render - `blueprint_svg.py`'s `_draw_furniture()` gates ALL furniture
+    symbols behind `_FURNITURE_MIN_BOX_W`/`_H` (70x60 PIXELS), and on a plot with a long enough side
+    (>~99ft), a garage's real, CORRECTLY SIZED width (8.9ft) scales down under that pixel threshold even
+    though its real-world size is fine - silently drawing an empty garage room with no car symbol.
+    Confirmed live: a 150x100ft plot scales the garage's 8.9ft width to 46px, comfortably under the old
+    70px gate. Fix: `_GARAGE_MIN_BOX_W`/`_H` (40x40px), a garage-specific lower threshold used only when
+    `"garage" in name` - safe because `_furnish_garage()`'s car symbol is drawn purely proportionally
+    (`car_w = w*0.6, car_h = h*0.7`, no fixed-pixel offsets that could break at a smaller box), unlike
+    fixed-size fixtures (a bed's pillows, a toilet's real-world-proportioned rectangle) the general
+    threshold protects. `name = rect["name"].lower()` moved up in the function so the gate can check room
+    type before deciding which threshold applies. Verified both by re-rendering the exact 150x100ft
+    scenario (car icon now visible) and with new tests (`tests/test_blueprint_svg.py`) confirming the
+    lower threshold is genuinely garage-specific - a non-garage room at the identical box size stays
+    suppressed, and a garage below even ITS OWN lower threshold still gets suppressed too (the fix lowers
+    the bar, it doesn't remove it). 472/472 passing (3 new).
 
 ## Architecture (big picture)
 

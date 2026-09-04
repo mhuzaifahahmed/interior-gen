@@ -429,6 +429,18 @@ def _draw_windows(draw: ImageDraw.ImageDraw, rect: dict, plot_length: float, plo
 
 _FURNITURE_MIN_BOX_W = 70
 _FURNITURE_MIN_BOX_H = 60
+# Garage gets its own, lower threshold (2026-09-04, real bug: on a large
+# enough plot - longest side over ~99ft - a garage's real, correctly-sized
+# width (see room_specs.garage_dimensions(), floor_layout._slice_reserving_
+# garage()) can still scale down under _FURNITURE_MIN_BOX_W in PIXELS even
+# though its real-world size is fine, silently suppressing the car icon.
+# Garages are legitimately long-and-narrow, and _furnish_garage()'s car
+# symbol is drawn purely proportionally (car_w = w*0.6, car_h = h*0.7, no
+# fixed-pixel offsets) - safe to render at a much smaller box than the
+# fixed-size fixtures the general threshold protects (a bed's pillow
+# ellipses, a toilet's real-world-proportioned rectangle, etc.).
+_GARAGE_MIN_BOX_W = 40
+_GARAGE_MIN_BOX_H = 40
 # Half the room label's rendered block height (name + area lines), plus a
 # margin - the label is centered on the room's own cy in _draw_room_label().
 # Real value found by measuring an actual rendered label, not guessed: a
@@ -453,7 +465,11 @@ def _draw_furniture(
 ) -> None:
     x0, y0, x1, y1 = _room_bbox(rect, plot_x0, plot_y0, scale)
     box_w, box_h = x1 - x0, y1 - y0
-    if box_w < _FURNITURE_MIN_BOX_W or box_h < _FURNITURE_MIN_BOX_H:
+    name = rect["name"].lower()
+
+    min_w = _GARAGE_MIN_BOX_W if "garage" in name else _FURNITURE_MIN_BOX_W
+    min_h = _GARAGE_MIN_BOX_H if "garage" in name else _FURNITURE_MIN_BOX_H
+    if box_w < min_w or box_h < min_h:
         return
 
     cy = (y0 + y1) / 2
@@ -463,7 +479,6 @@ def _draw_furniture(
     pad = max(float(INTERIOR_CLEARANCE_PX), min(box_w, box_h) * 0.07)
     ix0, iy0, ix1, iy1 = x0 + pad, y0 + pad, x1 - pad, y1 - pad
     iw, ih = ix1 - ix0, iy1 - iy0
-    name = rect["name"].lower()
 
     if "bath" in name or "wc" in name or "washroom" in name or "toilet" in name:
         _furnish_bathroom(draw, ix0, iy0, ix1, iy1, iw, ih)
