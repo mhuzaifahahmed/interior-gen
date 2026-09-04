@@ -236,6 +236,43 @@ def test_generate_floor_plan_sends_one_conditioning_image_per_floor_when_room_la
     assert len(result) == 2
 
 
+def test_generate_floor_plan_conditioning_image_reflects_facing(monkeypatch):
+    # 2026-09-04: facing MUST be threaded through to the conditioning image
+    # builder - otherwise the AI Concept Layout card would silently trace a
+    # "north" (default) layout even when the real deterministic blueprint
+    # used a different facing, visibly disagreeing with it (see
+    # _conditioning_images_by_floor()'s docstring). A real, different facing
+    # must produce a genuinely different conditioning image.
+    monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_autocad_module.time, "sleep", lambda _: None)
+
+    room_layout = {
+        "floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]}]
+    }
+    captured_conditioning_images = []
+
+    def fake_post(url, json=None, timeout=None):
+        captured_conditioning_images.append(json["conditioning_images"][0])
+        return FakeResponse(json_data={"status": "started", "job_id": "job-facing"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(
+            json_data={"status": "done", "floors": [{"floor_number": 1, "image_base64": _fake_jpeg_b64()}]}
+        )
+
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "get", fake_get)
+
+    generate_floor_plan(
+        "a plot", {"length": 40, "width": 60, "unit": "ft"}, "1 floor", room_layout=room_layout, facing="north"
+    )
+    generate_floor_plan(
+        "a plot", {"length": 40, "width": 60, "unit": "ft"}, "1 floor", room_layout=room_layout, facing="south"
+    )
+
+    assert captured_conditioning_images[0] != captured_conditioning_images[1]
+
+
 def test_generate_floor_plan_composites_room_labels_when_room_layout_given(monkeypatch):
     # Phase 2: once we sent real conditioning geometry, composite our own
     # accurate room labels onto the (deliberately text-free) returned image -

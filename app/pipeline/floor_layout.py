@@ -251,19 +251,90 @@ def _sort_key(room_name: str) -> tuple[int, int]:
     return (zone, _public_order_key(room_name) if zone == 0 else 0)
 
 
-def layout_floor(rooms: list[dict], dimensions: dict, garage_cars: int | None = None) -> list[dict]:
+_VALID_FACINGS = ("north", "south", "east", "west")
+
+
+def layout_floor(
+    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None
+) -> list[dict]:
     """rooms: [{"name": str, "area": number}, ...] (area is a relative weight).
     dimensions: {"length": float, "width": float, "unit": str}. garage_cars,
     when given, sizes any room classified as a garage using the real
     per-car minimum instead of the single-car default - see
     room_specs.garage_min_area_sqm().
 
+    facing: which compass direction the entrance/public zone faces -
+    "north"/"south"/"east"/"west" (case-insensitive), defaulting to "north"
+    for anything else (None, empty, unrecognized). This is this FUNCTION's
+    own neutral library default, unrelated to the PRODUCT default of "south"
+    when a user doesn't choose one on the form (2026-09-04) - that "south"
+    default is resolved one layer up, in generate_house.py, which then
+    passes an explicit facing="south" here. "north" here just keeps every
+    existing direct caller/test (none of which pass `facing` at all)
+    behaving exactly as before this parameter was added: front at low-y,
+    matching the decorative north arrow blueprint_svg.py already draws
+    pointing up.
+
+    The core algorithm below is UNCHANGED and always computes with front at
+    low internal-y (the pre-existing behavior) - `facing` is implemented as
+    a coordinate TRANSFORM applied to the result, not by threading direction
+    through the recursive splitting/corridor/suite logic. For north, that
+    transform is a no-op. For south, the whole result is mirrored along y
+    (front moves from low-y to high-y). For east/west, the algorithm is run
+    on dimensions with length/width SWAPPED (so its own low-y front band
+    ends up spanning the real x-axis once transposed back), then transposed
+    (x<->y, w<->h) and, for east, additionally mirrored along x. This keeps
+    every nested piece of this module (`_slice()`, `_layout_private_zone()`,
+    `_pack_row()`, the suite/hallway/door logic in blueprint_svg.py) working
+    in one single, unchanged coordinate convention - only the very top-level
+    wrapper needs to know about compass directions at all.
+
     Returns [{"name": str, "x": float, "y": float, "w": float, "h": float}, ...]
-    in the same unit as dimensions, tiling exactly [0, length] x [0, width].
+    in the same unit as dimensions, tiling exactly [0, length] x [0, width]
+    (the REAL, un-swapped dimensions - the length/width swap above is purely
+    an internal computation detail, invisible to the caller).
     """
     if not rooms:
         return []
 
+    facing = (facing or "north").strip().lower()
+    if facing not in _VALID_FACINGS:
+        facing = "north"
+
+    real_length = float(dimensions.get("length") or 1)
+    real_width = float(dimensions.get("width") or 1)
+
+    if facing in ("east", "west"):
+        core_dimensions = {
+            "length": real_width,
+            "width": real_length,
+            "unit": dimensions.get("unit"),
+        }
+    else:
+        core_dimensions = dimensions
+
+    rects = _layout_floor_core(rooms, core_dimensions, garage_cars)
+
+    if facing in ("east", "west"):
+        # Transpose back to real coordinates - the core algorithm's own x
+        # (spanning [0, real_width]) becomes the real y, and its own y
+        # (spanning [0, real_length], front at its low end) becomes the
+        # real x, so front now sits at low real-x (west).
+        rects = [{**r, "x": r["y"], "y": r["x"], "w": r["h"], "h": r["w"]} for r in rects]
+
+    if facing == "south":
+        rects = [{**r, "y": real_width - r["y"] - r["h"]} for r in rects]
+    elif facing == "east":
+        rects = [{**r, "x": real_length - r["x"] - r["w"]} for r in rects]
+
+    return rects
+
+
+def _layout_floor_core(rooms: list[dict], dimensions: dict, garage_cars: int | None = None) -> list[dict]:
+    """The actual layout algorithm - always computes with the public/front
+    zone at low-y, private/back zone at high-y (see layout_floor()'s
+    docstring for how compass facing is applied as a coordinate transform
+    around this function, not inside it)."""
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
     unit = dimensions.get("unit") or "ft"

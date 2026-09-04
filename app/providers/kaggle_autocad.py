@@ -108,12 +108,18 @@ def _parse_int_before_word(prompt: str, word: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _conditioning_images_by_floor(room_layout: dict | None, dimensions: dict) -> dict[int, list[dict]]:
+def _conditioning_images_by_floor(
+    room_layout: dict | None, dimensions: dict, facing: str | None = None
+) -> dict[int, list[dict]]:
     """Returns {floor_number: rects} for every floor room_layout describes,
     using the SAME pure layout_floor() call the deterministic blueprint step
     already used on this same room_layout - guaranteed to reproduce identical
-    rectangles (same inputs, same deterministic function), so the conditioning
-    image and the blueprint PNG always agree on where every room lands."""
+    rectangles (same inputs, same deterministic function, same `facing`), so
+    the conditioning image and the blueprint PNG always agree on where every
+    room lands. `facing` MUST be threaded through from the caller (2026-09-04)
+    - without it, this would silently default to "north" regardless of what
+    orientation the real blueprint step actually used, breaking the exact
+    agreement this function's whole purpose depends on."""
     if not room_layout or not room_layout.get("floors"):
         return {}
     by_floor: dict[int, list[dict]] = {}
@@ -121,7 +127,7 @@ def _conditioning_images_by_floor(room_layout: dict | None, dimensions: dict) ->
         floor_number = floor.get("floor_number")
         if floor_number is None:
             continue
-        by_floor[floor_number] = layout_floor(floor.get("rooms") or [], dimensions)
+        by_floor[floor_number] = layout_floor(floor.get("rooms") or [], dimensions, facing=facing)
     return by_floor
 
 
@@ -166,6 +172,7 @@ def generate_floor_plan(
     dimensions: dict,
     prompt: str,
     room_layout: dict | None = None,
+    facing: str | None = None,
 ) -> list[bytes] | None:
     base_url = settings.kaggle_autocad_api_url
     if not base_url:
@@ -176,7 +183,7 @@ def generate_floor_plan(
     bathrooms = _parse_int_before_word(prompt, _BATHROOM_RE) or 2
     notes = (prompt or "")[:200]
 
-    rects_by_floor = _conditioning_images_by_floor(room_layout, dimensions)
+    rects_by_floor = _conditioning_images_by_floor(room_layout, dimensions, facing)
 
     payload = {
         "length": float(dimensions.get("length") or 40),

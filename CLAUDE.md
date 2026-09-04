@@ -1393,7 +1393,70 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     `future-plans/house-layout-spec-checklist.md`): non-rectangular/L-shaped rooms, a double-loaded
     corridor, a full adjacency-graph solver, a real validate-then-regenerate loop, true road-facing
     orientation (no plot-orientation input exists at all), and zone-level (public-vs-private) area
-    capping (Phase 1's max-area caps are intra-zone only).
+    capping (Phase 1's max-area caps are intra-zone only). **The "no plot-orientation input" gap is
+    now closed - see v15 immediately below.**
+- **v15 (2026-09-04): real, optional North/South/East/West plot-facing input, defaulting to South.**
+  Direct follow-up to v14's own "still not done" note - real user request: "take an input from the user
+  while generating and ask the facing from north south east west side and make it optional and if the
+  user doesnt choose anything keep the entrance from south."
+  - **`static/index.html`** gained an optional "Which way does the entrance face?" `<select>`
+    (`#house-facing`, blank/North/South/East/West) in the Plot Parameters panel, right above the existing
+    free-text extras field. **`static/app.js`** only appends `facing` to the upload `FormData` when the
+    user actually picked one (same "optional, only sent when non-empty" pattern as the plot photo).
+  - **`app/main.py`'s `create_house_project`** gained a `facing: str | None = Form(None)` field -
+    deliberately UNVALIDATED at this layer (matches the existing "silently correct obvious nonsense"
+    treatment for floor_count/bedrooms/bathrooms) and folded into the EXISTING `house_inputs_json` dict
+    alongside floor_count/bedrooms/bathrooms/extras - no new DB column needed, `HouseProjectStatusResponse
+    .house_inputs` already exposes the whole dict.
+  - **The real orientation convention** (`app/pipeline/floor_layout.py`'s `layout_floor()` docstring,
+    the authoritative source): this project's north arrow (`blueprint_svg.py`'s decorative `_draw_north_
+    arrow()`) has always pointed "up" (low real-y) - v15 makes that meaningful instead of arbitrary/
+    decorative by defining low-y = North, matching standard map/architectural-plan convention (north up).
+    South facing therefore puts the public/entrance zone at HIGH-y (the bottom of the rendered plan);
+    east/west orient it along the x-axis instead.
+  - **Implementation: a coordinate TRANSFORM around the unchanged core algorithm, not threading direction
+    through the recursive logic.** `layout_floor()` was split into a thin public wrapper + the pre-
+    existing algorithm (renamed `_layout_floor_core()`, verbatim, still always computing with public-at-
+    low-y). The wrapper: for north, no transform. For south, mirrors every rect along y
+    (`y = width - y - h`) - the whole computed layout flips top-to-bottom, moving the public zone from
+    low-y to high-y. For east/west, the core algorithm runs on dimensions with length/width SWAPPED (so
+    its own low-y front band ends up spanning the real x-axis once transposed back: `x = old_y, y =
+    old_x, w = old_h, h = old_w`), then east additionally mirrors along x. This was a deliberate design
+    choice over generalizing `_layout_private_zone()`'s hallway-edge logic to all 4 directions - it keeps
+    every nested piece of this module (`_slice()`, the suite/hallway/corridor logic, `_pack_row()`) working
+    in ONE unchanged coordinate convention; only the top-level wrapper needs to know about compass
+    directions at all. Verified numerically (all 4 facings tile the plot exactly, no overlaps) AND
+    visually (rendered the same house under all 4 facings and inspected each - garage-suppression, suite
+    pairing, and kitchen-dining adjacency all continued to work correctly regardless of orientation).
+  - **Two defaults, two different layers, both documented**: `layout_floor()`'s OWN default when `facing`
+    is omitted/unrecognized is `"north"` - a neutral library default that keeps every pre-existing direct
+    caller/test (none of which pass `facing`) behaving exactly as before this parameter existed. The
+    PRODUCT default of `"south"` (the user's actual request) is resolved one layer up, in
+    `run_house_pipeline()`, which then passes an explicit `facing="south"` down whenever the form didn't
+    supply one - so a real generation with no facing chosen genuinely gets south, while a direct
+    `layout_floor()` call (scripts, tests) is unaffected unless it opts in.
+  - **`facing` threaded through the full pipeline**: `run_house_pipeline(..., facing_input=...)` resolves
+    the real `facing` value BEFORE the `try` block that calls Gemini's `generate_room_layout()` - a real
+    bug hit and fixed during this pass: an earlier version resolved it INSIDE that try, right after the
+    Gemini call, so when that call raised, `facing` was never assigned, but code further down the (still-
+    running) function unconditionally referenced it, causing an `UnboundLocalError` that masked the real,
+    original failure. `front_yard_depth` trimming is now facing-aware too - it trims the `width` dimension
+    for north/south facings (the yard is a strip along the y-extent) or `length` for east/west (a strip
+    along the x-extent), matching whichever axis is actually "depth" for that orientation.
+  - **The AI Concept Layout card stays in agreement with the real blueprint**: `Provider.generate_floor_
+    plan()` gained an optional `facing` parameter (threaded through `base.py`/`hybrid.py`/`gemini.py`'s
+    stub/`idealhouse.py`'s stub/`kaggle_autocad.py`'s real implementation), reaching `kaggle_autocad.py`'s
+    `_conditioning_images_by_floor()` - which MUST receive the same resolved facing the real blueprint
+    step used, or the AI card's conditioning image would silently trace a different (north-default)
+    orientation than what the deterministic blueprint actually rendered. `_run_floor_plan_stage()` passes
+    the pipeline's resolved `facing` through to this call.
+  - **Tests**: `tests/test_floor_layout.py` gained 8 new tests (north-is-the-default, each of the 4
+    facings puts the public zone on the correct edge, unrecognized/case-insensitive facing handling,
+    exact-tiling for all 4 facings); `tests/test_house_pipeline.py` gained the south-by-default and
+    explicit-facing-honored tests (both via a `layout_floor` spy, same pattern as the existing front-yard
+    test); `tests/test_house_api.py` gained a facing-persists-in-house_inputs test;
+    `tests/test_kaggle_autocad.py` gained a test confirming two different facings produce genuinely
+    different conditioning images (not silently ignored). 465/465 passing (11 new).
 
 ## Architecture (big picture)
 

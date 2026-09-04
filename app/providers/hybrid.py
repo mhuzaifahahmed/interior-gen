@@ -249,9 +249,10 @@ class HybridProvider(Provider):
         dimensions: dict,
         prompt: str,
         room_layout: dict | None = None,
+        facing: str | None = None,
     ) -> list[bytes] | None:
         return self._floor_plan_provider.generate_floor_plan(
-            plot_description, dimensions, prompt, room_layout
+            plot_description, dimensions, prompt, room_layout, facing
         )
 
     def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:

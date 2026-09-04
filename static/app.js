@@ -552,6 +552,7 @@ const houseUnitInput = document.getElementById("house-unit");
 const houseFloorCountInput = document.getElementById("house-floor-count");
 const houseBedroomsInput = document.getElementById("house-bedrooms");
 const houseBathroomsInput = document.getElementById("house-bathrooms");
+const houseFacingInput = document.getElementById("house-facing");
 const houseExtrasInput = document.getElementById("house-extras");
 
 const houseProgressCard = document.getElementById("house-progress-card");
@@ -822,6 +823,7 @@ async function restorePendingGeneration() {
     houseFloorCountInput.value = pending.floorCount || "1";
     houseBedroomsInput.value = pending.bedrooms || "3";
     houseBathroomsInput.value = pending.bathrooms || "2";
+    houseFacingInput.value = pending.facing || "";
     houseExtrasInput.value = pending.extras || "";
   }
 
@@ -1874,6 +1876,10 @@ houseForm.addEventListener("submit", async (e) => {
   formData.append("floor_count", houseFloorCountInput.value);
   formData.append("bedrooms", houseBedroomsInput.value);
   formData.append("bathrooms", houseBathroomsInput.value);
+  // Plot facing is optional - only sent when the user actually picked one;
+  // the backend resolves an omitted/blank value to "south" by default (see
+  // run_house_pipeline()'s docstring).
+  if (houseFacingInput.value) formData.append("facing", houseFacingInput.value);
   formData.append("extras", houseExtrasInput.value.trim());
   formData.append("display_name", await currentUserDisplayName());
 
@@ -1894,6 +1900,7 @@ houseForm.addEventListener("submit", async (e) => {
         floorCount: houseFloorCountInput.value,
         bedrooms: houseBedroomsInput.value,
         bathrooms: houseBathroomsInput.value,
+        facing: houseFacingInput.value,
         extras: houseExtrasInput.value,
       });
       window.location.href = "/static/login.html";

@@ -46,9 +46,12 @@ more of this gets built.
 11. **Garage (road-facing, real vehicle-clearance sizing)** — 🟡 Real minimum area scaled by car count is
     built, and (2026-09-04) a garage is now BUFFERED from living space by a real, auto-injected Entry
     room, with a direct Garage↔Living/Kitchen/Dining door suppressed - see CLAUDE.md's v14 entry.
-    **Road-facing/direct-vehicle-access is still NOT guaranteed** - this project has no plot-orientation
-    input at all (documented limitation in `house_requirements.py`); the garage lands in the front
-    (low-y) public band as of v14, which is a real improvement but not a verified road-facing edge.
+    **2026-09-04 (v15): a real, optional North/South/East/West plot-facing input now exists**
+    (`static/index.html`'s `#house-facing`, threaded through `layout_floor(..., facing=...)`), defaulting
+    to South when the user doesn't choose one - the garage/public zone lands on whichever edge the
+    resolved facing points to, not just always the low-y band. **Still not "verified road-facing"** - this
+    is a USER-STATED orientation, not detected from the plot photo or any external source (e.g. GPS/map
+    data), so it's only as accurate as what the user actually selects. See CLAUDE.md's v15 entry.
 12. **Front yard (reserved before building, not squeezed in after)** — 🟡 Depth is reserved before any
     room is placed. **No pedestrian-path/vehicle-movement modeling** beyond the raw area reservation.
 13. **Bedrooms (min area, exterior wall, window, door, furniture, clearance)** — 🟡 Minimum area is

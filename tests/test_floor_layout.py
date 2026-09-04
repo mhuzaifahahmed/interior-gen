@@ -442,3 +442,93 @@ def test_layout_floor_pinned_garage_never_absorbs_redistributed_excess():
     # Within a small tolerance of its true minimum - never inflated just
     # because the plot happens to be much bigger than the room list needs.
     assert _area(garage) < garage_min * 1.2
+
+
+def _facing_rooms():
+    return [
+        {"name": "Living Room", "area": 3},
+        {"name": "Kitchen", "area": 1},
+        {"name": "Bedroom", "area": 2},
+        {"name": "Bathroom", "area": 1},
+    ]
+
+
+def _public_center(rects):
+    public = [r for r in rects if r["name"] in ("Living Room", "Kitchen")]
+    return (
+        sum(r["x"] + r["w"] / 2 for r in public) / len(public),
+        sum(r["y"] + r["h"] / 2 for r in public) / len(public),
+    )
+
+
+def _private_center(rects):
+    private = [r for r in rects if r["name"] in ("Bedroom", "Bathroom")]
+    return (
+        sum(r["x"] + r["w"] / 2 for r in private) / len(private),
+        sum(r["y"] + r["h"] / 2 for r in private) / len(private),
+    )
+
+
+def test_layout_floor_defaults_to_north_facing_when_unspecified():
+    # layout_floor()'s own neutral library default (unrelated to the
+    # PRODUCT default of "south" resolved in generate_house.py) - direct
+    # callers that never pass `facing` must behave exactly as before this
+    # parameter existed: public zone at low-y.
+    dimensions = {"length": 40, "width": 30, "unit": "ft"}
+    no_facing = layout_floor(_facing_rooms(), dimensions)
+    explicit_north = layout_floor(_facing_rooms(), dimensions, facing="north")
+    assert no_facing == explicit_north
+
+
+def test_layout_floor_north_facing_puts_public_zone_at_low_y():
+    rects = layout_floor(_facing_rooms(), {"length": 40, "width": 30, "unit": "ft"}, facing="north")
+    _, public_y = _public_center(rects)
+    _, private_y = _private_center(rects)
+    assert public_y < private_y
+
+
+def test_layout_floor_south_facing_puts_public_zone_at_high_y():
+    rects = layout_floor(_facing_rooms(), {"length": 40, "width": 30, "unit": "ft"}, facing="south")
+    _, public_y = _public_center(rects)
+    _, private_y = _private_center(rects)
+    assert public_y > private_y
+
+
+def test_layout_floor_west_facing_puts_public_zone_at_low_x():
+    rects = layout_floor(_facing_rooms(), {"length": 40, "width": 30, "unit": "ft"}, facing="west")
+    public_x, _ = _public_center(rects)
+    private_x, _ = _private_center(rects)
+    assert public_x < private_x
+
+
+def test_layout_floor_east_facing_puts_public_zone_at_high_x():
+    rects = layout_floor(_facing_rooms(), {"length": 40, "width": 30, "unit": "ft"}, facing="east")
+    public_x, _ = _public_center(rects)
+    private_x, _ = _private_center(rects)
+    assert public_x > private_x
+
+
+def test_layout_floor_unrecognized_facing_falls_back_to_north():
+    dimensions = {"length": 40, "width": 30, "unit": "ft"}
+    garbage_facing = layout_floor(_facing_rooms(), dimensions, facing="northeast")
+    north = layout_floor(_facing_rooms(), dimensions, facing="north")
+    assert garbage_facing == north
+
+
+def test_layout_floor_facing_is_case_insensitive():
+    dimensions = {"length": 40, "width": 30, "unit": "ft"}
+    upper = layout_floor(_facing_rooms(), dimensions, facing="SOUTH")
+    lower = layout_floor(_facing_rooms(), dimensions, facing="south")
+    assert upper == lower
+
+
+def test_layout_floor_every_facing_tiles_the_plot_exactly():
+    dimensions = {"length": 37, "width": 53, "unit": "ft"}
+    for facing in ("north", "south", "east", "west"):
+        rects = layout_floor(_facing_rooms(), dimensions, facing=facing)
+        total_area = sum(_area(r) for r in rects)
+        assert abs(total_area - 37 * 53) < 1e-6, f"facing={facing} failed to tile exactly"
+        for r in rects:
+            assert r["x"] >= -1e-6 and r["y"] >= -1e-6
+            assert r["x"] + r["w"] <= 37 + 1e-6
+            assert r["y"] + r["h"] <= 53 + 1e-6

@@ -302,6 +302,7 @@ class GeminiProvider(Provider):
         dimensions: dict,
         prompt: str,
         room_layout: dict | None = None,
+        facing: str | None = None,
     ) -> list[bytes] | None:
         # Gemini has no floor-plan-specific capability - this is the honest
         # "not available from this provider" case the best-effort contract

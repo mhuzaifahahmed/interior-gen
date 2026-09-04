@@ -24,7 +24,7 @@ class FakeProvider:
     def analyze_plot(self, image_bytes, dimensions):
         return "A rectangular plot facing north."
 
-    def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None):
+    def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None, facing=None):
         return None
 
     def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
@@ -158,7 +158,7 @@ def test_house_api_exposes_one_floor_plan_url_per_floor(monkeypatch):
     # multiple floor_plan_urls, floor-ordered, with images.floor_plan kept
     # as the first one for backward compatibility.
     class MultiFloorPlanProvider(FakeProvider):
-        def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None):
+        def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None, facing=None):
             return [b"floor1-png-bytes", b"floor2-png-bytes"]
 
     monkeypatch.setattr(main_module, "get_provider", lambda: MultiFloorPlanProvider())
@@ -243,8 +243,34 @@ def test_structured_house_inputs_compose_the_prompt_and_persist(monkeypatch):
             "bedrooms": 3,
             "bathrooms": 2,
             "extras": "dirty kitchen each floor, garage",
+            "facing": None,
         }
         assert body["dimensions"] == {"length": 40.0, "width": 60.0, "unit": "ft"}
+
+
+def test_house_facing_selection_persists_in_house_inputs(monkeypatch):
+    # Real user request (2026-09-04): an optional North/South/East/West
+    # facing selection - when the user DOES choose one, it must be stored
+    # exactly as submitted, not silently dropped or overwritten by the
+    # "south by default" resolution (that resolution happens one layer
+    # down, in run_house_pipeline() itself - the API layer just persists
+    # whatever the user actually chose, unvalidated).
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "facing": "east"},
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        body = client.get(f"/api/house-projects/{house_project_id}").json()
+        assert body["house_inputs"]["facing"] == "east"
 
 
 def test_house_floor_count_out_of_range_is_clamped(monkeypatch):
@@ -299,6 +325,7 @@ def test_house_input_metadata_json_written_to_storage(monkeypatch):
             "bedrooms": 3,
             "bathrooms": 2,
             "extras": "modern style",
+            "facing": None,
         }
 
 

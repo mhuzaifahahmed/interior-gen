@@ -151,15 +151,24 @@ def _run_floor_plan_stage(
     prompt: str | None,
     room_layout: dict | None,
     key_prefix: str,
+    facing: str | None = None,
 ) -> None:
     """Runs generate_floor_plan() (the Kaggle "Concept Layout" call) on its
     own daemon thread, fully decoupled from run_house_pipeline()'s own
     session/lifetime - see HOUSE_PROMPT_VERSION's v11 comment for why. Opens
     its own Session(engine) since the caller's session may already be closed
-    by the time this finishes (a real, live-measured ~2min/floor call)."""
+    by the time this finishes (a real, live-measured ~2min/floor call).
+
+    facing (2026-09-04) MUST be the same resolved orientation the real
+    blueprint step used for this house project - see
+    _conditioning_images_by_floor()'s docstring in kaggle_autocad.py for why
+    a mismatch here would make the AI Concept Layout card visibly disagree
+    with the deterministic blueprint."""
     floor_plan_error: str | None = None
     try:
-        floor_plan_images = provider.generate_floor_plan(plot_description, dimensions, prompt or "", room_layout)
+        floor_plan_images = provider.generate_floor_plan(
+            plot_description, dimensions, prompt or "", room_layout, facing
+        )
     except KaggleSessionUnavailableError as exc:
         # A real, actionable problem (the notebook session is offline) - see
         # app/providers/session_errors.py. Logged at warning (not exception -
@@ -220,6 +229,7 @@ def run_house_pipeline(
     prompt: str | None = None,
     username: str | None = None,
     floor_count: int | None = None,
+    facing_input: str | None = None,
 ) -> None:
     """Runs the "Build a House" pipeline for one HouseProject. Mirrors
     app/pipeline/generate.py's run_pipeline shape: its own DB session (runs as
@@ -238,6 +248,13 @@ def run_house_pipeline(
     key under users/{username}/buildAHouse/output/... - see run_pipeline's
     docstring in generate.py for why it's optional here despite the endpoint
     always supplying it.
+
+    facing_input: the raw, optional North/South/East/West selection from the
+    upload form (see app/main.py's create_house_project) - resolved to a
+    real "south"-by-default facing string just below (2026-09-04, real user
+    request). Named "_input" rather than "facing" to make clear this is the
+    UNVALIDATED raw value; the resolved, always-valid `facing` local variable
+    is what actually gets passed to layout_floor().
     """
     key_prefix = f"users/{username}/buildAHouse/output" if username else "local.output"
     with Session(engine) as session:
@@ -302,6 +319,23 @@ def run_house_pipeline(
             garage_cars: int | None = None
             building_dimensions = dimensions
             requirements_text = prompt or ""
+            # Plot facing (2026-09-04, real user request: an optional
+            # North/South/East/West input, defaulting to South when the user
+            # doesn't choose one - "keep the entrance from south"). This is
+            # the PRODUCT default, distinct from layout_floor()'s own neutral
+            # library default of "north" (see that function's docstring) -
+            # direct/test callers that never pass `facing` keep behaving
+            # exactly as before this feature existed; only this real pipeline
+            # resolves the "south by default" rule. Resolved OUTSIDE the try
+            # block below (a real bug hit and fixed here: it was originally
+            # computed INSIDE that try, right after the Gemini room-layout
+            # call - when that call raised, `facing` was never assigned, but
+            # code further down the function - after the except - still
+            # referenced it unconditionally, causing an UnboundLocalError
+            # that masked the original, real failure).
+            facing = (facing_input or "south").strip().lower()
+            if facing not in ("north", "south", "east", "west"):
+                facing = "south"
             try:
                 room_layout = provider.generate_room_layout(
                     dimensions, prompt or "", plot_description, floor_count
@@ -313,8 +347,7 @@ def run_house_pipeline(
                 # Gemini's own judgement, and NOT new structured frontend
                 # fields (a dedicated Garage/Kitchen checkbox pair was already
                 # tried and dropped once - see house_requirements.py's module
-                # docstring for the reasoning and the documented front/road-
-                # orientation limitation).
+                # docstring for the reasoning).
                 garage_cars = parse_garage_cars(requirements_text) if mentions_garage(requirements_text) else None
                 unit = dimensions.get("unit") or "ft"
                 front_yard_depth = parse_front_yard_depth(requirements_text, unit)
@@ -322,15 +355,22 @@ def run_house_pipeline(
                 yard_infeasible_explanation = None
                 if front_yard_depth:
                     building_dimensions = dict(dimensions)
-                    available_width = float(dimensions.get("width") or 0) - front_yard_depth
-                    if available_width <= 0:
+                    # The front yard sits in front of whichever edge is
+                    # actually "front" for this facing - N/S facings trim
+                    # depth off the width axis (the yard is a strip along the
+                    # y-extent), E/W trim off the length axis (the yard is a
+                    # strip along the x-extent). See layout_floor()'s
+                    # docstring for the same north/south/east/west convention.
+                    trim_dimension = "width" if facing in ("north", "south") else "length"
+                    available_depth = float(dimensions.get(trim_dimension) or 0) - front_yard_depth
+                    if available_depth <= 0:
                         yard_infeasible_explanation = (
                             f"The requested front yard ({front_yard_depth:.0f} sq {unit} deep) alone "
                             f"leaves no room for the building on a plot only "
-                            f"{float(dimensions.get('width') or 0):.0f} sq {unit} deep."
+                            f"{float(dimensions.get(trim_dimension) or 0):.0f} sq {unit} deep."
                         )
                     else:
-                        building_dimensions["width"] = available_width
+                        building_dimensions[trim_dimension] = available_depth
 
                 # Ground floor only - guarantee a garage room exists if one
                 # was requested but Gemini's own room list didn't include one.
@@ -417,7 +457,7 @@ def run_house_pipeline(
                     house_project.blueprint_status = "infeasible"
                 else:
                     for floor in room_layout["floors"]:
-                        rects = layout_floor(floor["rooms"], building_dimensions, garage_cars)
+                        rects = layout_floor(floor["rooms"], building_dimensions, garage_cars, facing)
                         png_bytes = render_floor_blueprint(
                             floor["floor_number"], rects, building_dimensions, total_floors
                         )
@@ -492,6 +532,7 @@ def run_house_pipeline(
                         prompt,
                         room_layout,
                         key_prefix,
+                        facing,
                     ),
                     daemon=True,
                 ).start()

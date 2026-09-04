@@ -138,6 +138,7 @@ class Provider(ABC):
         dimensions: dict,
         prompt: str,
         room_layout: dict | None = None,
+        facing: str | None = None,
     ) -> list[bytes] | None:
         """Generate one 2D floor plan image (PNG bytes) PER FLOOR, respecting
         `dimensions` and `prompt` as closely as the underlying vendor allows -
@@ -167,6 +168,14 @@ class Provider(ABC):
         real conditioning (idealhouse.py, GeminiProvider's stub) simply ignore
         it. None means no layout was available/computed - implementations must
         fall back to whatever they did before this parameter existed.
+
+        facing, when given, is the resolved north/south/east/west orientation
+        (see app/pipeline/floor_layout.py's layout_floor() docstring) - added
+        2026-09-04 so a real-geometry conditioning image (kaggle_autocad.py)
+        matches the SAME orientation the deterministic blueprint step used,
+        not the pre-facing-feature default. None/omitted means the default
+        ("north") - implementations that don't use real conditioning ignore
+        this too, same as room_layout.
         """
         ...
 

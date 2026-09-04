@@ -398,6 +398,7 @@ async def create_house_project(
     bedrooms: int | None = Form(None),
     bathrooms: int | None = Form(None),
     extras: str = Form(""),
+    facing: str | None = Form(None),
     session: Session = Depends(get_session),
     user: AuthUser = Depends(require_user),
 ):
@@ -431,6 +432,17 @@ async def create_house_project(
     API callers that don't supply any structured field at all - a request
     with neither is simply "no specific requirements", same as before this
     feature existed.
+
+    facing (2026-09-04) is the optional North/South/East/West plot-facing
+    selection - which compass direction the entrance/public zone faces (see
+    app/pipeline/floor_layout.py's layout_floor() docstring for the full
+    orientation convention). Genuinely optional: an unset/blank/unrecognized
+    value is NOT rejected here - it's passed through as-is and resolved to
+    "south" one layer down, in run_house_pipeline() itself (the real user
+    request: "if the user doesn't choose anything keep the entrance from
+    south"). Kept unvalidated at this layer on purpose, matching this
+    endpoint's existing "silently correct obvious nonsense rather than error
+    the whole request" treatment for floor_count/bedrooms/bathrooms above.
     """
     data: bytes | None = None
     if file is not None:
@@ -459,6 +471,7 @@ async def create_house_project(
         "bedrooms": bedrooms,
         "bathrooms": bathrooms,
         "extras": extras or None,
+        "facing": facing or None,
     }
     composed_requirements = _compose_house_requirements(floor_count, bedrooms, bathrooms, extras)
     # Defensive re-truncation, same reasoning as style_notes/city above - the
@@ -519,6 +532,7 @@ async def create_house_project(
         prompt,
         storage_namespace,
         floor_count,
+        facing,
     )
 
     return HouseProjectCreateResponse(house_project_id=house_project.id)

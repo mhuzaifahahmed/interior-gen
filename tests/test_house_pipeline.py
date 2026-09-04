@@ -23,7 +23,7 @@ class FakeProvider:
         self.plot_calls.append((image_bytes, dimensions))
         return "A rectangular plot facing north."
 
-    def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None):
+    def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None, facing=None):
         self.floor_plan_calls.append((plot_description, dimensions, prompt, room_layout))
         return self._floor_plan_images
 
@@ -451,7 +451,7 @@ def test_run_house_pipeline_passes_room_layout_into_generate_floor_plan(monkeypa
             call_order.append("room_layout")
             return super().generate_room_layout(dimensions, prompt, plot_description, floor_count)
 
-        def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None):
+        def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None, facing=None):
             call_order.append("floor_plan")
             return super().generate_floor_plan(plot_description, dimensions, prompt, room_layout)
 
@@ -744,9 +744,9 @@ def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):
     captured_dimensions = []
     real_layout_floor = generate_house_module.layout_floor
 
-    def spy_layout_floor(rooms, dimensions, garage_cars=None):
+    def spy_layout_floor(rooms, dimensions, garage_cars=None, facing=None):
         captured_dimensions.append(dict(dimensions))
-        return real_layout_floor(rooms, dimensions, garage_cars)
+        return real_layout_floor(rooms, dimensions, garage_cars, facing)
 
     monkeypatch.setattr(generate_house_module, "layout_floor", spy_layout_floor)
 
@@ -765,6 +765,67 @@ def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):
         house_project = session.get(HouseProject, "hyard1")
         assert house_project.status == "done"
         assert house_project.blueprint_status == "done"
+
+
+def test_run_house_pipeline_defaults_facing_to_south_when_unspecified(monkeypatch):
+    # Real user request (2026-09-04): "if the user doesnt choose anything
+    # keep the entrance from south" - facing_input=None (no form selection)
+    # must resolve to a real "south" passed into layout_floor(), not silently
+    # stay unset/None (which would mean layout_floor()'s OWN neutral "north"
+    # default instead).
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hfacing1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hfacing1", status="queued", plot_image_key="hfacing1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    captured_facings = []
+    real_layout_floor = generate_house_module.layout_floor
+
+    def spy_layout_floor(rooms, dimensions, garage_cars=None, facing=None):
+        captured_facings.append(facing)
+        return real_layout_floor(rooms, dimensions, garage_cars, facing)
+
+    monkeypatch.setattr(generate_house_module, "layout_floor", spy_layout_floor)
+
+    provider = FakeProvider()
+    run_house_pipeline("hfacing1", provider, storage, {"length": 40, "width": 60, "unit": "ft"})
+
+    assert captured_facings == ["south"]
+
+
+def test_run_house_pipeline_honors_an_explicit_facing_selection(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hfacing2/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hfacing2", status="queued", plot_image_key="hfacing2/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    captured_facings = []
+    real_layout_floor = generate_house_module.layout_floor
+
+    def spy_layout_floor(rooms, dimensions, garage_cars=None, facing=None):
+        captured_facings.append(facing)
+        return real_layout_floor(rooms, dimensions, garage_cars, facing)
+
+    monkeypatch.setattr(generate_house_module, "layout_floor", spy_layout_floor)
+
+    provider = FakeProvider()
+    run_house_pipeline(
+        "hfacing2", provider, storage, {"length": 40, "width": 60, "unit": "ft"}, facing_input="East"
+    )
+
+    assert captured_facings == ["east"]
 
 
 def test_run_house_pipeline_does_not_wait_for_floor_plan_before_completing(monkeypatch):
@@ -790,7 +851,7 @@ def test_run_house_pipeline_does_not_wait_for_floor_plan_before_completing(monke
         session.commit()
 
     class SlowProvider(FakeProvider):
-        def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None):
+        def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None, facing=None):
             time.sleep(2.0)
             return super().generate_floor_plan(plot_description, dimensions, prompt, room_layout)
 
