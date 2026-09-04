@@ -544,33 +544,57 @@ def _slice_reserving_garage(
     garage_cars: int | None,
 ) -> list[dict]:
     """Same job as _slice() below, but when a garage is among `names`, its
-    rectangle is carved out FIRST as a real, correctly-proportioned vertical
-    strip (exact real width for the requested car count, spanning the box's
-    FULL height) instead of emerging from the general area-only weighted
-    split - see room_specs.garage_dimensions()'s docstring for the real bug
-    this fixes (a garage could previously come out too NARROW for a car to
-    actually fit, despite having the "correct" total area, since the general
-    algorithm only ever guaranteed area, never width specifically).
+    rectangle is carved out FIRST at its real, correctly-proportioned size
+    (exact real width AND real depth for the requested car count - see
+    room_specs.garage_dimensions()) instead of emerging from the general
+    area-only weighted split, which could previously produce a garage too
+    NARROW for a car to actually fit despite having the "correct" total area.
 
-    This does mean a garage can end up DEEPER than its bare minimum (the
-    strip's height is the box's full height, usually more than the 5.4m a
-    car alone needs) - a deliberate, documented trade-off: guaranteeing a
-    real, usable width takes priority over exact minimality for the one room
-    type where a wrong shape (not just a slightly-too-small area) makes it
-    genuinely non-functional. Every other room's sizing/redistribution logic
-    upstream of this call is completely unaffected - garage's weight/cap
-    still influenced how much area the REST of the zone had available, this
-    only changes garage's own final SHAPE.
+    2026-09-04 real user report, TWO rounds: the FIRST fix for the "too
+    narrow" bug (carving the garage at real width but the box's FULL height)
+    traded it for a new problem - an unnaturally tall, deep strip running
+    the entire depth of the front zone, wasting the area below the garage's
+    real ~5.4m depth. An initial two-row fix (garage + a single "partner"
+    room sharing a shallow front row, everything else in a full-width row
+    below) fixed the garage's own shape but overcorrected: giving that
+    partner room (typically Entry) the ENTIRE remaining row width made IT
+    balloon to an absurd size instead (a foyer sized like a small house).
+    Fixed properly with a THREE-region split, all still simple rectangles:
 
-    Falls back to the plain, unchanged _slice() (no garage carve-out) when
-    there's no garage in `names`, or when the box is too narrow for the
+      ROW A (shallow strip, height = garage's own real depth): the garage,
+        plus ONE partner room (the foyer/entry if one exists, else whichever
+        room is first in line) sized from its OWN already-computed target
+        area (weight / garage_depth) - not stretched to fill leftover space.
+      COLUMN C (tall, full box height h): the NEXT room in line (typically
+        Living Room, given _PUBLIC_ORDER_RANKS puts it right after garage/
+        entry) - occupies whatever width remains to the right of row A,
+        giving it real prominence instead of leftover space going to waste.
+      ROW B REMAINDER (below row A, same width as row A): every other
+        remaining room, sliced normally via _slice().
+
+    These three regions tile the box's full area with no gaps and no
+    overlaps (required - blueprint_svg.py fills the WHOLE plot solid before
+    carving each room's interior back out, so any region with no assigned
+    room would render as an unexplained solid black block, not a harmless
+    gap). Only attempted when there are enough rooms to populate every
+    region - needs the garage, a real partner, a real column-C room, AND at
+    least one more for the row-B remainder (4+ non-garage rooms after the
+    partner). With fewer, falls back to a simpler two-row split (partner
+    fills the full row-A width) - a real, if imperfect, path for a sparse
+    room program (e.g. just Garage + Entry + one other room), still a
+    strict improvement over the original full-height bug. Falls back
+    further to the original single-column full-height carve-out when the
+    box itself is too shallow for a second row at all.
+
+    Falls back to the plain, unchanged _slice() (no garage carve-out at all)
+    when there's no garage in `names`, or when the box is too narrow for any
     carve-out to make geometric sense (defensive - expected to already be
     caught by feasibility checks, not the normal path)."""
     garage_index = next((i for i, name in enumerate(names) if classify_room_category(name) == "garage"), None)
     if garage_index is None:
         return _slice(names, weights, x, y, w, h, total_weight)
 
-    garage_width, _garage_depth = garage_dimensions(garage_cars or 1, unit)
+    garage_width, garage_depth = garage_dimensions(garage_cars or 1, unit)
     if garage_width <= 0 or garage_width >= w:
         # Box too narrow for a real carve-out to leave any room for the rest
         # of the zone - defensive fallback, not the normal path (see
@@ -578,16 +602,66 @@ def _slice_reserving_garage(
         return _slice(names, weights, x, y, w, h, total_weight)
 
     garage_name = names[garage_index]
-    garage_rect = {"name": garage_name, "x": x, "y": y, "w": garage_width, "h": h}
-
     rest_names = names[:garage_index] + names[garage_index + 1 :]
     rest_weights = weights[:garage_index] + weights[garage_index + 1 :]
     if not rest_names:
-        return [garage_rect]
+        return [{"name": garage_name, "x": x, "y": y, "w": garage_width, "h": h}]
 
-    rest_total = sum(rest_weights)
-    rest_rects = _slice(rest_names, rest_weights, x + garage_width, y, w - garage_width, h, rest_total)
-    return [garage_rect] + rest_rects
+    # Need real room left over for a second row (garage_depth < h) AND at
+    # least one more room besides the row-A partner - otherwise fall back to
+    # the original single-column, full-height carve-out.
+    if garage_depth >= h or len(rest_names) < 2:
+        garage_rect = {"name": garage_name, "x": x, "y": y, "w": garage_width, "h": h}
+        rest_total = sum(rest_weights)
+        rest_rects = _slice(rest_names, rest_weights, x + garage_width, y, w - garage_width, h, rest_total)
+        return [garage_rect] + rest_rects
+
+    partner_index = next(
+        (i for i, name in enumerate(rest_names) if classify_room_category(name) == "foyer"), 0
+    )
+    row_a_partner_name = rest_names[partner_index]
+    row_a_partner_weight = rest_weights[partner_index]
+    remaining_names = rest_names[:partner_index] + rest_names[partner_index + 1 :]
+    remaining_weights = rest_weights[:partner_index] + rest_weights[partner_index + 1 :]
+
+    garage_rect = {"name": garage_name, "x": x, "y": y, "w": garage_width, "h": garage_depth}
+
+    if len(remaining_names) < 2:
+        # Not enough rooms left for a distinct column C + row-B remainder -
+        # simpler two-row fallback (partner fills the whole rest of row A).
+        row_a_rects = _slice(
+            [row_a_partner_name], [row_a_partner_weight], x + garage_width, y, w - garage_width, garage_depth,
+            row_a_partner_weight,
+        )
+        row_b_total = sum(remaining_weights)
+        row_b_rects = (
+            _slice(remaining_names, remaining_weights, x, y + garage_depth, w, h - garage_depth, row_b_total)
+            if remaining_names
+            else []
+        )
+        return [garage_rect] + row_a_rects + row_b_rects
+
+    # Real width for the row-A partner, from its OWN already-capped target
+    # area (weight IS a target area at this point in the pipeline - see
+    # _layout_floor_core's min/max-area pass) at the fixed row-A depth -
+    # not stretched to fill whatever's left, which is what caused the
+    # oversized-Entry regression this docstring describes above.
+    partner_width_raw = row_a_partner_weight / garage_depth if garage_depth > 0 else 0.0
+    max_partner_width = max((w - garage_width) * 0.5, garage_width)
+    partner_width = min(max(partner_width_raw, garage_width * 0.5), max_partner_width)
+    partner_rect = {
+        "name": row_a_partner_name, "x": x + garage_width, "y": y, "w": partner_width, "h": garage_depth,
+    }
+
+    row_a_width = garage_width + partner_width
+    column_c_name, column_c_weight = remaining_names[0], remaining_weights[0]
+    column_c_rect = {"name": column_c_name, "x": x + row_a_width, "y": y, "w": w - row_a_width, "h": h}
+
+    row_b_names, row_b_weights = remaining_names[1:], remaining_weights[1:]
+    row_b_total = sum(row_b_weights)
+    row_b_rects = _slice(row_b_names, row_b_weights, x, y + garage_depth, row_a_width, h - garage_depth, row_b_total)
+
+    return [garage_rect, partner_rect, column_c_rect] + row_b_rects
 
 
 def _slice(

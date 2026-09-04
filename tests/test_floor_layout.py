@@ -594,3 +594,100 @@ def test_layout_floor_garage_carve_out_still_tiles_exactly():
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 48 + 1e-6
         assert r["y"] + r["h"] <= 40 + 1e-6
+
+
+def test_layout_floor_garage_no_longer_stretches_the_full_front_zone_height():
+    # Real user report (2026-09-04): the garage's real-width fix carved it at
+    # the box's FULL height, producing an unnaturally tall/deep strip (e.g.
+    # 8.9x35.7ft - roughly double a real garage's ~17.7ft depth) instead of
+    # giving that wasted area to another room. With enough rooms in the front
+    # zone to populate a real three-region split, the garage's own height
+    # should now land close to its real minimum depth, not the full box.
+    from app.pipeline.room_specs import garage_dimensions
+
+    rooms = [
+        {"name": "Entry", "area": 1},
+        {"name": "Living Room", "area": 3},
+        {"name": "Kitchen", "area": 1.5},
+        {"name": "Dining Room", "area": 1.5},
+        {"name": "Garage", "area": 2},
+        {"name": "Master Bedroom", "area": 2.5},
+        {"name": "Master Bathroom", "area": 1},
+    ]
+    dimensions = {"length": 60, "width": 50, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, garage_cars=1)
+    garage = next(r for r in rects if r["name"] == "Garage")
+
+    _real_width, real_depth = garage_dimensions(1, "ft")
+    assert abs(garage["h"] - real_depth) < 1e-6
+    # The old bug: garage["h"] would equal the full 50ft plot width here -
+    # confirm it's genuinely much shallower now, not just "not exactly 50".
+    assert garage["h"] < dimensions["width"] * 0.6
+
+
+def test_layout_floor_garage_partner_room_does_not_balloon():
+    # The FIRST attempt at fixing the full-height garage overcorrected: the
+    # partner room sharing the shallow front row (typically Entry) was
+    # stretched to fill 100% of the row's remaining width, producing an
+    # absurdly oversized foyer. The partner's width must now come from its
+    # own already-computed target area, not the whole leftover span.
+    rooms = [
+        {"name": "Entry", "area": 1},
+        {"name": "Living Room", "area": 3},
+        {"name": "Kitchen", "area": 1.5},
+        {"name": "Dining Room", "area": 1.5},
+        {"name": "Garage", "area": 2},
+        {"name": "Master Bedroom", "area": 2.5},
+        {"name": "Master Bathroom", "area": 1},
+    ]
+    dimensions = {"length": 60, "width": 50, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, garage_cars=1)
+    entry = next(r for r in rects if r["name"] == "Entry")
+    garage = next(r for r in rects if r["name"] == "Garage")
+
+    # The old regression: Entry filled the ENTIRE remaining row width
+    # (~51ft here). It must now be a modest room, well short of that.
+    assert entry["w"] < dimensions["length"] * 0.5
+    # Still a real, usable room, not squeezed to nothing.
+    assert entry["w"] >= garage["w"] * 0.5
+
+
+def test_layout_floor_garage_three_region_split_tiles_exactly():
+    rooms = [
+        {"name": "Entry", "area": 1},
+        {"name": "Living Room", "area": 3},
+        {"name": "Kitchen", "area": 1.5},
+        {"name": "Dining Room", "area": 1.5},
+        {"name": "Garage", "area": 2},
+        {"name": "Master Bedroom", "area": 2.5},
+        {"name": "Master Bathroom", "area": 1},
+        {"name": "Bedroom 2", "area": 2},
+        {"name": "Bathroom 2", "area": 1},
+    ]
+    dimensions = {"length": 60, "width": 50, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, garage_cars=1)
+    total_area = sum(_area(r) for r in rects)
+    assert abs(total_area - 60 * 50) < 1e-6
+    for r in rects:
+        assert r["x"] >= -1e-6 and r["y"] >= -1e-6
+        assert r["x"] + r["w"] <= 60 + 1e-6
+        assert r["y"] + r["h"] <= 50 + 1e-6
+
+
+def test_layout_floor_garage_sparse_room_program_falls_back_cleanly():
+    # Not enough rooms for a real column-C + row-B split (garage + partner +
+    # only one other room) - must fall back to the simpler two-row path
+    # without gaps or overlaps, not crash or leave unbuilt area.
+    rooms = [
+        {"name": "Entry", "area": 1},
+        {"name": "Living Room", "area": 3},
+        {"name": "Garage", "area": 1},
+    ]
+    dimensions = {"length": 50, "width": 45, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, garage_cars=1)
+    total_area = sum(_area(r) for r in rects)
+    assert abs(total_area - 50 * 45) < 1e-6
+    for r in rects:
+        assert r["x"] >= -1e-6 and r["y"] >= -1e-6
+        assert r["x"] + r["w"] <= 50 + 1e-6
+        assert r["y"] + r["h"] <= 45 + 1e-6

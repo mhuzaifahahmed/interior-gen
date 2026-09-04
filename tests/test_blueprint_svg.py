@@ -3,7 +3,9 @@ from io import BytesIO
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from app.pipeline.blueprint_svg import (
+    PAPER,
     _draw_furniture,
+    _draw_room_label,
     _fit_room_name,
     _should_suppress_direct_door,
     _should_suppress_garage_direct_door,
@@ -402,3 +404,42 @@ def test_narrow_room_label_no_longer_overflows_into_neighboring_room():
     )
     rendered_w = max(draw.textbbox((0, 0), line, font=font)[2] for line in lines)
     assert rendered_w <= box_w_px
+
+
+def _render_label_only(rect, scale):
+    room_w_px = rect["w"] * scale
+    room_h_px = rect["h"] * scale
+    plot_x0 = plot_y0 = 30
+    image = Image.new("RGB", (int(room_w_px) + 60, int(room_h_px) + 60), PAPER)
+    draw = ImageDraw.Draw(image)
+    name_font = ImageFont.load_default(size=13)
+    small_font = ImageFont.load_default(size=11)
+    _draw_room_label(
+        draw, rect, plot_x0=plot_x0, plot_y0=plot_y0, scale=scale, unit="ft", name_font=name_font, small_font=small_font
+    )
+    # A band in the lower portion of the room's own box - below its
+    # vertical center, where the area sub-line (the last element stacked
+    # under the name) sits when it's drawn at all.
+    band = (0, int(plot_y0 + room_h_px * 0.55), image.width, image.height)
+    return image, band
+
+
+def test_area_text_hidden_when_it_overflows_a_narrow_room():
+    # 2026-09-04: the area sub-line (below the room name) had no width check
+    # at all, unlike the name above it - on a narrow room (e.g. a compact
+    # Entry beside a Garage) it ran straight into whatever was drawn next to
+    # it. Reproduces the exact real reported case (an Entry room 5.9x17.7ft
+    # at the scale a 60x50ft plot renders at) - a short name that still
+    # fits, paired with a long area text that doesn't at this box width,
+    # must render the name but drop the area line entirely.
+    narrow_rect = {"name": "Entry", "x": 0, "y": 0, "w": 5.9, "h": 17.7}
+    image, band = _render_label_only(narrow_rect, scale=780 / 60)
+    blank = Image.new("RGB", image.size, PAPER)
+    assert ImageChops.difference(image.crop(band), blank.crop(band)).getbbox() is None
+
+
+def test_area_text_shown_when_it_fits_a_wide_room():
+    wide_rect = {"name": "Entry", "x": 0, "y": 0, "w": 20.0, "h": 17.7}
+    image, band = _render_label_only(wide_rect, scale=780 / 60)
+    blank = Image.new("RGB", image.size, PAPER)
+    assert ImageChops.difference(image.crop(band), blank.crop(band)).getbbox() is not None

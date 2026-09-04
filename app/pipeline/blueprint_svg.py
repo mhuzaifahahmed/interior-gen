@@ -850,6 +850,17 @@ def _draw_room_label(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot
         # existing "no label at all" philosophy over a cramped one.
         if name_h + divider_gap + area_h > box_h - 8:
             show_area = False
+        # Real bug (2026-09-04): unlike the room NAME above, this area
+        # sub-line had no width check at all - on a narrow room (e.g. a
+        # compact Entry beside a Garage) it ran straight into whatever was
+        # drawn next to it, the exact same overflow class _fit_room_name()
+        # already fixed for names. The area line is purely supplementary
+        # (dimensions already appear in the dimension lines along the plot's
+        # own edges), so it's simply dropped rather than shrunk/wrapped
+        # further when it doesn't fit - same "no label at all beats a
+        # cramped one" rule already applied everywhere else in this function.
+        elif area_w > max_name_width:
+            show_area = False
 
     total_h = name_h + (divider_gap + area_h if show_area else 0)
     y_cursor = cy - total_h / 2

@@ -1647,6 +1647,54 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   handle the click natively - applied to all 5 real call sites: Room Redesign's 3 tier images, Build a
   House's exterior render/blueprint PNG/Concept Layout PNG, and the blueprint's `.dxf` AutoCAD export link
   (which had the exact same cross-origin bug, just not yet reported).
+- **v21 (2026-09-04): the garage no longer stretches the full depth of the front zone.** Real, direct
+  follow-up user report after v16's real-width fix: the garage now had the right WIDTH, but was carved at
+  the box's FULL HEIGHT (e.g. an 8.9x35.7ft strip - roughly double a real garage's ~17.7ft/5.4m depth),
+  reading as an oddly tall slab "stuck on the side" and wasting the area below its real depth instead of
+  giving it to another room.
+  - **First attempt, tried and superseded within the same pass**: a simple two-row split (garage + ONE
+    "partner" room sharing a shallow front row at the garage's real depth, everything else in a full-width
+    row below). This fixed the garage's own shape but overcorrected - stretching the partner room (usually
+    Entry, the real architectural pairing for a shallow front-of-house strip) to fill the ENTIRE remaining
+    row width ballooned it to an absurd size (a ~900 sq ft foyer in one real test case).
+  - **Final fix: a three-region split**, still simple axis-aligned rectangles throughout (`floor_layout.
+    _slice_reserving_garage()`): ROW A (shallow, height = garage's real depth) holds the garage plus a
+    partner room sized from its OWN already-computed target area (`weight / garage_depth`, not stretched
+    to fill leftover space) - the foyer/entry room if one exists, else whichever room is first in line, a
+    defensive fallback for a caller with no entry room (not the normal path, since `generate_house.py`
+    always injects one alongside any requested garage). COLUMN C (tall, full box height) holds the NEXT
+    room in line - typically Living Room, since `_PUBLIC_ORDER_RANKS` already puts it right after garage/
+    entry - occupying whatever width remains beside row A, so it gets real prominence instead of that
+    space going to waste. ROW B REMAINDER (below row A, same width) holds every other room, sliced
+    normally. These three regions tile the box's full area with zero gaps and zero overlaps - required,
+    not just tidy: `blueprint_svg.py`'s poché-wall renderer fills the WHOLE plot solid before carving each
+    room's interior back out, so any region with no assigned room would render as an unexplained solid
+    black block, not a harmless blank gap.
+  - **Two-tier fallback for sparse room programs**: the three-region split only fires when there are enough
+    rooms to populate every region (garage + partner + a real column-C room + at least one more for row
+    B) - fewer falls back to the simpler two-row split (partner fills the whole row), still a real
+    improvement over the original bug just without column C's extra polish; fewer still (or a box too
+    shallow for a second row at all) falls back further to the original single-column full-height
+    carve-out.
+  - **A related bug found and fixed while visually verifying this**: with rooms now narrower in some
+    layouts (e.g. Entry at 5.9ft wide), the area sub-line under a room's name (e.g. "5.9x17.7 ft (104 sq
+    ft)") had NO width-fit check at all - unlike the name above it (see v17) - and ran straight into
+    whatever was drawn next to it, visible as "GARAGE 8.9x17.7ft(157sqft)5.9x17.7ft(104sqft) ENTRY"
+    overlapping text. Fixed in `blueprint_svg._draw_room_label()`: the area line is now measured against
+    the same width budget as the name and simply dropped (not shrunk/wrapped further - it's a purely
+    supplementary line, the real dimensions already appear in the plot's own dimension lines) when it
+    doesn't fit, matching this function's existing "no label at all beats a cramped one" rule.
+  - **Verification**: reproduced the exact reported scenario (a 60x50ft plot, garage+entry+living+dining+
+    kitchen front zone) and visually confirmed each stage - garage now a correctly-proportioned 8.9x17.7ft
+    box, Entry a modest ~104 sq ft foyer (not the ~900 sq ft regression), Living Room a large, prominent
+    room getting the reclaimed space, no overlapping labels. Also rendered and inspected a no-Entry
+    fallback case (Living Room becomes the row-A partner, Dining becomes column C) - no gaps, no
+    disproportionate rooms. New tests in `tests/test_floor_layout.py` (garage depth no longer equals full
+    box height, partner room stays bounded, three-region tiling has zero gaps/overlaps, sparse room
+    programs fall back cleanly) and `tests/test_blueprint_svg.py` (area text hidden when it overflows a
+    narrow room, still shown when it fits). 488/488 passing (7 new; one pre-existing, already-documented
+    SQLite-lock-contention flake under full-suite load reconfirmed unrelated - passes in isolation and on
+    a clean full-suite rerun).
 
 ## Architecture (big picture)
 
