@@ -649,6 +649,63 @@ def test_run_house_pipeline_injects_an_entry_room_when_garage_requested_but_no_f
         assert "Entry" in room_names
 
 
+class GeminiAddsUnrequestedGarageProvider(FakeProvider):
+    """Returns a room_layout that ALREADY includes a Garage room the model
+    invented on its own (ROOM_LAYOUT_PROMPT_TEMPLATE explicitly leaves adding
+    one up to Gemini's own judgement) - used to verify that an unrequested
+    garage is stripped out rather than reaching layout_floor() (2026-09-04,
+    real user report: an unrequested garage was rendered as an oversized,
+    full-depth strip that cramped every other room)."""
+
+    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+        return {
+            "floors": [
+                {
+                    "floor_number": 1,
+                    "rooms": [
+                        {"name": "Entry", "area": 1},
+                        {"name": "Living Room", "area": 3},
+                        {"name": "Kitchen", "area": 1.5},
+                        {"name": "Dining Room", "area": 1.5},
+                        {"name": "Garage", "area": 2},
+                    ],
+                }
+            ]
+        }
+
+
+def test_run_house_pipeline_strips_an_unrequested_garage_gemini_invented(monkeypatch):
+    # The user never mentioned "garage" anywhere in their requirements text,
+    # but Gemini's own room_layout included one anyway - it must be removed
+    # before layout_floor() runs, since ANY room named "Garage" gets the
+    # real, full-box-height carve-out treatment in _slice_reserving_garage()
+    # regardless of whether the user actually asked for it.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hnogarage1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hnogarage1", status="queued", plot_image_key="hnogarage1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = GeminiAddsUnrequestedGarageProvider()
+    run_house_pipeline(
+        "hnogarage1", provider, storage, {"length": 60, "width": 40, "unit": "ft"}, prompt="2 floors"
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hnogarage1")
+        assert house_project.status == "done"
+        assert house_project.blueprint_status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+        room_names = [r["name"] for r in room_layout["floors"][0]["rooms"]]
+        assert "Garage" not in room_names
+
+
 class TwoFloorProvider(FakeProvider):
     """Returns a real 2-floor room_layout, neither floor including a
     staircase - used to verify the real per-floor staircase injection

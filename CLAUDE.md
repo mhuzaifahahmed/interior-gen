@@ -1508,6 +1508,55 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     lower threshold is genuinely garage-specific - a non-garage room at the identical box size stays
     suppressed, and a garage below even ITS OWN lower threshold still gets suppressed too (the fix lowers
     the bar, it doesn't remove it). 472/472 passing (3 new).
+  - **A THIRD, separate garage bug found the same day, real user report with a screenshot: "in the prompt
+    i didnt tell it to generate a garage but it did and when it is adding a garage its taking too much
+    space, which is cramping up every room and text."** Root cause: `ROOM_LAYOUT_PROMPT_TEMPLATE`
+    (`app/providers/gemini.py`) explicitly leaves adding a garage up to Gemini's OWN judgement ("the
+    ground floor should hold... and - if it fits the requirements - a garage..."), not gated on the user
+    having actually asked for one - a probabilistic decision, not a real signal. Combined with the v16
+    width fix above, `_slice_reserving_garage()` gives ANY room merely NAMED "Garage" the real,
+    full-box-HEIGHT carve-out treatment regardless of whether `garage_cars` (the deterministic, real
+    "did the user ask for this" signal) was ever set - so a Gemini-invented garage on a 100ft-deep plot
+    came out as an 8.9x60.9ft strip (540 sq ft) running the full depth of the front zone, squeezing every
+    other public room and its label into a fraction of the space. Confirmed by literally reproducing the
+    reported screenshot's exact room mix and rendering it - the reproduction matched (see verification
+    below). Fix (`app/pipeline/generate_house.py`, right after `garage_cars` is resolved): whenever
+    `garage_cars` is falsy (the user's own requirements text has no "garage" mention at all - see
+    `house_requirements.mentions_garage()`), every room on every floor that `classify_room_category()`
+    would call "garage" is stripped out of `room_layout` before it ever reaches `layout_floor()` - same
+    "deterministic parsing overrides a probabilistic LLM decision" pattern already used to GUARANTEE a
+    garage that WAS requested (the injection block right below this), just its mirror image for the
+    unrequested case. Only Gemini's OWN invented garage is affected - a real user-requested garage still
+    goes through the existing injection + real-width-carve-out path unchanged.
+    **Verification**: reproduced the exact reported room mix (5 private-zone rooms + garage/entry/living/
+    dining/kitchen on a 100x100ft plot) via a scratch render - before the fix, garage came out as the same
+    disproportionate full-height strip described above; after the fix, no garage room exists at all and
+    the freed area goes back to Living Room/Dining/Kitchen via the normal weighted redistribution (Living
+    Room grew from 3209 to 3485 sq ft). New regression test
+    (`test_run_house_pipeline_strips_an_unrequested_garage_gemini_invented` in
+    `tests/test_house_pipeline.py`) uses a `FakeProvider` subclass whose `generate_room_layout()` already
+    returns a self-invented Garage room, with no "garage" mention anywhere in the pipeline's prompt text -
+    asserts the persisted `room_layout_json` has no Garage room at all. 473/473 passing (1 new).
+  - **A separate, NOT-a-bug-in-this-repo question asked alongside the garage report: why does the AI
+    "Concept Layout" card (the friend-hosted Kaggle SDXL+ControlNet model, `kaggle_autocad.py`) have a
+    dark/gray background instead of white?** This is the vendor model's own rendering aesthetic, not code
+    in this repo - `app/pipeline/conditioning_image.py`'s `render_conditioning_edge_map()` sends the
+    notebook a white-lines-on-BLACK Canny-style edge map (the standard input format for that ControlNet
+    type) as its geometry conditioning; at `controlnet_conditioning_scale=0.95` (deliberately high so the
+    model traces OUR real room geometry closely - see "ControlNet conditioning" history above), the model
+    also partly inherits that dark background rather than rendering a clean white sheet. This is a
+    **known, already-tracked, NOT-yet-fully-resolved cosmetic limitation** -
+    `future-plans/todo-and-pending-checks.md`'s "Planned: make the Kaggle Concept Layout model genuinely
+    better" section has a live history of this exact fight: an original washed-out gray/vignette problem
+    WAS fixed (2026-09-01, a CLIP 77-token negative-prompt truncation bug), but a true pure-white
+    background and poché (solid-filled) walls were never achieved - suspected to be a harder ask for a
+    Canny-ControlNet-conditioned SDXL model specifically (a filled/white background fights the line-based
+    edge-map conditioning signal itself), with an MLSD ControlNet swap flagged as the next real lever if
+    ever revisited. This card is deliberately labeled "Concept Layout - not a precise blueprint" for
+    exactly this reason - the deterministic Pillow-drawn blueprint next to it (light linen background,
+    solid poché walls, real dimensions) is the accurate, authoritative one; the AI card is a supplementary
+    visual only. No code change made here - the lever, if pursued further, is entirely on the friend's
+    Kaggle notebook side (prompt/negative-prompt tuning or a ControlNet-type swap), not this repo.
 
 ## Architecture (big picture)
 

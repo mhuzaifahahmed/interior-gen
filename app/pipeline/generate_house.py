@@ -349,6 +349,33 @@ def run_house_pipeline(
                 # tried and dropped once - see house_requirements.py's module
                 # docstring for the reasoning).
                 garage_cars = parse_garage_cars(requirements_text) if mentions_garage(requirements_text) else None
+
+                # Strip any garage Gemini invented on its own initiative
+                # (2026-09-04, real user report: "I didn't tell it to
+                # generate a garage but it did"). ROOM_LAYOUT_PROMPT_TEMPLATE
+                # explicitly leaves adding a garage up to Gemini's own
+                # judgement ("if it fits the requirements") - that's a
+                # probabilistic decision, not a real signal the user asked
+                # for one. When the user's own text has no "garage" mention
+                # at all, garage_cars is None here - remove any room Gemini
+                # added anyway so it never reaches layout_floor(), which
+                # would otherwise still give ANY room named "Garage" the
+                # real, full-box-height carve-out treatment in
+                # _slice_reserving_garage() regardless of whether it was
+                # actually requested - exactly what caused the reported
+                # over-large, cramping garage. Same "deterministic parsing
+                # overrides a probabilistic LLM decision" pattern already
+                # used to GUARANTEE a garage that WAS requested (the
+                # injection block below) - this is its mirror image for the
+                # unrequested case.
+                if not garage_cars:
+                    for floor in room_layout["floors"]:
+                        floor["rooms"] = [
+                            r
+                            for r in floor.get("rooms") or []
+                            if classify_room_category(str(r.get("name") or "")) != "garage"
+                        ]
+
                 unit = dimensions.get("unit") or "ft"
                 front_yard_depth = parse_front_yard_depth(requirements_text, unit)
 
