@@ -1574,6 +1574,40 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     - This card stays labeled "Concept Layout - not a precise blueprint" regardless of polarity - the
       deterministic Pillow-drawn blueprint next to it (light linen background, solid poché walls, real
       dimensions) remains the accurate, authoritative one; the AI card is a supplementary visual only.
+- **v17 (2026-09-04): room labels shrink and/or wrap onto two lines instead of overflowing a narrow
+  room.** Real user report: "the text is cluttered" - `_draw_room_label()` (`blueprint_svg.py`) previously
+  rendered every room name at one fixed font size (13px) regardless of the room's own pixel width, so a
+  long name (e.g. "MASTER BATHROOM") on a narrow room visibly overflowed past that room's own walls into
+  whatever was drawn next to it.
+  - **Deliberately NOT a fixed real-world "X feet" threshold**, even though that's how the request was
+    framed - measured directly (see below) and confirmed the same real room width needs shrinking on one
+    plot but not another, because whether a label overflows depends on the room's rendered PIXEL width,
+    which depends on the WHOLE PLOT's scale (`TARGET_PLOT_LONGEST_SIDE_PX / longest side`), not the room's
+    real feet alone. Same lesson this project already learned once for the garage furniture-icon gate
+    (`_GARAGE_MIN_BOX_W`/`_H`, see v16 above). Measured real-world equivalents across representative plot
+    scales for context: on a 40ft-plot (scale ~19.5px/ft), shrinking starts around a 6-8ft room width; on a
+    100ft-plot (~7.8px/ft), around 12-15ft; on a 200ft-plot (~3.9px/ft), around 20-30ft - roughly
+    proportional to plot size, exactly as the pixel-based reasoning predicts, and exactly why a single fixed
+    feet number would either over-shrink small plots or under-shrink large ones.
+  - **`_fit_room_name(draw, name, max_width_px, base_font)`** (new): tries the label's normal 13px size
+    first; if the name is too wide for the room's own pixel box (measured via the SAME `draw.textbbox()`
+    call that will actually render it, not an estimate), shrinks 1px at a time down to
+    `_NAME_MIN_FONT_SIZE` (9). If it still doesn't fit even at the minimum size, wraps onto two lines by
+    splitting at whichever space keeps the two halves' character counts closest to balanced (e.g. "MASTER
+    BATHROOM" -> "MASTER" / "BATHROOM"). A single-word name has no space to split on and is left as one
+    line at the minimum size - rare in practice since real room names are short, and far less clutter than
+    the original single-fixed-size behavior regardless.
+  - **`_draw_room_label()`** rewritten to call this, draw however many lines came back, and skip the
+    area-text line entirely (not cram it in) when a wrapped 2-line name would leave no real room for it -
+    same "no label at all is better than a cramped one" philosophy this function already had for
+    too-small rooms.
+  - **Verification**: re-rendered the exact suite-pairing room program from earlier in this session (a
+    100x100ft plot with narrow ~8.7ft-wide Master/2nd bathrooms) and visually confirmed "MASTER BATHROOM"/
+    "BATHROOM 2" now wrap cleanly onto two lines at a smaller size, fully inside their own room's walls,
+    no more spillover into "BEDROOM 2"'s text. New tests in `tests/test_blueprint_svg.py`
+    (`_fit_room_name()` unit tests for the fits-already/shrinks/wraps/single-word-can't-wrap cases, plus an
+    end-to-end test reproducing the exact reported room mix and asserting the rendered label width never
+    exceeds the room's own pixel box). 482/482 passing (5 new).
 
 ## Architecture (big picture)
 

@@ -453,6 +453,64 @@ _GARAGE_MIN_BOX_H = 40
 # first showed the overlap.
 _LABEL_CLEARANCE_PX = 26
 
+# Real user report (2026-09-04): room labels look "cluttered" on narrow
+# rooms - a long name (e.g. "MASTER BATHROOM") rendered at a single fixed
+# font size regardless of the room's own pixel width, so on a narrow room it
+# visually overflowed past the room's own walls into whatever was drawn
+# next to it. Fixed by _fit_room_name() below: shrink the font down to
+# _NAME_MIN_FONT_SIZE before wrapping, and only wrap onto two lines if even
+# the smallest allowed size still doesn't fit. Deliberately measured in
+# PIXELS (the room's actual rendered box width vs. the actual rendered text
+# width), not a fixed real-world "X feet" threshold - the same lesson this
+# project already learned once for the garage furniture-icon gate
+# (_GARAGE_MIN_BOX_W/H): whether a real-world room size overflows its label
+# depends on the WHOLE PLOT's scale (TARGET_PLOT_LONGEST_SIDE_PX / longest
+# side), not the room's real feet alone - an 8ft-wide room can render as a
+# generous 120px box on a small plot or a cramped 40px box on a large one,
+# so a feet-only threshold would either over-shrink small plots or
+# under-shrink large ones. See CLAUDE.md for the real-feet-equivalent
+# figures measured across this project's typical plot scales.
+_NAME_MIN_FONT_SIZE = 9
+_NAME_LINE_GAP_PX = 2
+_LABEL_WIDTH_MARGIN_PX = 10
+
+
+def _fit_room_name(
+    draw: ImageDraw.ImageDraw, name: str, max_width_px: float, base_font: ImageFont.FreeTypeFont
+) -> tuple[list[str], ImageFont.FreeTypeFont]:
+    """Returns (lines, font) for a room name label that must fit within
+    max_width_px. Tries the base font size first; if the name is too wide,
+    shrinks 1px at a time down to _NAME_MIN_FONT_SIZE. If it STILL doesn't
+    fit even at the minimum size, wraps onto two lines by splitting at
+    whichever space keeps the two halves' character counts closest to
+    balanced (e.g. "MASTER BATHROOM" -> "MASTER" / "BATHROOM") - a
+    single-word name has no space to split on and is left as one line at
+    the minimum size (in practice this only overflows by a few px for an
+    unusually long single word, far less clutter than the original
+    single-fixed-size behavior)."""
+    size = base_font.size
+    font = base_font
+    while size > _NAME_MIN_FONT_SIZE:
+        bbox = draw.textbbox((0, 0), name, font=font)
+        if bbox[2] - bbox[0] <= max_width_px:
+            return [name], font
+        size -= 1
+        font = ImageFont.load_default(size=size)
+
+    min_font = ImageFont.load_default(size=_NAME_MIN_FONT_SIZE)
+    bbox = draw.textbbox((0, 0), name, font=min_font)
+    if bbox[2] - bbox[0] <= max_width_px or " " not in name:
+        return [name], min_font
+
+    words = name.split(" ")
+    best_split, best_diff = 1, None
+    for i in range(1, len(words)):
+        left, right = " ".join(words[:i]), " ".join(words[i:])
+        diff = abs(len(left) - len(right))
+        if best_diff is None or diff < best_diff:
+            best_split, best_diff = i, diff
+    return [" ".join(words[:best_split]), " ".join(words[best_split:])], min_font
+
 
 def _draw_furniture(
     draw: ImageDraw.ImageDraw,
@@ -770,28 +828,50 @@ def _draw_room_label(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot
     # block entry rather than a plain UI text label.
     display_name = rect["name"].upper()
 
-    name_bbox = draw.textbbox((0, 0), display_name, font=name_font)
-    name_w, name_h = name_bbox[2] - name_bbox[0], name_bbox[3] - name_bbox[1]
+    # Shrink the font and/or wrap onto two lines when the room's own box is
+    # too narrow for the name at the default size - see _fit_room_name()'s
+    # docstring and the _NAME_MIN_FONT_SIZE comment above it.
+    max_name_width = max(box_w - _LABEL_WIDTH_MARGIN_PX, 10)
+    name_lines, fitted_font = _fit_room_name(draw, display_name, max_name_width, name_font)
+
+    line_dims = [_text_dims(draw, line, fitted_font) for line in name_lines]
+    name_w = max((w for w, _ in line_dims), default=0)
+    line_h = max((h for _, h in line_dims), default=0)
+    name_h = line_h * len(name_lines) + _NAME_LINE_GAP_PX * (len(name_lines) - 1)
+
     show_area = box_h >= 50
     area_w = area_h = 0
     divider_gap = 6
     if show_area:
-        area_bbox = draw.textbbox((0, 0), area_text, font=small_font)
-        area_w, area_h = area_bbox[2] - area_bbox[0], area_bbox[3] - area_bbox[1]
+        area_w, area_h = _text_dims(draw, area_text, small_font)
+        # A wrapped (2-line) name takes more vertical room than this
+        # function originally budgeted for - don't ALSO cram in the area
+        # line if there's no real room for it, matching this function's
+        # existing "no label at all" philosophy over a cramped one.
+        if name_h + divider_gap + area_h > box_h - 8:
+            show_area = False
 
     total_h = name_h + (divider_gap + area_h if show_area else 0)
-    name_x, name_y = cx - name_w / 2, cy - total_h / 2
-    _draw_faux_bold_text(draw, (name_x, name_y), display_name, name_font, INK)
+    y_cursor = cy - total_h / 2
+    for i, line in enumerate(name_lines):
+        line_w, line_height = line_dims[i]
+        _draw_faux_bold_text(draw, (cx - line_w / 2, y_cursor), line, fitted_font, INK)
+        y_cursor += line_height + (_NAME_LINE_GAP_PX if i < len(name_lines) - 1 else 0)
 
     if show_area:
         # A thin divider rule between name and area - the one small touch
         # that separates "two lines of text" from "a real title-block entry".
-        divider_y = name_y + name_h + divider_gap / 2
+        divider_y = y_cursor + divider_gap / 2
         divider_half_w = max(name_w, area_w) * 0.32
         draw.line(
             [(cx - divider_half_w, divider_y), (cx + divider_half_w, divider_y)], fill=INK_SOFT, width=1
         )
         draw.text((cx - area_w / 2, divider_y + divider_gap / 2), area_text, font=small_font, fill=INK_SOFT)
+
+
+def _text_dims(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> tuple[float, float]:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
 def _draw_faux_bold_text(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, font: ImageFont.FreeTypeFont, fill: tuple[int, int, int]) -> None:

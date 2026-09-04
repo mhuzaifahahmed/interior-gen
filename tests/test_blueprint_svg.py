@@ -1,9 +1,10 @@
 from io import BytesIO
 
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from app.pipeline.blueprint_svg import (
     _draw_furniture,
+    _fit_room_name,
     _should_suppress_direct_door,
     _should_suppress_garage_direct_door,
     render_floor_blueprint,
@@ -336,3 +337,68 @@ def test_garage_furniture_still_suppressed_below_its_own_lower_threshold():
     # suppressed - the fix lowers the bar, it doesn't remove it.
     rect = {"name": "Garage", "x": 0, "y": 0, "w": 5, "h": 5}
     assert _draw_furniture_and_diff_from_blank(rect, scale=5) is False
+
+
+def _draw_ctx():
+    return ImageDraw.Draw(Image.new("RGB", (10, 10)))
+
+
+def test_fit_room_name_keeps_default_size_when_it_already_fits():
+    draw = _draw_ctx()
+    name_font = ImageFont.load_default(size=13)
+    lines, font = _fit_room_name(draw, "GARAGE", max_width_px=1000, base_font=name_font)
+    assert lines == ["GARAGE"]
+    assert font.size == 13
+
+
+def test_fit_room_name_shrinks_font_before_wrapping():
+    # A width that's too narrow at size 13 but wide enough at a smaller
+    # size - must shrink, not wrap, since a single line is preferred.
+    draw = _draw_ctx()
+    name_font = ImageFont.load_default(size=13)
+    base_w, _ = draw.textbbox((0, 0), "MASTER BATHROOM", font=name_font)[2:4]
+    lines, font = _fit_room_name(draw, "MASTER BATHROOM", max_width_px=base_w - 30, base_font=name_font)
+    assert lines == ["MASTER BATHROOM"]
+    assert font.size < 13
+
+
+def test_fit_room_name_wraps_onto_two_lines_when_even_min_size_does_not_fit():
+    draw = _draw_ctx()
+    name_font = ImageFont.load_default(size=13)
+    lines, font = _fit_room_name(draw, "MASTER BATHROOM", max_width_px=40, base_font=name_font)
+    assert lines == ["MASTER", "BATHROOM"]
+    assert font.size == 9  # _NAME_MIN_FONT_SIZE
+
+
+def test_fit_room_name_cannot_wrap_a_single_word_and_falls_back_to_min_size():
+    draw = _draw_ctx()
+    name_font = ImageFont.load_default(size=13)
+    lines, font = _fit_room_name(draw, "GARAGE", max_width_px=10, base_font=name_font)
+    assert lines == ["GARAGE"]
+    assert font.size == 9
+
+
+def test_narrow_room_label_no_longer_overflows_into_neighboring_room():
+    # Real user report (2026-09-04): "MASTER BATHROOM" rendered at a single
+    # fixed font size overflowed past a narrow bathroom's own walls into
+    # whatever was drawn next to it. Reproduce the exact reported room mix
+    # and confirm the label now stays fully within the room's own pixel
+    # box (shrunk and/or wrapped), not overlapping the neighboring room.
+    rooms = [
+        {"name": "Master Bedroom", "area": 2.5},
+        {"name": "Master Bathroom", "area": 1},
+        {"name": "Bedroom 2", "area": 2},
+    ]
+    dimensions = {"length": 100, "width": 40, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions)
+    bathroom = next(r for r in rects if r["name"] == "Master Bathroom")
+    scale = 780 / max(dimensions["length"], dimensions["width"])
+    box_w_px = bathroom["w"] * scale
+
+    draw = _draw_ctx()
+    name_font = ImageFont.load_default(size=13)
+    lines, font = _fit_room_name(
+        draw, "MASTER BATHROOM", max_width_px=max(box_w_px - 10, 10), base_font=name_font
+    )
+    rendered_w = max(draw.textbbox((0, 0), line, font=font)[2] for line in lines)
+    assert rendered_w <= box_w_px
