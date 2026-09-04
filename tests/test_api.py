@@ -1,6 +1,7 @@
 import io
 import json
 import uuid
+from datetime import datetime
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -368,6 +369,11 @@ def test_list_projects_returns_own_projects_newest_first(monkeypatch):
         body = res.json()
         assert [p["project_id"] for p in body] == [second, first]
         assert body[0]["created_at"] is not None
+        # Real bug regression guard (2026-09-04): SQLite drops tzinfo on
+        # round-trip, so a naive .isoformat() call produced an ambiguous
+        # string the frontend misread as local time instead of UTC. The
+        # serialized value must always carry an explicit UTC offset.
+        assert datetime.fromisoformat(body[0]["created_at"]).tzinfo is not None
 
 
 def test_list_projects_requires_login():

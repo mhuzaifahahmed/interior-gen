@@ -1984,6 +1984,29 @@ Covered by manual testing (refresh mid-generation on both tabs); no automated te
 specific ordering bug since it's a page-load/module-evaluation-order issue, not something the existing
 `TestClient`-based test suite exercises.
 
+### Real bug fixed (2026-09-04): History dates displayed in the wrong timezone
+
+`Project.created_at`/`HouseProject.created_at` are always written with `datetime.now(timezone.utc)`
+(`app/models.py`'s `_now()`), but **SQLite silently drops the tzinfo on round-trip** - confirmed live by
+reading a row straight back from the DB: `datetime.datetime(2026, 9, 4, 6, 18, 18, ...)`, `tzinfo=None`.
+A plain `project.created_at.isoformat()` on that naive value produced an ambiguous string with no
+`Z`/offset suffix (e.g. `"2026-09-04T06:18:18.074068"`). `static/app.js`'s `new Date(iso)` then
+misinterpreted that string as the **browser's own local time** instead of UTC, before `formatHistoryDate()`
+converted "as if UTC" to Asia/Karachi for display - compounding into a wrong displayed time (the History
+modal's dates were off by whatever the browser's own UTC offset happened to be, not by a clean, obvious
+amount). **Fix**: `app/main.py`'s new `_utc_isoformat(dt)` helper reattaches `timezone.utc` to a naive
+datetime before formatting (safe - every stored value IS UTC by construction, this just makes that
+unambiguous once serialized), used at both `created_at=` call sites (`_project_to_response()`/
+`_house_project_to_response()`). Frontend side: `static/app.js`'s `formatHistoryDate()` now also always
+shows a real time-of-day (not just the date - same-day generations were previously indistinguishable),
+fixed to `timeZone: "Asia/Karachi"` (real GMT+5, no DST, confirmed correct - this app "isn't going
+international" so a single fixed timezone beats the browser's own). Room Redesign and Build a House
+**share the exact same `formatHistoryDate()` function** (`renderHistoryRoomCard()`/
+`renderHistoryHouseCard()` both call it) - fixing it once fixed both, no per-tab duplication needed.
+Regression-guarded: `tests/test_api.py`/`tests/test_house_api.py` now assert
+`datetime.fromisoformat(body[0]["created_at"]).tzinfo is not None` - a naive round-trip through SQLite
+regressing this fix would fail these tests immediately, without needing to inspect exact clock values.
+
 ## Resilient loading (reconnect on reload/navigation) + Cancel generating…
 
 Generation was already a server-side FastAPI `BackgroundTask` (`app/main.py`'s `create_project`/

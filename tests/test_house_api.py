@@ -2,6 +2,7 @@ import io
 import json
 import time
 import uuid
+from datetime import datetime
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -513,6 +514,10 @@ def test_list_house_projects_returns_own_newest_first(monkeypatch):
         body = res.json()
         assert [p["house_project_id"] for p in body] == [second, first]
         assert body[0]["created_at"] is not None
+        # Real bug regression guard (2026-09-04) - see test_api.py's identical
+        # comment: the serialized value must always carry an explicit UTC
+        # offset, not an ambiguous naive string.
+        assert datetime.fromisoformat(body[0]["created_at"]).tzinfo is not None
 
 
 def test_list_house_projects_requires_login():

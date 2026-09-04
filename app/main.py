@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, UploadFile, File
@@ -110,6 +111,25 @@ def privacy():
 CITY_MAX_CHARS = 80
 DISPLAY_NAME_MAX_CHARS = 40
 _DISPLAY_NAME_UNSAFE_CHARS = re.compile(r"[^a-z0-9]+")
+
+
+def _utc_isoformat(dt: datetime) -> str:
+    """Real bug fixed here (2026-09-04): every `created_at` is written with
+    `datetime.now(timezone.utc)` (see app/models.py's `_now()`), but SQLite
+    silently drops the tzinfo on round-trip - a plain `dt.isoformat()` on the
+    value read back from the DB produces a string with NO 'Z'/offset suffix
+    (confirmed live: `datetime.datetime(2026, 9, 4, 6, 18, 18, ...)`,
+    `tzinfo=None`). The frontend's `new Date(iso)` then misinterprets that
+    ambiguous string as the BROWSER's own local time instead of UTC, before
+    static/app.js's formatHistoryDate() converts "as if UTC" to Asia/Karachi
+    - compounding into a wrong displayed time. Since every value stored here
+    is UTC by construction regardless of what the DB gives back, a naive
+    datetime is safely reattached to UTC before formatting - this doesn't
+    change the underlying moment in time, only makes it unambiguous once
+    serialized."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
 
 
 def _storage_namespace(user_id: str, display_name: str) -> str:
@@ -316,7 +336,7 @@ def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
         images=images,
         materials=materials,
         materials_status=project.materials_status,
-        created_at=project.created_at.isoformat(),
+        created_at=_utc_isoformat(project.created_at),
         city=project.city,
         interior_style=project.interior_style,
         color_palette=project.color_palette,
@@ -616,7 +636,7 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
         blueprint_status=house_project.blueprint_status,
         blueprint_urls=blueprint_urls,
         blueprint_dxf_urls=blueprint_dxf_urls,
-        created_at=house_project.created_at.isoformat(),
+        created_at=_utc_isoformat(house_project.created_at),
         prompt=house_project.prompt,
         dimensions=dimensions,
         house_inputs=house_inputs,
