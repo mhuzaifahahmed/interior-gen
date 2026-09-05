@@ -1695,6 +1695,38 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     narrow room, still shown when it fits). 488/488 passing (7 new; one pre-existing, already-documented
     SQLite-lock-contention flake under full-suite load reconfirmed unrelated - passes in isolation and on
     a clean full-suite rerun).
+- **v22 (2026-09-05): the Kaggle "Concept Layout" card's composited room labels no longer jumble/overlap
+  on a real generation.** Live-reported bug from an actual production generation (100x100ft plot, garage
+  requested): text on the AI card ran together illegibly (e.g. "Master BedMaster BathroBedroolShared
+  BathroBedroom 3", "GaragEntry/Foyer") - initially suspected as another instance of this model's
+  already-documented diffusion text-rendering weakness, but tracing it down found a REAL, separate,
+  fixable bug in THIS repo's own code: `kaggle_autocad.py`'s `_composite_room_labels()` (the function that
+  overlays our own accurate room names onto the AI's returned image, added back when the ControlNet-
+  conditioning work made the AI output deliberately text-free) drew every label at ONE fixed font size
+  derived only from the overall image width, with NO per-room width check or wrapping at all - unlike
+  `blueprint_svg.py`'s equivalent label renderer, which got exactly this fix in v17 above. On a narrow
+  room, the label simply ran into whatever was drawn next to it.
+  - **Fix**: `_composite_room_labels()` now computes each room's real pixel width in the model's actual
+    returned image (same `plot_to_canvas_box()` + `scale_x`/`scale_y` math the function already used for
+    label POSITION, just also applied to WIDTH) and reuses `blueprint_svg._fit_room_name()` - the same
+    shrink-then-wrap logic already proven for the deterministic renderer - rather than re-inventing it.
+    Multi-line labels are drawn stacked and centered, same white-text-black-outline legibility technique
+    as before. Room names are now also uppercased here, matching `blueprint_svg.py`'s title-block
+    convention (previously left in whatever case Gemini/the fallback returned).
+  - **The OTHER half of the original complaint - the AI model's traced GEOMETRY not accurately following
+    the input conditioning lines - is NOT fixed by this and isn't a bug in this repo's code**: that's the
+    Kaggle SDXL+ControlNet model's own diffusion behavior (`controlnet_conditioning_scale` isn't 1.0, so
+    perfect adherence was never guaranteed - see the "ControlNet conditioning" history above), a genuinely
+    separate, already-tracked, harder problem (`future-plans/todo-and-pending-checks.md`'s "make the
+    Kaggle Concept Layout model genuinely better" section). This card stays labeled "Concept Layout - not
+    a precise blueprint" for exactly this reason; the deterministic PNG/DXF blueprint remains the accurate,
+    authoritative source.
+  - **Verification**: reproduced a real room mix close to the live-reported one (3 bedrooms, 2 bathrooms,
+    living/kitchen/dining, garage/entry, on a 100x100ft plot) by compositing labels onto a real conditioning
+    image and visually confirming every label now stays fully inside its own room, including the narrow
+    Master/Shared bathrooms that were previously the exact rooms whose text ran together. New test in
+    `tests/test_kaggle_autocad.py` confirms the actual rendered label width never exceeds a narrow room's
+    real pixel width. 489/489 passing (1 new).
 
 ## Architecture (big picture)
 

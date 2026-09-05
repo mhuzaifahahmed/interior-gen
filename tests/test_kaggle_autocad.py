@@ -2,12 +2,12 @@ import base64
 import io
 
 import httpx
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 import pytest
 
 import app.providers.kaggle_autocad as kaggle_autocad_module
-from app.providers.kaggle_autocad import _normalize_dark_background, generate_floor_plan
+from app.providers.kaggle_autocad import _composite_room_labels, _normalize_dark_background, generate_floor_plan
 from app.providers.session_errors import KaggleSessionUnavailableError
 
 
@@ -383,3 +383,37 @@ def test_generate_floor_plan_normalizes_a_dark_polarity_response(monkeypatch):
     returned_image = Image.open(io.BytesIO(result[0]))
     r, g, b = returned_image.getpixel((0, 0))
     assert r > 200 and g > 200 and b > 200
+
+
+def test_composite_room_labels_shrinks_or_wraps_a_label_too_wide_for_its_room():
+    # Real, live-reported bug (2026-09-05): every label was drawn at ONE
+    # fixed font size derived only from the overall image width, with no
+    # per-room width check or wrapping at all - on a narrow room (e.g. a
+    # compact bathroom beside a bedroom) the label ran straight into its
+    # neighbor's, reading as jumbled/overlapping text (e.g. "Master
+    # BedMaster BathroBedroolShared BathroBedroom 3"). Reproduces a narrow
+    # room whose name would clearly overflow at the module's default font
+    # size and confirms the ACTUAL rendered label - reading back the same
+    # image this function draws onto, using the same font-fitting logic -
+    # never exceeds the room's own real pixel width.
+    from app.pipeline.blueprint_svg import _fit_room_name
+    from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box
+
+    rects = [
+        {"name": "Master Bedroom", "x": 0, "y": 0, "w": 24, "h": 30},
+        {"name": "Master Bathroom", "x": 24, "y": 0, "w": 8, "h": 30},
+        {"name": "Bedroom 2", "x": 32, "y": 0, "w": 24, "h": 30},
+    ]
+    dimensions = {"length": 56, "width": 30, "unit": "ft"}
+    image = Image.new("RGB", (CANVAS_SIZE, CANVAS_SIZE), (0, 0, 0))
+    _composite_room_labels(image, rects, dimensions)
+
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    _x0, _y0, box_w, _box_h = plot_to_canvas_box(56, 30)
+    bathroom = rects[1]
+    room_px_w = bathroom["w"] / 56 * box_w  # scale_x is 1.0 here (image width == CANVAS_SIZE)
+    base_font = ImageFont.load_default(size=max(14, CANVAS_SIZE // 32))
+
+    lines, font = _fit_room_name(draw, bathroom["name"].upper(), max(room_px_w - 8, 10), base_font)
+    rendered_w = max(draw.textbbox((0, 0), line, font=font)[2] for line in lines)
+    assert rendered_w <= room_px_w

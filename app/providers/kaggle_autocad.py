@@ -81,6 +81,7 @@ import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
 
 from app.config import settings
+from app.pipeline.blueprint_svg import _NAME_LINE_GAP_PX, _fit_room_name
 from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box, render_conditioning_edge_map
 from app.pipeline.floor_layout import layout_floor
 from app.providers.session_errors import KaggleSessionUnavailableError, classify_kaggle_failure
@@ -168,14 +169,28 @@ def _composite_room_labels(image: Image.Image, rects: list[dict], dimensions: di
     FRACTION of the conditioning canvas, then scaled to the actual returned
     image size, so this stays correct regardless of the exact resolution the
     model returns. White text with a black outline so it stays legible over
-    whatever color the AI happened to render at that point."""
+    whatever color the AI happened to render at that point.
+
+    2026-09-05 real bug, live-reported: on a complex room program this
+    always drew every label at ONE FIXED font size (derived only from the
+    overall image width, never the individual room's own size), with no
+    wrapping or overflow protection at all - so on any narrow room, a
+    label ran straight into its neighbor's, reading as jumbled/overlapping
+    text (e.g. "Master BedMaster BathroBedroolShared BathroBedroom 3" all
+    strung together). blueprint_svg.py's deterministic renderer already
+    solved this exact problem (_fit_room_name() - shrink the font, then
+    wrap onto two lines, based on the room's own real pixel width) -
+    reused here rather than re-invented, now that a room's real pixel
+    width in the FINAL image can be computed the same way its label
+    position already is (both derive from plot_to_canvas_box() + the
+    scale_x/scale_y factor for the model's actual returned resolution)."""
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
     x0, y0, box_w, box_h = plot_to_canvas_box(length, width)
 
     draw = ImageDraw.Draw(image)
     font_size = max(14, image.width // 32)
-    font = ImageFont.load_default(size=font_size)
+    base_font = ImageFont.load_default(size=font_size)
     scale_x = image.width / CANVAS_SIZE
     scale_y = image.height / CANVAS_SIZE
 
@@ -184,15 +199,25 @@ def _composite_room_labels(image: Image.Image, rects: list[dict], dimensions: di
         center_y = y0 + (rect["y"] + rect["h"] / 2) / width * box_h
         px, py = center_x * scale_x, center_y * scale_y
 
-        text = str(rect.get("name") or "")
+        text = str(rect.get("name") or "").upper()
         if not text:
             continue
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        origin = (px - tw / 2, py - th / 2)
-        for dx, dy in ((-1, -1), (-1, 1), (1, -1), (1, 1)):
-            draw.text((origin[0] + dx, origin[1] + dy), text, fill="black", font=font)
-        draw.text(origin, text, fill="white", font=font)
+
+        room_px_w = (rect["w"] / length * box_w) * scale_x
+        max_width_px = max(room_px_w - 8, 10)
+        lines, font = _fit_room_name(draw, text, max_width_px, base_font)
+
+        line_dims = [draw.textbbox((0, 0), line, font=font) for line in lines]
+        line_sizes = [(b[2] - b[0], b[3] - b[1]) for b in line_dims]
+        total_h = sum(h for _, h in line_sizes) + _NAME_LINE_GAP_PX * (len(lines) - 1)
+
+        y_cursor = py - total_h / 2
+        for line, (lw, lh) in zip(lines, line_sizes):
+            origin = (px - lw / 2, y_cursor)
+            for dx, dy in ((-1, -1), (-1, 1), (1, -1), (1, 1)):
+                draw.text((origin[0] + dx, origin[1] + dy), line, fill="black", font=font)
+            draw.text(origin, line, fill="white", font=font)
+            y_cursor += lh + _NAME_LINE_GAP_PX
 
     return image
 
