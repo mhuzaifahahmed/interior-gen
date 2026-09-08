@@ -81,7 +81,7 @@ import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
 
 from app.config import settings
-from app.pipeline.blueprint_svg import _NAME_LINE_GAP_PX, _fit_room_name
+from app.pipeline.blueprint_svg import _NAME_LINE_GAP_PX, _draw_furniture_in_bbox, _fit_room_name
 from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box, render_conditioning_edge_map
 from app.pipeline.floor_layout import layout_floor
 from app.providers.session_errors import KaggleSessionUnavailableError, classify_kaggle_failure
@@ -159,6 +159,62 @@ def _normalize_dark_background(image: Image.Image) -> Image.Image:
     mean_luminance = ImageStat.Stat(image.convert("L")).mean[0]
     if mean_luminance < _DARK_BACKGROUND_MEAN_THRESHOLD:
         return ImageOps.invert(image)
+    return image
+
+
+def _room_pixel_box(
+    rect: dict, length: float, width: float, x0: float, y0: float, box_w: float, box_h: float, scale_x: float, scale_y: float
+) -> tuple[float, float, float, float]:
+    """Maps one room rect (in real length/width units) to its (rx0, ry0, rx1,
+    ry1) box in the returned image's own pixels - the exact same plot->canvas
+    ->image chain _composite_room_labels() uses for label centers, just the
+    full box rather than only the center point. Handles a non-square returned
+    image (scale_x != scale_y) directly, unlike blueprint_svg's own _room_bbox
+    which assumes one uniform scale."""
+    rx0 = (x0 + rect["x"] / length * box_w) * scale_x
+    ry0 = (y0 + rect["y"] / width * box_h) * scale_y
+    rx1 = (x0 + (rect["x"] + rect["w"]) / length * box_w) * scale_x
+    ry1 = (y0 + (rect["y"] + rect["h"]) / width * box_h) * scale_y
+    return rx0, ry0, rx1, ry1
+
+
+def _composite_room_furniture(
+    image: Image.Image, rects: list[dict], dimensions: dict, stair_direction: str | None = None
+) -> Image.Image:
+    """Draws our OWN accurate furniture symbols (bed/sofa/kitchen counter/
+    bathroom fixtures/car/staircase, keyword-matched per room name) onto the
+    AI-returned image, reusing blueprint_svg._draw_furniture_in_bbox() - the
+    exact same deterministic furniture the authoritative blueprint PNG draws.
+
+    2026-09-08: added at explicit user request to fix the Concept Layout card's
+    furniture looking wrong (the SDXL model draws its own hallucinated
+    furniture in the wrong rooms - e.g. a dining table in a bedroom). This is
+    entirely backend-side and depends on NOTHING from the notebook: it always
+    draws, so it can never reproduce the earlier "empty rooms" regression
+    (which happened when the notebook was told to stop drawing furniture but
+    nothing drew it back). If the notebook additionally bans its own furniture
+    via the negative prompt, only ours shows (cleanest); if it doesn't, ours
+    is composited on top and is the accurate one. Drawn BEFORE the labels (see
+    the caller) so a room name always sits legibly on top of its furniture,
+    same layering as the deterministic blueprint renderer.
+
+    Each rect is mapped to the returned image's own pixels via _room_pixel_box
+    (identical placement math to _composite_room_labels), so furniture lands in
+    the same rooms the conditioning geometry - and thus the AI's own traced
+    walls - are built from."""
+    length = float(dimensions.get("length") or 1)
+    width = float(dimensions.get("width") or 1)
+    x0, y0, box_w, box_h = plot_to_canvas_box(length, width)
+
+    draw = ImageDraw.Draw(image)
+    scale_x = image.width / CANVAS_SIZE
+    scale_y = image.height / CANVAS_SIZE
+    stair_font = ImageFont.load_default(size=max(11, image.width // 48))
+
+    for rect in rects:
+        rx0, ry0, rx1, ry1 = _room_pixel_box(rect, length, width, x0, y0, box_w, box_h, scale_x, scale_y)
+        _draw_furniture_in_bbox(draw, rect, rx0, ry0, rx1, ry1, stair_font, stair_direction)
+
     return image
 
 
@@ -304,18 +360,26 @@ def generate_floor_plan(
                     logger.error("kaggle_autocad job %s reported done with no floors", job_id)
                     return None
                 floors_out = sorted(floors_out, key=lambda f: f.get("floor_number", 0))
+                total_floors = len(rects_by_floor) if rects_by_floor else 1
                 png_images = []
                 for floor in floors_out:
                     jpeg_bytes = base64.b64decode(floor["image_base64"])
                     image = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
                     image = _normalize_dark_background(image)
-                    # Phase 2: composite our own accurate room labels onto the
-                    # (deliberately text-free, per the updated negative prompt)
-                    # AI image - only possible for floors we actually sent a
-                    # real conditioning image for, since label placement uses
-                    # those same rects. See _composite_room_labels()'s docstring.
+                    # Composite our own accurate furniture + room labels onto
+                    # the AI image - only for floors we actually sent a real
+                    # conditioning image for, since both use those same rects.
+                    # Furniture FIRST, labels on top (same layering as the
+                    # deterministic blueprint renderer) so a room name always
+                    # sits legibly over its own furniture. See
+                    # _composite_room_furniture()/_composite_room_labels().
                     rects = rects_by_floor.get(floor.get("floor_number"))
                     if rects:
+                        floor_number = floor.get("floor_number")
+                        stair_direction = (
+                            ("UP" if floor_number < total_floors else "DN") if total_floors > 1 else None
+                        )
+                        image = _composite_room_furniture(image, rects, dimensions, stair_direction)
                         image = _composite_room_labels(image, rects, dimensions)
                     buffer = io.BytesIO()
                     image.save(buffer, format="PNG")

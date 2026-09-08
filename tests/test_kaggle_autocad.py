@@ -7,7 +7,12 @@ from PIL import Image, ImageDraw, ImageFont
 import pytest
 
 import app.providers.kaggle_autocad as kaggle_autocad_module
-from app.providers.kaggle_autocad import _composite_room_labels, _normalize_dark_background, generate_floor_plan
+from app.providers.kaggle_autocad import (
+    _composite_room_furniture,
+    _composite_room_labels,
+    _normalize_dark_background,
+    generate_floor_plan,
+)
 from app.providers.session_errors import KaggleSessionUnavailableError
 
 
@@ -383,6 +388,62 @@ def test_generate_floor_plan_normalizes_a_dark_polarity_response(monkeypatch):
     returned_image = Image.open(io.BytesIO(result[0]))
     r, g, b = returned_image.getpixel((0, 0))
     assert r > 200 and g > 200 and b > 200
+
+
+def test_composite_room_furniture_draws_symbols_into_rooms():
+    # 2026-09-08: the Concept Layout card now composites our OWN accurate
+    # furniture (reusing blueprint_svg's deterministic symbols) onto the AI
+    # image, fixing the model's own hallucinated/wrong furniture. This
+    # confirms furniture is actually drawn into a room (the composited image
+    # differs from the untouched background), the drawing half of the fix.
+    from app.pipeline.conditioning_image import CANVAS_SIZE
+
+    rects = [
+        {"name": "Master Bedroom", "x": 0, "y": 0, "w": 50, "h": 50},
+        {"name": "Kitchen", "x": 50, "y": 0, "w": 50, "h": 50},
+    ]
+    dimensions = {"length": 100, "width": 50, "unit": "ft"}
+    image = Image.new("RGB", (CANVAS_SIZE, CANVAS_SIZE), (250, 246, 238))
+    before = image.tobytes()
+    _composite_room_furniture(image, rects, dimensions)
+    assert image.tobytes() != before  # furniture symbols were drawn
+
+
+def test_generate_floor_plan_composites_furniture_when_room_layout_given(monkeypatch):
+    # The furniture compositor must actually be wired into the done-branch's
+    # return path (not just defined) whenever we sent real conditioning
+    # geometry - guarded here with a spy, since it's easy to add the function
+    # but forget the call site (as happened once with the labels).
+    monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_autocad_module.time, "sleep", lambda _: None)
+
+    called = {"count": 0}
+    real = kaggle_autocad_module._composite_room_furniture
+
+    def spy(image, rects, dimensions, stair_direction=None):
+        called["count"] += 1
+        return real(image, rects, dimensions, stair_direction)
+
+    monkeypatch.setattr(kaggle_autocad_module, "_composite_room_furniture", spy)
+
+    room_layout = {"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 1}]}]}
+
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(json_data={"status": "started", "job_id": "job-furniture"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(
+            json_data={"status": "done", "floors": [{"floor_number": 1, "image_base64": _fake_jpeg_b64()}]}
+        )
+
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "get", fake_get)
+
+    result = generate_floor_plan(
+        "a plot", {"length": 40, "width": 60, "unit": "ft"}, "1 floor", room_layout=room_layout
+    )
+    assert result is not None
+    assert called["count"] == 1
 
 
 def test_composite_room_labels_shrinks_or_wraps_a_label_too_wide_for_its_room():

@@ -522,6 +522,28 @@ def _draw_furniture(
     stair_direction: str | None = None,
 ) -> None:
     x0, y0, x1, y1 = _room_bbox(rect, plot_x0, plot_y0, scale)
+    _draw_furniture_in_bbox(draw, rect, x0, y0, x1, y1, font, stair_direction)
+
+
+def _draw_furniture_in_bbox(
+    draw: ImageDraw.ImageDraw,
+    rect: dict,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    font: ImageFont.FreeTypeFont | None = None,
+    stair_direction: str | None = None,
+) -> None:
+    """Dispatches furniture into a room's OUTER bbox given directly in pixels
+    (the min-box gate, interior clearance pad, and per-room-type dispatch all
+    computed from it). Split out of _draw_furniture (2026-09-08) so the Kaggle
+    "Concept Layout" compositor (app/providers/kaggle_autocad.py) can reuse the
+    exact same furniture symbols on the AI-returned image, mapping each rect to
+    that image's own pixels itself (its plot->canvas->image scale is not the
+    single uniform `scale` this renderer's own _room_bbox assumes). Behavior
+    for this module's own callers is unchanged - _draw_furniture just computes
+    the bbox via _room_bbox first, exactly as before."""
     box_w, box_h = x1 - x0, y1 - y0
     name = rect["name"].lower()
 

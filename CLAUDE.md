@@ -1695,6 +1695,48 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     narrow room, still shown when it fits). 488/488 passing (7 new; one pre-existing, already-documented
     SQLite-lock-contention flake under full-suite load reconfirmed unrelated - passes in isolation and on
     a clean full-suite rerun).
+- **v22 (2026-09-08): the AI "Concept Layout" card now shows OUR OWN accurate furniture, not the SDXL
+  model's hallucinated furniture.** Real, direct user request (approved after being warned it previously
+  caused an empty-rooms regression): "maybe refrain from emptying everything but work on that." The model
+  draws its own furniture in the wrong rooms (e.g. a dining table in a bedroom) - the earlier attempt to
+  fix this by telling the notebook to draw the RIGHT furniture from `room_boxes_per_floor` produced empty
+  rooms, because that data was never actually sent from this backend, so the notebook (told to stop
+  drawing its own furniture) had nothing to draw back. **This pass avoids that failure mode entirely by
+  doing everything backend-side, depending on NOTHING from the notebook**: `kaggle_autocad.py`'s new
+  `_composite_room_furniture()` draws our own deterministic furniture symbols (the exact same ones the
+  authoritative blueprint PNG uses) directly onto the returned AI image, right before the existing label
+  compositing (furniture first, labels on top - same layering as `blueprint_svg.py`). Because it ALWAYS
+  draws, it can never reproduce the empty-rooms regression regardless of notebook state; if the notebook
+  additionally bans its own furniture via the negative prompt, only ours shows (cleanest), and if it
+  doesn't, ours is composited on top and is the accurate one either way.
+  - **Reuse, not reimplementation**: `blueprint_svg.py`'s `_draw_furniture()` was split into a thin
+    wrapper + a new `_draw_furniture_in_bbox(draw, rect, x0, y0, x1, y1, font, stair_direction)` that
+    takes a room's OUTER bbox in pixels directly (behavior for blueprint_svg's own callers is byte-for-
+    byte unchanged - the wrapper just computes the bbox via `_room_bbox` first, exactly as before).
+    `_composite_room_furniture()` maps each rect to the returned image's own pixels via `_room_pixel_box()`
+    - the identical plot->canvas->image placement math `_composite_room_labels()` already uses (so
+    furniture lands in the same rooms the conditioning geometry, and thus the AI's own traced walls, are
+    built from), but handling a non-square returned image (`scale_x != scale_y`) directly, unlike
+    blueprint_svg's own `_room_bbox` which assumes one uniform `scale`.
+  - Staircase direction (UP/DN) is computed per floor from `total_floors = len(rects_by_floor)` and passed
+    through, so multi-floor buildings get the right stair symbol - same rule as the blueprint renderer.
+  - **Verified by rendering, not just tests** (this project's own repeated lesson): composited furniture +
+    labels onto a synthetic "the AI traced our geometry" background (the conditioning edge map inverted to
+    dark-lines-on-light) for a single-floor 100x100ft house (garage/entry/living/dining/kitchen + 3
+    bedroom+bathroom suites) and a 2-floor ground floor with a staircase - confirmed beds/bathroom
+    fixtures/sofa+coffee-table+armchair/kitchen counter+sink+burners+fridge/dining set/garage car/stair
+    run all land in the correct rooms and labels sit legibly on top. A REAL Kaggle generation still can't
+    be run here (needs the live tunnel + costs), but the compositing geometry is fully verifiable offline
+    this way. Tests: `test_composite_room_furniture_draws_symbols_into_rooms` (drawing) +
+    `test_generate_floor_plan_composites_furniture_when_room_layout_given` (a spy confirming it's actually
+    wired into the done-branch, not just defined - the exact call-site-forgotten class of bug that hit the
+    labels once). 491/491 passing (2 new).
+  - **Optional, notebook-side, NOT required**: banning the model's own furniture in the notebook's
+    negative prompt (`"furniture, appliances, beds, tables, sofas, chairs, clutter"`) would make the card
+    cleaner (only our furniture shows). This is now SAFE to apply (we always draw furniture, so it can't
+    cause empty rooms), but it's the friend's notebook, outside this repo, and this fix does NOT depend on
+    it. The deterministic blueprint/DXF next to this card stays the authoritative, accurate deliverable;
+    this card remains a supplementary "Concept Layout - not a precise blueprint" visual.
 
 ## Architecture (big picture)
 
