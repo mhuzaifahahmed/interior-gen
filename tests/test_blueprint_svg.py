@@ -4,9 +4,14 @@ from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from app.pipeline.blueprint_svg import (
     PAPER,
+    _FURNITURE_MIN_BOX_H,
+    _FURNITURE_MIN_BOX_W,
+    _LIVING_ROOM_LARGE_MULTIPLIER,
     _draw_furniture,
     _draw_room_label,
     _fit_room_name,
+    _furnish_kitchen,
+    _furnish_living,
     _should_suppress_direct_door,
     _should_suppress_garage_direct_door,
     render_floor_blueprint,
@@ -339,6 +344,82 @@ def test_garage_furniture_still_suppressed_below_its_own_lower_threshold():
     # suppressed - the fix lowers the bar, it doesn't remove it.
     rect = {"name": "Garage", "x": 0, "y": 0, "w": 5, "h": 5}
     assert _draw_furniture_and_diff_from_blank(rect, scale=5) is False
+
+
+def _render_pixels(draw_fn, w_px: int, h_px: int, *extra_args) -> Image.Image:
+    image = Image.new("RGB", (w_px, h_px), "white")
+    draw = ImageDraw.Draw(image)
+    draw_fn(draw, 0, 0, w_px, h_px, w_px, h_px, *extra_args)
+    return image
+
+
+def test_furnish_living_adds_tv_console_for_a_large_room():
+    # 2026-09-09: real user feedback - a large living room with only the base
+    # (sofa + coffee table + armchair) set looked mostly empty, since that
+    # set only ever occupies one corner regardless of room size. Rooms above
+    # _LIVING_ROOM_LARGE_MULTIPLIER additionally get a TV console + rug.
+    # Checked at the console's own computed position (mirroring
+    # _furnish_living's real placement math) rather than a raw ink-density
+    # comparison - outline-stroke ink density naturally drops as a shape
+    # scales up regardless of extra furniture, so density alone isn't a
+    # reliable signal here.
+    threshold_area = _FURNITURE_MIN_BOX_W * _FURNITURE_MIN_BOX_H * _LIVING_ROOM_LARGE_MULTIPLIER
+
+    small_w, small_h = 90, 90
+    assert small_w * small_h < threshold_area
+    small = _render_pixels(_furnish_living, small_w, small_h)
+
+    large_w, large_h = 300, 260
+    assert large_w * large_h > threshold_area
+    large = _render_pixels(_furnish_living, large_w, large_h)
+
+    # Reproduces _furnish_living's own console placement formula so the
+    # probed region is exactly where the console is drawn, not a guess.
+    depth = min(large_w, large_h) * 0.18
+    sofa_len = large_w * 0.55
+    console_w, console_h = sofa_len * 0.6, depth * 0.5
+    console_x0 = (sofa_len - console_w) / 2
+    console_y1 = large_h - depth * 0.4
+    console_y0 = console_y1 - console_h
+
+    # console_w/console_y1-console_y0 are the OUTLINE box - probe the whole
+    # bbox (not shrunk inward) since only the border itself carries ink.
+    large_has_console = any(
+        large.getpixel((x, y)) != (255, 255, 255)
+        for x in range(int(console_x0), int(console_x0 + console_w) + 1)
+        for y in range(int(console_y0), int(console_y1) + 1)
+    )
+    assert large_has_console
+
+    # The small room (below the threshold) must never draw a console at
+    # all - confirmed by checking the analogous relative region is empty.
+    small_console_x0 = int((small_w * 0.55) * 0.2)
+    small_console_y0 = int(small_h * 0.7)
+    small_has_console = any(
+        small.getpixel((x, y)) != (255, 255, 255)
+        for x in range(small_console_x0, int(small_w * 0.5))
+        for y in range(small_console_y0, small_h - 2)
+    )
+    assert not small_has_console
+
+
+def test_furnish_kitchen_island_never_collides_with_a_centered_label():
+    # Real bug hit and fixed via visual inspection (2026-09-09): the first
+    # version of the island was positioned near the room's own vertical
+    # center - exactly where _draw_room_label() centers the room name/area
+    # text - so the island and its bar stools rendered directly through the
+    # label. Fixed the same way bedrooms already handle this
+    # (_LABEL_CLEARANCE_PX): a room tall enough to trigger the island must
+    # still draw nothing inside the label's own clearance band.
+    w_px, h_px = 300, 600
+    cy = h_px / 2
+    label_clearance_px = 26  # _LABEL_CLEARANCE_PX, kept as a literal to avoid importing a private constant twice
+    image = _render_pixels(_furnish_kitchen, w_px, h_px, cy)
+
+    band_top, band_bottom = int(cy - label_clearance_px), int(cy + label_clearance_px)
+    for y in range(band_top, band_bottom):
+        for x in range(0, w_px, 5):
+            assert image.getpixel((x, y)) == (255, 255, 255), f"furniture drawn into the label band at ({x},{y})"
 
 
 def _draw_ctx():

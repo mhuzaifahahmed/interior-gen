@@ -441,6 +441,15 @@ _FURNITURE_MIN_BOX_H = 60
 # ellipses, a toilet's real-world-proportioned rectangle, etc.).
 _GARAGE_MIN_BOX_W = 40
 _GARAGE_MIN_BOX_H = 40
+# Rooms at or above this multiple of the general min-box AREA get "filled in"
+# furniture (an added TV console + rug for living rooms, an island for
+# kitchens) instead of just the base fixed set, which otherwise reads as
+# sparse/empty on a large room - real user feedback (2026-09-09) looking at
+# a big Living Room card that only had a corner sofa + one armchair with most
+# of the floor bare. Below this multiplier, the base set alone already fills
+# a reasonable share of the room, so nothing extra is added.
+_LIVING_ROOM_LARGE_MULTIPLIER = 2.2
+_KITCHEN_LARGE_MULTIPLIER = 2.2
 # Half the room label's rendered block height (name + area lines), plus a
 # margin - the label is centered on the room's own cy in _draw_room_label().
 # Real value found by measuring an actual rendered label, not guessed: a
@@ -565,7 +574,7 @@ def _draw_furniture_in_bbox(
     elif "bed" in name:
         _furnish_bedroom(draw, ix0, iy0, ix1, iy1, iw, ih, cy)
     elif "kitchen" in name:
-        _furnish_kitchen(draw, ix0, iy0, ix1, iy1, iw, ih)
+        _furnish_kitchen(draw, ix0, iy0, ix1, iy1, iw, ih, cy)
     elif "dining" in name:
         _furnish_dining(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif any(k in name for k in ("living", "lounge", "family", "drawing")):
@@ -621,6 +630,12 @@ def _furnish_bedroom(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float,
 
 
 def _furnish_living(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+    """Base set (sofa + side arm + coffee table + armchair) is unchanged for
+    every room. Rooms above _LIVING_ROOM_LARGE_MULTIPLIER additionally get a
+    TV console (facing the sofa across the room) + a rug filling the space
+    between them - real user feedback (2026-09-09): a large living room with
+    only the base set looked mostly empty, since that set only ever occupies
+    one corner regardless of how big the room actually is."""
     depth = min(w, h) * 0.18
     sofa_len = w * 0.55
     draw.rectangle([x0, y0, x0 + sofa_len, y0 + depth], outline=FURNITURE_COLOR, width=1)  # sofa back run
@@ -631,13 +646,36 @@ def _furnish_living(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, 
         cx = x0 + sofa_len * i / cushion_count
         draw.line([(cx, y0 + 2), (cx, y0 + depth - 2)], fill=FURNITURE_COLOR, width=1)
     draw.rectangle([x0, y0, x0 + depth, y0 + h * 0.5], outline=FURNITURE_COLOR, width=1)  # sofa side arm
-    table = min(w, h) * 0.14
-    tx, ty = x0 + w * 0.35, y0 + h * 0.62
-    draw.rectangle([tx, ty, tx + table, ty + table], outline=FURNITURE_COLOR, width=1)
+    table_w, table_h = sofa_len * 0.32, depth * 0.9
+    tx0 = x0 + (sofa_len - table_w) / 2
+    ty0 = y0 + depth * 1.6
+    draw.rectangle([tx0, ty0, tx0 + table_w, ty0 + table_h], outline=FURNITURE_COLOR, width=1)  # coffee table, centered in front of the sofa
     chair = min(w, h) * 0.15
     draw.rounded_rectangle(
         [x1 - chair, y1 - chair, x1, y1], radius=chair * 0.2, outline=FURNITURE_COLOR, width=1
     )  # armchair, rounded to read distinct from the sofa's square corners
+
+    is_large = (w * h) > (_FURNITURE_MIN_BOX_W * _FURNITURE_MIN_BOX_H) * _LIVING_ROOM_LARGE_MULTIPLIER
+    if is_large:
+        console_w = sofa_len * 0.6
+        console_h = depth * 0.5
+        console_x0 = x0 + (sofa_len - console_w) / 2
+        console_y1 = y1 - depth * 0.4
+        console_y0 = console_y1 - console_h
+        if console_y0 > ty0 + table_h + depth * 0.5:  # only draw once it clears the coffee table
+            draw.rectangle(
+                [console_x0, console_y0, console_x0 + console_w, console_y1], outline=FURNITURE_COLOR, width=1
+            )  # TV console against the wall opposite the sofa
+            tv_w, tv_h = console_w * 0.55, console_h * 1.3
+            tv_x0 = console_x0 + (console_w - tv_w) / 2
+            draw.rectangle(
+                [tv_x0, console_y0 - tv_h - 3, tv_x0 + tv_w, console_y0 - 3], outline=FURNITURE_COLOR, width=1
+            )  # the TV itself, standing just off the console top
+
+            rug_x0, rug_y0 = x0 + depth * 0.3, y0 + depth * 1.3
+            rug_x1, rug_y1 = tx0 + table_w + depth * 0.6, console_y0 - 6
+            if rug_x1 > rug_x0 and rug_y1 > rug_y0:
+                draw.rounded_rectangle([rug_x0, rug_y0, rug_x1, rug_y1], radius=8, outline=FURNITURE_COLOR, width=1)
 
 
 def _furnish_dining(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
@@ -653,13 +691,37 @@ def _furnish_dining(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, 
             draw.rectangle([cx - chair / 2, ty1 + 3, cx + chair / 2, ty1 + chair + 3], outline=FURNITURE_COLOR, width=1)
 
 
-def _furnish_kitchen(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+def _furnish_kitchen(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float, cy: float | None = None) -> None:
+    """Counter/stove/fridge unchanged in position. The sink is a rounded
+    rectangle basin + a small faucet mark instead of a bare ellipse - the
+    standard architectural sink symbol, more immediately readable to a
+    non-architect (real user feedback, 2026-09-09: "ideal counter top which
+    is understandable by a new person"). Kitchens above
+    _KITCHEN_LARGE_MULTIPLIER additionally get a center island with two
+    bar-stool marks, since a bare counter run reads as sparse/unfinished on
+    a large kitchen - same "large rooms get filled in" treatment as living
+    rooms.
+
+    Real bug hit and fixed via visual inspection (2026-09-09): the island's
+    first version was placed near the room's own vertical center, which is
+    exactly where _draw_room_label() centers the room's name/area text - the
+    island and its bar stools rendered directly through the label. Fixed the
+    same way bedrooms already handle this (_LABEL_CLEARANCE_PX): the island
+    is only drawn when it can sit entirely below the label's clearance band,
+    skipped otherwise (no clutter beats colliding clutter)."""
     depth = min(w, h) * 0.16
     draw.rectangle([x0, y0, x1, y0 + depth], outline=FURNITURE_COLOR, width=1)  # counter run along the top wall
     draw.rectangle([x1 - depth, y0, x1, y0 + h * 0.6], outline=FURNITURE_COLOR, width=1)  # counter run along the side wall
-    sink_r = depth * 0.3
+
+    sink_w, sink_h = depth * 0.7, depth * 0.5
     scx = x0 + w * 0.3
-    draw.ellipse([scx - sink_r, y0 + depth * 0.2, scx + sink_r, y0 + depth * 0.8], outline=FURNITURE_COLOR, width=1)
+    sink_x0, sink_y0 = scx - sink_w / 2, y0 + depth * 0.25
+    draw.rounded_rectangle(
+        [sink_x0, sink_y0, sink_x0 + sink_w, sink_y0 + sink_h], radius=sink_h * 0.25, outline=FURNITURE_COLOR, width=1
+    )  # sink basin
+    draw.line([(scx, sink_y0 - 6), (scx, sink_y0)], fill=FURNITURE_COLOR, width=1)  # faucet stem
+    draw.ellipse([scx - 2, sink_y0 - 9, scx + 2, sink_y0 - 5], outline=FURNITURE_COLOR, width=1)  # faucet head
+
     # Four stove burners on the counter run, opposite the sink - a plain
     # counter box read as "some furniture-shaped rectangle"; burners make it
     # unmistakably a stove.
@@ -676,6 +738,25 @@ def _furnish_kitchen(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float,
     draw.line(
         [(x0 + fridge * 0.35, y1 - fridge), (x0 + fridge * 0.35, y1)], fill=FURNITURE_COLOR, width=1
     )
+
+    is_large = (w * h) > (_FURNITURE_MIN_BOX_W * _FURNITURE_MIN_BOX_H) * _KITCHEN_LARGE_MULTIPLIER
+    if is_large:
+        island_w, island_h = w * 0.3, depth * 1.1
+        island_x0 = x0 + w * 0.32
+        stool_r = island_h * 0.22
+        island_y0 = y1 - fridge - depth * 1.4 - island_h
+        label_floor = (cy + _LABEL_CLEARANCE_PX) if cy is not None else (y0 + depth * 1.6)
+        top_clear = island_y0 > y0 + depth * 1.6  # clears the top counter run with real room to spare
+        bottom_clear = island_y0 > label_floor  # sits entirely below the room label's own text band
+        if top_clear and bottom_clear:
+            draw.rectangle(
+                [island_x0, island_y0, island_x0 + island_w, island_y0 + island_h], outline=FURNITURE_COLOR, width=1
+            )
+            for frac in (0.3, 0.7):
+                sx = island_x0 + island_w * frac
+                sy = island_y0 + island_h + stool_r + 2
+                if sy + stool_r < y1:
+                    draw.ellipse([sx - stool_r, sy - stool_r, sx + stool_r, sy + stool_r], outline=FURNITURE_COLOR, width=1)
 
 
 def _furnish_bathroom(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
@@ -712,11 +793,33 @@ def _furnish_study(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y
 
 
 def _furnish_garage(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
+    """A recognizable car symbol - rounded body + a windshield line
+    separating hood from cabin + 4 wheels - instead of a bare rounded
+    rectangle that read as "some furniture-shaped box," not specifically a
+    car (real user feedback, 2026-09-09). Orientation (nose pointing along
+    the room's longer axis) is picked from the car box's own aspect ratio,
+    same "derive from real post-layout shape" approach already used for the
+    staircase symbol below."""
     car_w, car_h = w * 0.6, h * 0.7
     cx0, cy0 = x0 + (w - car_w) / 2, y0 + (h - car_h) / 2
-    draw.rounded_rectangle(
-        [cx0, cy0, cx0 + car_w, cy0 + car_h], radius=min(car_w, car_h) * 0.15, outline=FURNITURE_COLOR, width=1
-    )
+    cx1, cy1 = cx0 + car_w, cy0 + car_h
+    body_radius = min(car_w, car_h) * 0.18
+    draw.rounded_rectangle([cx0, cy0, cx1, cy1], radius=body_radius, outline=FURNITURE_COLOR, width=1)
+
+    wheel_r = min(car_w, car_h) * 0.09
+    portrait = car_h >= car_w
+    if portrait:
+        windshield_y = cy0 + car_h * 0.28
+        draw.line([(cx0 + 3, windshield_y), (cx1 - 3, windshield_y)], fill=FURNITURE_COLOR, width=1)
+        for wx in (cx0, cx1):
+            for wy in (cy0 + car_h * 0.18, cy1 - car_h * 0.18):
+                draw.ellipse([wx - wheel_r, wy - wheel_r, wx + wheel_r, wy + wheel_r], outline=FURNITURE_COLOR, width=1)
+    else:
+        windshield_x = cx0 + car_w * 0.28
+        draw.line([(windshield_x, cy0 + 3), (windshield_x, cy1 - 3)], fill=FURNITURE_COLOR, width=1)
+        for wy in (cy0, cy1):
+            for wx in (cx0 + car_w * 0.18, cx1 - car_w * 0.18):
+                draw.ellipse([wx - wheel_r, wy - wheel_r, wx + wheel_r, wy + wheel_r], outline=FURNITURE_COLOR, width=1)
 
 
 def _furnish_laundry(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
