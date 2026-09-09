@@ -1773,6 +1773,21 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     position - not a raw ink-density comparison, since outline-stroke density naturally drops as any shape
     scales up regardless of extra furniture) and `test_furnish_kitchen_island_never_collides_with_a_centered_label`
     (scans the label's clearance band and asserts nothing is ever drawn into it). 493/493 passing (2 new).
+  - **Same-day follow-up (still 2026-09-09)**: real user feedback on the live Concept Layout card - the
+    large-room additions above "look like just a few boxes," i.e. the rug/console/TV read as disconnected
+    outlines rather than a real furniture group. Fixed with three sequencing/shape changes to
+    `_furnish_living()`, no change to `_furnish_kitchen()`/`_furnish_garage()`: (1) the rug is now drawn
+    FIRST, underneath the coffee table/console, so the seating group reads as furniture sitting ON a rug
+    instead of one more outline stacked on top after the fact; (2) the coffee table is now a
+    `rounded_rectangle` (was a plain rectangle) so its silhouette reads distinct from the console's square
+    shape, the same "different outline shape = different furniture type" convention the armchair already
+    uses against the sofa; (3) the freestanding "TV box" (a second stacked rectangle taller than the
+    console itself) is replaced with a slim flat-screen bar sitting directly on the console, connected by a
+    short stand line - reads as one TV unit, not two boxes. All placement math (console/table exact
+    position and size) is unchanged, so the existing `test_furnish_living_adds_tv_console_for_a_large_room`
+    test still passes without modification. Verified by re-rendering the same 100x100ft large-room case and
+    the 36x30ft small-plot case and visually inspecting both. 493/493 passing (no new tests needed - the
+    existing test already covers the position invariant these changes preserve).
 
 ## Architecture (big picture)
 
