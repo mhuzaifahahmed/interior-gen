@@ -1737,42 +1737,6 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     cause empty rooms), but it's the friend's notebook, outside this repo, and this fix does NOT depend on
     it. The deterministic blueprint/DXF next to this card stays the authoritative, accurate deliverable;
     this card remains a supplementary "Concept Layout - not a precise blueprint" visual.
-- **v23 (2026-09-09): richer, better-filled furniture in `blueprint_svg.py` - benefits BOTH the Model A
-  blueprint and the Model B Concept Layout overlay (v22), since they share this exact code.** Real user
-  feedback after seeing v22's clean output: "the living room is looking too empty," plus a request for a
-  more recognizable car icon and a clearer kitchen counter "understandable by a new person." Diagnosis for
-  the empty-living-room complaint: the base furniture set (sofa + coffee table + armchair) sizes each item
-  as a PERCENTAGE of the room's own dimensions, so it does scale up with room size - but the whole cluster
-  only ever occupies one corner, leaving a big diagonal gap on any large room regardless of item size.
-  - **`_furnish_living()`**: unchanged base set, PLUS - for rooms above a new `_LIVING_ROOM_LARGE_MULTIPLIER`
-    (2.2x the general min-furniture-box area) - a TV console (facing the sofa across the room, centered
-    under it) + a small TV standing on the console + a rug filling the space between sofa and console.
-    Only drawn once it clears the coffee table (`console_y0 > ty0 + table_h + depth*0.5`), so it can never
-    overlap the base set.
-  - **`_furnish_kitchen()`**: the sink changed from a bare ellipse to a rounded-rectangle basin + a small
-    faucet stem/head - the standard architectural sink symbol, more immediately recognizable than a plain
-    circle. Kitchens above `_KITCHEN_LARGE_MULTIPLIER` (same 2.2x threshold) additionally get a center
-    island with two bar-stool marks. **Real bug hit and fixed via visual inspection** (this project's
-    repeated lesson, applied again): the island's first version was placed near the room's own vertical
-    center - exactly where `_draw_room_label()` centers the room name/area text - so the island rendered
-    directly through the label on a real render. Fixed the same way bedrooms already solve this
-    (`_LABEL_CLEARANCE_PX`): `_furnish_kitchen()` gained an optional `cy` param (now passed from the
-    dispatcher, same as bedrooms already receive), and the island is only drawn once it sits entirely below
-    `cy + _LABEL_CLEARANCE_PX` - skipped otherwise (no clutter beats colliding clutter, same rule
-    `_draw_room_label()` itself already uses for its own area-text line).
-  - **`_furnish_garage()`**: the car changed from a bare rounded rectangle to a recognizable car symbol - a
-    windshield line separating hood from cabin + 4 wheel circles - with orientation (portrait vs. landscape)
-    picked from the car box's own post-layout aspect ratio, same "derive from real shape" approach the
-    staircase symbol already uses.
-  - **Verification**: rendered a large 100x100ft plot (triggers every large-room addition) and a smaller
-    36x30ft plot, visually inspected both, found and fixed the kitchen-island/label collision via a zoomed
-    crop before it was corrected, then re-rendered and re-inspected to confirm the fix (island now correctly
-    skips when it would land in the label band, and separately confirmed via a synthetic tall-kitchen test
-    that it DOES render with real clearance when there's genuinely enough room). Tests:
-    `test_furnish_living_adds_tv_console_for_a_large_room` (checks ink at the console's own computed
-    position - not a raw ink-density comparison, since outline-stroke density naturally drops as any shape
-    scales up regardless of extra furniture) and `test_furnish_kitchen_island_never_collides_with_a_centered_label`
-    (scans the label's clearance band and asserts nothing is ever drawn into it). 493/493 passing (2 new).
 
 ## Architecture (big picture)
 
