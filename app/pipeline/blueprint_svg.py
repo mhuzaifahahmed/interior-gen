@@ -635,41 +635,9 @@ def _furnish_living(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, 
     TV console (facing the sofa across the room) + a rug filling the space
     between them - real user feedback (2026-09-09): a large living room with
     only the base set looked mostly empty, since that set only ever occupies
-    one corner regardless of how big the room actually is.
-
-    Real follow-up feedback the same day, after seeing this on a live render:
-    the added pieces read as "just a few boxes" rather than real furniture -
-    each item was its own disconnected rectangle with no visual relationship
-    to the others. Fixed by: (1) drawing the rug FIRST, underneath everything
-    else, so the seating group reads as furniture sitting ON a rug instead of
-    one more outline stacked on top of it; (2) rounding the coffee table's
-    corners so its silhouette reads distinct from the console's square shape,
-    same "differently-shaped outlines read as different furniture types"
-    convention the armchair already uses against the sofa; (3) replacing the
-    freestanding "TV box" with a slim flat-screen sitting directly on the
-    console (a thin bar, not a second stacked rectangle) connected by a short
-    stand line - reads as one TV unit, not two boxes."""
+    one corner regardless of how big the room actually is."""
     depth = min(w, h) * 0.18
     sofa_len = w * 0.55
-    table_w, table_h = sofa_len * 0.32, depth * 0.9
-    tx0 = x0 + (sofa_len - table_w) / 2
-    ty0 = y0 + depth * 1.6
-    chair = min(w, h) * 0.15
-
-    is_large = (w * h) > (_FURNITURE_MIN_BOX_W * _FURNITURE_MIN_BOX_H) * _LIVING_ROOM_LARGE_MULTIPLIER
-    console_w = sofa_len * 0.6
-    console_h = depth * 0.5
-    console_x0 = x0 + (sofa_len - console_w) / 2
-    console_y1 = y1 - depth * 0.4
-    console_y0 = console_y1 - console_h
-    draw_console = is_large and console_y0 > ty0 + table_h + depth * 0.5  # only once it clears the coffee table
-
-    if draw_console:
-        rug_x0, rug_y0 = x0 + depth * 0.3, y0 + depth * 1.3
-        rug_x1, rug_y1 = tx0 + table_w + depth * 0.6, console_y0 - 6
-        if rug_x1 > rug_x0 and rug_y1 > rug_y0:
-            draw.rounded_rectangle([rug_x0, rug_y0, rug_x1, rug_y1], radius=8, outline=FURNITURE_COLOR, width=1)
-
     draw.rectangle([x0, y0, x0 + sofa_len, y0 + depth], outline=FURNITURE_COLOR, width=1)  # sofa back run
     # Cushion divider ticks along the sofa back - reads as an actual sofa,
     # not just an unmarked bench box.
@@ -678,24 +646,36 @@ def _furnish_living(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, 
         cx = x0 + sofa_len * i / cushion_count
         draw.line([(cx, y0 + 2), (cx, y0 + depth - 2)], fill=FURNITURE_COLOR, width=1)
     draw.rectangle([x0, y0, x0 + depth, y0 + h * 0.5], outline=FURNITURE_COLOR, width=1)  # sofa side arm
-    draw.rounded_rectangle(
-        [tx0, ty0, tx0 + table_w, ty0 + table_h], radius=min(table_w, table_h) * 0.15, outline=FURNITURE_COLOR, width=1
-    )  # coffee table, centered in front of the sofa
+    table_w, table_h = sofa_len * 0.32, depth * 0.9
+    tx0 = x0 + (sofa_len - table_w) / 2
+    ty0 = y0 + depth * 1.6
+    draw.rectangle([tx0, ty0, tx0 + table_w, ty0 + table_h], outline=FURNITURE_COLOR, width=1)  # coffee table, centered in front of the sofa
+    chair = min(w, h) * 0.15
     draw.rounded_rectangle(
         [x1 - chair, y1 - chair, x1, y1], radius=chair * 0.2, outline=FURNITURE_COLOR, width=1
     )  # armchair, rounded to read distinct from the sofa's square corners
 
-    if draw_console:
-        draw.rectangle(
-            [console_x0, console_y0, console_x0 + console_w, console_y1], outline=FURNITURE_COLOR, width=1
-        )  # TV console against the wall opposite the sofa
-        tv_w, tv_h = console_w * 0.6, console_h * 0.3
-        tv_x0 = console_x0 + (console_w - tv_w) / 2
-        tv_y1 = console_y0 - 4
-        tv_y0 = tv_y1 - tv_h
-        stand_x = console_x0 + console_w / 2
-        draw.line([(stand_x, tv_y1), (stand_x, console_y0)], fill=FURNITURE_COLOR, width=1)  # short stand connecting screen to console
-        draw.rectangle([tv_x0, tv_y0, tv_x0 + tv_w, tv_y1], outline=FURNITURE_COLOR, width=1)  # slim flat-screen, not a second stacked box
+    is_large = (w * h) > (_FURNITURE_MIN_BOX_W * _FURNITURE_MIN_BOX_H) * _LIVING_ROOM_LARGE_MULTIPLIER
+    if is_large:
+        console_w = sofa_len * 0.6
+        console_h = depth * 0.5
+        console_x0 = x0 + (sofa_len - console_w) / 2
+        console_y1 = y1 - depth * 0.4
+        console_y0 = console_y1 - console_h
+        if console_y0 > ty0 + table_h + depth * 0.5:  # only draw once it clears the coffee table
+            draw.rectangle(
+                [console_x0, console_y0, console_x0 + console_w, console_y1], outline=FURNITURE_COLOR, width=1
+            )  # TV console against the wall opposite the sofa
+            tv_w, tv_h = console_w * 0.55, console_h * 1.3
+            tv_x0 = console_x0 + (console_w - tv_w) / 2
+            draw.rectangle(
+                [tv_x0, console_y0 - tv_h - 3, tv_x0 + tv_w, console_y0 - 3], outline=FURNITURE_COLOR, width=1
+            )  # the TV itself, standing just off the console top
+
+            rug_x0, rug_y0 = x0 + depth * 0.3, y0 + depth * 1.3
+            rug_x1, rug_y1 = tx0 + table_w + depth * 0.6, console_y0 - 6
+            if rug_x1 > rug_x0 and rug_y1 > rug_y0:
+                draw.rounded_rectangle([rug_x0, rug_y0, rug_x1, rug_y1], radius=8, outline=FURNITURE_COLOR, width=1)
 
 
 def _furnish_dining(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float) -> None:
