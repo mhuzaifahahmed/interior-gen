@@ -1788,31 +1788,6 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     test still passes without modification. Verified by re-rendering the same 100x100ft large-room case and
     the 36x30ft small-plot case and visually inspecting both. 493/493 passing (no new tests needed - the
     existing test already covers the position invariant these changes preserve).
-  - **v24 (2026-09-10): large living rooms redesigned into a CENTERED conversation grouping.** Third round
-    of the same "living room looks empty" feedback, this time with the real root cause finally identified
-    and fixed rather than patched: EVERY prior version (including the 2026-09-09 ones above) anchored ALL
-    the furniture to the room's TOP-LEFT CORNER - sofa on the top wall, arm on the left wall, coffee table/
-    console/rug cascading straight down the left side - so on a wide room the entire right half stayed bare
-    no matter how many pieces were added. `_furnish_living()` now splits into two paths:
-    `_furnish_living_compact()` (the old corner set verbatim, still used for rooms below
-    `_LIVING_ROOM_LARGE_MULTIPLIER`) and `_furnish_living_large()` (new). The large path centers a real
-    seating group horizontally: a sofa centered on the top wall (drawn by a new shared `_draw_sofa_run()`
-    helper - seat box + cushion ticks + an arm bar at each end, orientation-aware) facing a TV console
-    centered on the bottom wall, with a coffee table between them and TWO armchairs FLANKING the coffee
-    table (the armchairs are what actually fill the room's WIDTH, the thing every corner-anchored version
-    missed), all sitting on one large centered area rug. Solid pieces are kept out of the room's vertical
-    center band (`_LABEL_CLEARANCE_PX`, same rule bedrooms/the kitchen island already follow - the coffee
-    table+chairs stay above `cy - clearance`, the console below `cy + clearance`); the rug is outline-only
-    so the room label reads cleanly over it. Verified by rendering and visually inspecting a large 100x100ft
-    living room (confirmed the centered grouping fills the room, label sits clear over the rug) and a
-    smaller plot. Tests: `test_furnish_living_adds_tv_console_for_a_large_room` was replaced by
-    `test_furnish_living_large_places_a_centered_tv_console_on_the_bottom_wall` (console now centered on the
-    bottom wall, not cascaded down the left) + a new
-    `test_furnish_living_large_keeps_solid_furniture_clear_of_the_centered_label` (scans the CENTER portion
-    of the label band - excluding the rug's wall-side edges, which are allowed to cross it - and asserts no
-    solid furniture is drawn there, the label-collision regression class this project keeps hitting).
-    494/494 passing. `_furnish_kitchen()`/`_furnish_garage()` unchanged - this pass was scoped to the living
-    room only, per the user's explicit "just the living room for now, nothing else."
 
 ## Architecture (big picture)
 

@@ -353,66 +353,54 @@ def _render_pixels(draw_fn, w_px: int, h_px: int, *extra_args) -> Image.Image:
     return image
 
 
-def test_furnish_living_large_places_a_centered_tv_console_on_the_bottom_wall():
-    # 2026-09-10: the large-room living arrangement was redesigned into a
-    # CENTERED conversation grouping (sofa centered on the top wall facing a
-    # TV console centered on the bottom wall, coffee table + two flanking
-    # armchairs between them) - real user feedback that every earlier corner-
-    # anchored version left a large room's right half empty. Checked at the
-    # console's own computed position (mirroring _furnish_living_large's real
-    # placement math), not a raw ink-density comparison.
+def test_furnish_living_adds_tv_console_for_a_large_room():
+    # 2026-09-09: real user feedback - a large living room with only the base
+    # (sofa + coffee table + armchair) set looked mostly empty, since that
+    # set only ever occupies one corner regardless of room size. Rooms above
+    # _LIVING_ROOM_LARGE_MULTIPLIER additionally get a TV console + rug.
+    # Checked at the console's own computed position (mirroring
+    # _furnish_living's real placement math) rather than a raw ink-density
+    # comparison - outline-stroke ink density naturally drops as a shape
+    # scales up regardless of extra furniture, so density alone isn't a
+    # reliable signal here.
     threshold_area = _FURNITURE_MIN_BOX_W * _FURNITURE_MIN_BOX_H * _LIVING_ROOM_LARGE_MULTIPLIER
+
+    small_w, small_h = 90, 90
+    assert small_w * small_h < threshold_area
+    small = _render_pixels(_furnish_living, small_w, small_h)
 
     large_w, large_h = 300, 260
     assert large_w * large_h > threshold_area
     large = _render_pixels(_furnish_living, large_w, large_h)
 
-    depth = min(large_w, large_h) * 0.13
-    console_w, console_h = large_w * 0.4, depth * 0.55
-    console_x0 = (large_w - console_w) / 2  # centered on the bottom wall
-    console_y1 = large_h
+    # Reproduces _furnish_living's own console placement formula so the
+    # probed region is exactly where the console is drawn, not a guess.
+    depth = min(large_w, large_h) * 0.18
+    sofa_len = large_w * 0.55
+    console_w, console_h = sofa_len * 0.6, depth * 0.5
+    console_x0 = (sofa_len - console_w) / 2
+    console_y1 = large_h - depth * 0.4
     console_y0 = console_y1 - console_h
 
+    # console_w/console_y1-console_y0 are the OUTLINE box - probe the whole
+    # bbox (not shrunk inward) since only the border itself carries ink.
     large_has_console = any(
         large.getpixel((x, y)) != (255, 255, 255)
         for x in range(int(console_x0), int(console_x0 + console_w) + 1)
-        for y in range(int(console_y0), int(console_y1))
+        for y in range(int(console_y0), int(console_y1) + 1)
     )
     assert large_has_console
 
-    # A small room (below the threshold) takes the compact corner path, which
-    # draws NO centered-bottom console - the center of the bottom wall stays
-    # clear.
-    small_w, small_h = 90, 90
-    assert small_w * small_h < threshold_area
-    small = _render_pixels(_furnish_living, small_w, small_h)
-    small_center_x = small_w // 2
-    small_has_centered_console = any(
+    # The small room (below the threshold) must never draw a console at
+    # all - confirmed by checking the analogous relative region is empty.
+    small_console_x0 = int((small_w * 0.55) * 0.2)
+    small_console_y0 = int(small_h * 0.7)
+    small_has_console = any(
         small.getpixel((x, y)) != (255, 255, 255)
-        for x in range(small_center_x - 8, small_center_x + 8)
-        for y in range(int(small_h * 0.85), small_h)
+        for x in range(small_console_x0, int(small_w * 0.5))
+        for y in range(small_console_y0, small_h - 2)
     )
-    assert not small_has_centered_console
-
-
-def test_furnish_living_large_keeps_solid_furniture_clear_of_the_centered_label():
-    # Regression guard for the label-collision class of bug this project has
-    # hit repeatedly (bed, kitchen island): the large living arrangement must
-    # keep its SOLID pieces (sofa/coffee table/armchairs/console) out of the
-    # room's vertical center band, where _draw_room_label() stamps the room
-    # name. The rug is outline-only and its two side edges (near the walls)
-    # are allowed to cross the band, so this scans only the CENTER portion of
-    # the band - exactly where the label text actually sits.
-    w_px, h_px = 320, 520
-    cy = h_px / 2
-    label_clearance_px = 26  # _LABEL_CLEARANCE_PX, kept as a literal to avoid importing a private constant
-    image = _render_pixels(_furnish_living, w_px, h_px)
-
-    band_top, band_bottom = int(cy - label_clearance_px), int(cy + label_clearance_px)
-    center_x0, center_x1 = int(w_px * 0.28), int(w_px * 0.72)  # the label's own zone, excluding the rug's wall-side edges
-    for y in range(band_top, band_bottom):
-        for x in range(center_x0, center_x1):
-            assert image.getpixel((x, y)) == (255, 255, 255), f"living-room furniture drawn into the label band at ({x},{y})"
+    assert not small_has_console
 
 
 def test_furnish_kitchen_island_never_collides_with_a_centered_label():
