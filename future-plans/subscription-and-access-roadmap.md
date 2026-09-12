@@ -311,12 +311,16 @@ manually upgraded via Chunk 5's dev-only admin endpoint (not yet built).
   Ahmed") and JazzCash number ("0321-8249255"), and a Copy button
   (`navigator.clipboard.writeText()`, best-effort - degrades silently if the Clipboard API is
   unavailable, the number is already shown in plain text either way).
-- **No real JazzCash logo asset exists anywhere in this repo, and none was fetched from an external
-  source for it** - fetching/hotlinking a third-party trademarked logo image wasn't done without a
-  real, vetted asset to use. `.jazzcash-badge` (`components.css`) is a stylized text wordmark in
-  JazzCash's brand red instead - a facsimile, not the literal mark. If a real logo file is ever
-  added under `static/` (e.g. the user supplies one), swap the `<span class="jazzcash-badge">` for
-  an `<img>` - everything else (sizing, placement in the modal) stays the same.
+- **Real JazzCash logo now in use** (`static/jazzcash-logo.png`) - the user supplied the source file
+  (`jazzcash logo.jpeg` at the repo root, untracked, left as-is rather than deleted). It was a flat
+  JPEG with a checkerboard "transparency" pattern baked into the pixels (not a real alpha channel),
+  same category of problem `static/logo.png` already had earlier in this project - reprocessed with
+  PIL/numpy: any pixel that's both low-chroma (grayscale-ish, the checkerboard's white/light-gray
+  cells) AND bright (>~185) is faded to transparent via a smooth ramp, everything else (the logo's
+  saturated red/yellow/orange, and its dark outline strokes, which are low-chroma but NOT bright)
+  stays fully opaque - verified by compositing the result over both a dark and a white backdrop and
+  visually confirming no white halo or dark fringing at the edges. The earlier stylized text-wordmark
+  placeholder (`.jazzcash-badge` in `components.css`) has been removed now that a real asset exists.
 - **GSAP "morph" open/close, per explicit request and matching this project's own established
   convention** (see CLAUDE.md's Motion/GSAP section - the nav account menu's exact recipe: `gsap.set`
   to a scaled-down/faded/offset start state, `.to()` a springy `back.out(1.7)` settle, with the

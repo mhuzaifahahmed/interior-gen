@@ -179,28 +179,6 @@ html, body {
   box-shadow: 0 0 0 2px var(--accent) inset;
 }
 
-/* Stylized JazzCash wordmark badge (manual-payment modal - see app.js's
-   openJazzCashModal()). No real JazzCash logo asset exists in this repo and
-   none was fetched from an external source for it - this is a facsimile
-   wordmark in JazzCash's brand red, not the literal trademarked mark. Swap
-   this span for a real <img> if/when a proper logo file is added under
-   static/. */
-.jazzcash-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 24px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #ff3b30, #b0181d);
-  color: #ffffff;
-  font-family: Poppins, sans-serif;
-  font-weight: 800;
-  font-style: italic;
-  font-size: 20px;
-  letter-spacing: -0.02em;
-  box-shadow: 0 8px 20px rgba(176, 24, 29, 0.35);
-}
-
 /* ---- Scroll reveal ---- */
 
 [data-reveal] {
