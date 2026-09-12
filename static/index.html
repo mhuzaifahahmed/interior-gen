@@ -39,12 +39,21 @@
 </div>
 
 <header class="fixed top-4 inset-x-0 z-50 px-margin-mobile pointer-events-none">
-<div class="max-w-4xl mx-auto bg-night/50 backdrop-blur-2xl rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.3)] border border-white/10 pointer-events-auto">
-<div class="h-16 px-3 lg:px-6 flex items-center justify-between gap-4 lg:gap-6">
-<div class="flex items-center gap-2.5 shrink-0 pl-2">
+<div class="max-w-4xl mx-auto flex items-center gap-3">
+<!-- Split into two independently-pilled containers (logo pill + everything-else
+     pill) sharing the exact same visual treatment (bg/blur/shadow/border/radius)
+     the single pill used to have - purely a visual split, no behavior/markup
+     inside either half changed. -->
+<div class="bg-night/50 backdrop-blur-2xl rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.3)] border border-white/10 pointer-events-auto shrink-0">
+<div class="h-16 px-4 lg:px-5 flex items-center">
+<div class="flex items-center gap-2.5 shrink-0">
 <img src="/static/logo.png" alt="Interior-Gen" class="w-8 h-8 object-contain shrink-0"/>
 <span class="font-headline-sm text-headline-sm tracking-tight text-on-night">Interior&#8209;Gen</span>
 </div>
+</div>
+</div>
+<div class="bg-night/50 backdrop-blur-2xl rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.3)] border border-white/10 pointer-events-auto shrink-0 md:flex-1 md:min-w-0">
+<div class="h-16 px-3 lg:px-6 flex items-center justify-between gap-4 lg:gap-6">
 <nav class="hidden md:flex items-center gap-1 relative" id="tab-bar">
 <span class="absolute top-0 bottom-0 rounded-full bg-[rgba(245,239,226,0.92)] z-0" id="tab-active-pill"></span>
 <button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full is-active" id="tab-btn-home" data-tab="home">HOME</button>
@@ -52,7 +61,7 @@
 <button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full" id="tab-btn-house" data-tab="house">BUILD A HOUSE</button>
 <button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full" id="tab-btn-pricing" data-tab="pricing">PRICING</button>
 </nav>
-<div class="hidden md:flex items-center gap-4 shrink-0 pr-2">
+<div class="hidden md:flex items-center gap-4 shrink-0">
 <div class="flex items-center gap-4" id="nav-auth-guest">
 <button type="button" class="font-label-caps text-label-caps text-on-night-variant hover:text-on-night transition-colors" id="nav-login-btn">LOG IN</button>
 <button type="button" class="font-label-caps text-label-caps bg-white text-night rounded-full px-4 py-2 hover:bg-white/85 hover:shadow-md transition-all duration-200" id="nav-signup-btn">SIGN UP</button>
@@ -84,11 +93,12 @@ LOG OUT
 <!-- Mobile-only hamburger - opens #mobile-sidebar-overlay below. The
      desktop tab-bar (hidden md:flex, above) and the auth area just above
      this button (now wrapped in hidden md:flex too) both disappear below
-     the md breakpoint, leaving ONLY the wordmark + this button in the
-     mobile header, per the mobile nav redesign. -->
-<button type="button" class="md:hidden flex items-center justify-center w-10 h-10 mr-1 rounded-full hover:bg-white/10 transition-colors" id="mobile-menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="mobile-sidebar-panel">
+     the md breakpoint, leaving ONLY this button visible in the second pill
+     on mobile, per the mobile nav redesign. -->
+<button type="button" class="md:hidden flex items-center justify-center w-10 h-10 rounded-full hover:bg-white/10 transition-colors" id="mobile-menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="mobile-sidebar-panel">
 <span class="material-symbols-outlined text-on-night text-2xl">menu</span>
 </button>
+</div>
 </div>
 </div>
 </header>
@@ -934,7 +944,7 @@ Interior&#8209;Gen
      upgrade (Chunk 5's dev-only admin endpoint). -->
 <div class="materials-modal-overlay fixed inset-0 z-[62] bg-black/70 flex items-center justify-center p-6" id="jazzcash-modal-overlay" hidden>
 <div class="materials-modal relative w-full max-w-md bg-surface-container p-8 border border-outline-variant shadow-2xl text-center" id="jazzcash-modal-card">
-<button type="button" class="absolute top-4 right-4 bg-surface-container-high hover:bg-primary hover:text-on-primary hover:scale-110 hover:shadow-md text-on-surface w-9 h-9 rounded-full flex items-center justify-center text-xl transition-all duration-200" id="jazzcash-modal-close" aria-label="Close">&times;</button>
+<button type="button" class="absolute top-4 right-4 z-10 bg-surface-container-high hover:bg-primary hover:text-on-primary hover:scale-110 hover:shadow-md text-on-surface w-9 h-9 rounded-full flex items-center justify-center text-xl transition-all duration-200" id="jazzcash-modal-close" aria-label="Close">&times;</button>
 <div class="flex justify-center mb-5">
 <img src="/static/jazzcash-logo.png" alt="JazzCash" class="h-12 w-auto object-contain"/>
 </div>

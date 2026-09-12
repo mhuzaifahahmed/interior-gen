@@ -2060,7 +2060,14 @@ function openJazzCashModal(plan) {
   if (jazzcashModalTl) jazzcashModalTl.kill();
   gsap.set(jazzcashModalOverlay, { opacity: 0 });
   gsap.set(jazzcashModalCard, { transformOrigin: "center", scale: 0.85, opacity: 0, y: -8 });
-  const items = Array.from(jazzcashModalCard.children);
+  // Close button excluded from the content stagger on purpose - it should
+  // always be immediately visible/interactive, not fade in with the rest of
+  // the card. GSAP leaving even an identity inline `transform` on it (as it
+  // would if it were included here) permanently outranks Tailwind's
+  // hover:scale-110 utility class in the cascade (inline styles always beat
+  // stylesheet rules for the same property), which is what made its hover
+  // effect stop working - a real bug hit and fixed live, not theoretical.
+  const items = Array.from(jazzcashModalCard.children).filter((el) => el !== jazzcashModalClose);
   gsap.set(items, { opacity: 0, y: -6 });
 
   jazzcashModalTl = gsap.timeline();

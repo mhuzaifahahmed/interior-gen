@@ -333,6 +333,29 @@ manually upgraded via Chunk 5's dev-only admin endpoint (not yet built).
   shows "Studio" / "PKR 6,999/mo", Escape closes it, zero console/page errors. Backend suite
   unaffected (534/534 passing) - this is frontend-only.
 
+**Real bug found and fixed the same day, user-reported: the modal's close (X) button's hover
+effect worked inconsistently, and clicks sometimes didn't register.** Root cause, confirmed live via
+Playwright (its own retry log literally said `<div class="flex justify-center mb-5">…</div>
+intercepts pointer events` before the fix): the item-stagger animation
+(`gsap.set(items, {opacity:0, y:-6})` / `.to(items, ...)`) originally included EVERY child of the
+modal card, including the close button itself. Any element that GSAP applies `transform`/`opacity`
+to (even values that end up visually identical to the default) establishes its own CSS stacking
+context - and per the CSS stacking spec, elements in that "z-index:0-equivalent" tier paint in DOM
+order among themselves. The logo wrapper `<div>` comes AFTER the close button in the markup, so once
+it also picked up a GSAP-driven transform, it started painting (and hit-testing) ON TOP of the close
+button in their overlapping region near the top-right corner - even though the logo `<img>` itself
+is centered and doesn't visually reach that corner, its wrapping block-level `<div>` spans the full
+card width and does. Two fixes, both applied: (1) the close button is now explicitly excluded from
+the item-stagger (`.filter((el) => el !== jazzcashModalClose)`) - it appears immediately rather than
+fading in with the rest of the card, which also means it never picks up a stray inline `transform`
+in the first place; (2) `#jazzcash-modal-close` gained an explicit `z-10` class as defense-in-depth,
+so it stays on top of any modal content regardless of what else animates in the future. Verified with
+a Playwright test across 3 open/close cycles, including one where the close animation was
+interrupted mid-flight by a rapid re-open (the exact kind of quick-succession interaction a real
+user's bug report implied) - hover reliably scales the button (`transform` goes from `none` to
+`matrix(1.1, 0, 0, 1.1, 0, 0)`) every time, with zero residual inline `transform` on the button
+afterward. Backend suite unaffected (534/534 passing).
+
 ## Open questions for whoever picks this up next
 
 - 7-day Pro trial: explicitly skipped for this build phase (2026-09-12 decision) — build Free/Pro/
