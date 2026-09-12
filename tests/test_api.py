@@ -25,6 +25,11 @@ class FakeProvider:
         self.image_prompts = []
         self.materials_calls = []
         self.estimate_room_area_calls = 0
+        # Chunk 3 (subscription model-choice routing) - records whichever
+        # preferred_backend value (if any) each generate_image() call
+        # actually received, so a test can assert on real end-to-end
+        # routing, not just the HTTP response code.
+        self.received_preferred_backends = []
 
     def describe_room(self, image_bytes: bytes) -> str:
         return "A small rectangular room with one window."
@@ -32,8 +37,11 @@ class FakeProvider:
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         return {}
 
-    def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
+    def generate_image(
+        self, image_bytes: bytes, prompt: str, tier: str | None = None, preferred_backend: str | None = None
+    ) -> bytes:
         self.image_prompts.append(prompt)
+        self.received_preferred_backends.append(preferred_backend)
         buf = io.BytesIO()
         Image.new("RGB", (4, 4), color=(200, 200, 200)).save(buf, format="PNG")
         return buf.getvalue()
@@ -195,6 +203,84 @@ def test_anonymous_caller_cannot_see_someone_elses_real_project(monkeypatch):
     with TestClient(app) as anon_client:
         res = anon_client.get(f"/api/projects/{project_id}")
         assert res.status_code == 404
+
+
+def _set_plan(user_id: str, plan: str) -> None:
+    """Chunk 5 (dev-only admin plan endpoint) doesn't exist yet - tests set a
+    user's plan directly via the real app DB (same engine TestClient's
+    requests use), same "no isolation, real configured DATABASE_URL"
+    convention documented in CLAUDE.md for this test suite."""
+    from app.plans import get_or_create_user_plan
+
+    with Session(engine) as session:
+        plan_row = get_or_create_user_plan(session, user_id)
+        plan_row.plan = plan
+        session.add(plan_row)
+        session.commit()
+
+
+def test_free_plan_room_preferred_model_is_ignored_not_honored(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        data = {**_REQUIRED_STYLE_FIELDS, "preferred_model": "openai"}
+        res = client.post("/api/projects", files=files, data=data)
+
+    # If the Free user's explicit "openai" choice had been honored, this
+    # would 403 immediately (Free's OpenAI allowance is 0, per PLAN_QUOTAS) -
+    # it succeeds instead, proving the choice was ignored and the request
+    # ran against the Kaggle bucket like any other Free-tier generation.
+    assert res.status_code == 200
+
+
+def test_pro_plan_room_can_choose_openai_backend(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        _set_plan(user_id, "pro")
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        data = {**_REQUIRED_STYLE_FIELDS, "preferred_model": "openai"}
+        res = client.post("/api/projects", files=files, data=data)
+
+    assert res.status_code == 200
+    assert provider.received_preferred_backends == ["openai", "openai", "openai"]
+
+
+def test_pro_plan_room_with_no_preference_uses_the_configured_default(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        _set_plan(user_id, "pro")
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+
+    assert res.status_code == 200
+    # No preferred_model sent - the provider must receive no override at all
+    # (None), same call shape as before this feature existed.
+    assert provider.received_preferred_backends == [None, None, None]
+
+
+def test_anonymous_trial_can_choose_openai_backend(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        data = {**_REQUIRED_STYLE_FIELDS, "preferred_model": "openai"}
+        res = client.post("/api/projects", files=files, data=data)
+
+    assert res.status_code == 200
+    assert provider.received_preferred_backends == ["openai", "openai", "openai"]
 
 
 def test_free_plan_room_quota_is_enforced(monkeypatch):

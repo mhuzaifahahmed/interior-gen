@@ -22,7 +22,14 @@ from app.pipeline.generate import TIERS, run_pipeline
 from app.pipeline.generate_house import run_house_pipeline
 from app.pipeline.house_prompts import USER_PROMPT_MAX_CHARS
 from app.pipeline.prompts import ADDITIONAL_INSTRUCTIONS_MAX_CHARS, COLOR_PALETTES, STYLE_OPTIONS
-from app.plans import QuotaExceededError, backend_bucket, consume_quota, plan_status
+from app.plans import (
+    QuotaExceededError,
+    backend_bucket,
+    consume_quota,
+    get_or_create_user_plan,
+    plan_status,
+    resolve_preferred_backend,
+)
 from app.providers import get_provider
 from app.schemas import (
     HouseProjectCreateResponse,
@@ -233,6 +240,7 @@ async def create_project(
     room_width: float | None = Form(None),
     room_height: float | None = Form(None),
     dimension_unit: str = Form("ft"),
+    preferred_model: str | None = Form(None),
     session: Session = Depends(get_session),
     user: AuthUser | None = Depends(get_current_user),
 ):
@@ -276,15 +284,29 @@ async def create_project(
     # future-plans/subscription-and-access-roadmap.md):
     #   - No logged-in user: the pre-login trial (1 free Room generation per
     #     browser, cookie-tracked) - 401s once already used, matching the
-    #     existing "log in to continue" frontend handling.
-    #   - Logged-in user: Chunk 1's plan quota, against the app's currently
-    #     CONFIGURED backend (settings.image_provider) - a per-request
-    #     Kaggle-vs-OpenAI choice for Pro/Studio users is a later chunk.
+    #     existing "log in to continue" frontend handling. Always allowed to
+    #     choose a backend (Chunk 3's pre-login spec), unlike a logged-in
+    #     Free-tier user.
+    #   - Logged-in user: Chunk 1's plan quota, against whichever backend
+    #     this user's plan+request actually resolves to (Chunk 3) - Free
+    #     always resolves to the app's CONFIGURED default (settings.image_provider),
+    #     ignoring any preferred_model sent; Pro/Studio may override it.
+    #
+    # requested_backend is the client's raw, unvalidated ask - resolve_preferred_backend()
+    # (app/plans.py) is what actually decides whether it's honored; an
+    # invalid/unrecognized value is silently treated as "no preference", same
+    # "correct nonsense rather than error the whole request" convention this
+    # endpoint already uses elsewhere.
+    requested_backend = preferred_model if preferred_model in ("kaggle", "openai") else None
     if user is None:
         _consume_anonymous_trial(request, response, "room")
+        backend_override = resolve_preferred_backend(None, requested_backend)
     else:
+        plan_row = get_or_create_user_plan(session, user.id)
+        backend_override = resolve_preferred_backend(plan_row.plan, requested_backend)
+        quota_backend = backend_override or backend_bucket(settings.image_provider)
         try:
-            consume_quota(session, user.id, "room", backend_bucket(settings.image_provider))
+            consume_quota(session, user.id, "room", quota_backend)
         except QuotaExceededError as exc:
             raise HTTPException(403, exc.user_message())
 
@@ -346,6 +368,7 @@ async def create_project(
         storage_namespace,
         room_dimensions.get("area_sqft") if room_dimensions else None,
         room_dimensions.get("wall_area_sqft") if room_dimensions else None,
+        backend_override,
     )
 
     return ProjectCreateResponse(project_id=project.id)
@@ -511,6 +534,7 @@ async def create_house_project(
     bathrooms: int | None = Form(None),
     extras: str = Form(""),
     facing: str | None = Form(None),
+    preferred_model: str | None = Form(None),
     session: Session = Depends(get_session),
     user: AuthUser | None = Depends(get_current_user),
 ):
@@ -597,7 +621,7 @@ async def create_house_project(
         dimensions = {"length": length, "width": width, "unit": unit.strip()[:10]}
 
     # Anonymous (pre-login) trial gate ONLY - a logged-in user's ONGOING
-    # monthly quota is NOT enforced here yet (unlike create_project above),
+    # monthly quota is still NOT enforced here (unlike create_project above),
     # deliberately, not an oversight. The approved pricing table
     # (future-plans/subscription-and-access-roadmap.md) gives Free tier
     # "3 Kaggle house generations/mo, 0 OpenAI", but settings.house_image_provider
@@ -606,14 +630,25 @@ async def create_house_project(
     # Gating a LOGGED-IN user's ongoing quota on the REAL configured backend
     # would 403 every Free-tier user's second-and-later Build a House
     # generation; hardcoding the "kaggle" bucket instead would silently let
-    # Free users burn real, paid OpenAI calls at zero counted cost. Revisit
-    # once Chunk 3's per-request routing exists and/or a real Kaggle house
-    # model ships - see the roadmap doc's "House quota gap" note
-    # (2026-09-12). The one-shot ANONYMOUS trial below is unaffected by that
-    # gap (it's a single free generation, not an ongoing monthly allowance),
-    # so it's still enforced here.
+    # Free users burn real, paid OpenAI calls at zero counted cost. Still
+    # unresolved even with Chunk 3's routing now built - see the roadmap
+    # doc's "House quota gap" note (2026-09-12); it needs a real Kaggle house
+    # model or a pricing-table change, not just routing code.
+    #
+    # The model-CHOICE restriction, independent of quota tracking, IS
+    # enforced here though: a Free-tier user can never explicitly force
+    # "openai" for house (resolve_preferred_backend() below always returns
+    # None for them) - this doesn't fully close the cost-exposure gap above
+    # (their request still runs on OpenAI today regardless, since that's the
+    # only configured backend), but it stops a Free user from making that
+    # exposure WORSE by actively picking the paid option on purpose.
+    requested_backend = preferred_model if preferred_model in ("kaggle", "openai") else None
     if user is None:
         _consume_anonymous_trial(request, response, "house")
+        backend_override = resolve_preferred_backend(None, requested_backend)
+    else:
+        plan_row = get_or_create_user_plan(session, user.id)
+        backend_override = resolve_preferred_backend(plan_row.plan, requested_backend)
 
     storage = get_storage()
     provider = get_provider()
@@ -664,6 +699,7 @@ async def create_house_project(
         storage_namespace,
         floor_count,
         facing,
+        backend_override,
     )
 
     return HouseProjectCreateResponse(house_project_id=house_project.id)

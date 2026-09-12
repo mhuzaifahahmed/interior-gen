@@ -9,11 +9,13 @@ from app.plans import (
     FREE,
     PRO,
     QUOTA_WINDOW_DAYS,
+    STUDIO,
     QuotaExceededError,
     backend_bucket,
     consume_quota,
     get_or_create_user_plan,
     plan_status,
+    resolve_preferred_backend,
     roll_quota_window_if_needed,
 )
 
@@ -181,6 +183,29 @@ def test_backend_bucket_maps_openai_and_everything_else():
     assert backend_bucket("openai") == "openai"
     assert backend_bucket("kaggle") == "kaggle"
     assert backend_bucket("modal") == "kaggle"
+
+
+def test_resolve_preferred_backend_anonymous_caller_can_choose_either():
+    assert resolve_preferred_backend(None, "openai") == "openai"
+    assert resolve_preferred_backend(None, "kaggle") == "kaggle"
+
+
+def test_resolve_preferred_backend_free_plan_is_never_overridden():
+    assert resolve_preferred_backend(FREE, "openai") is None
+    assert resolve_preferred_backend(FREE, "kaggle") is None
+
+
+def test_resolve_preferred_backend_pro_and_studio_can_choose():
+    assert resolve_preferred_backend(PRO, "openai") == "openai"
+    assert resolve_preferred_backend(PRO, "kaggle") == "kaggle"
+    assert resolve_preferred_backend(STUDIO, "openai") == "openai"
+
+
+def test_resolve_preferred_backend_ignores_an_invalid_or_missing_request():
+    assert resolve_preferred_backend(PRO, None) is None
+    assert resolve_preferred_backend(PRO, "modal") is None
+    assert resolve_preferred_backend(PRO, "") is None
+    assert resolve_preferred_backend(None, "modal") is None
 
 
 def test_plan_status_handles_a_naive_stored_quota_window_start():

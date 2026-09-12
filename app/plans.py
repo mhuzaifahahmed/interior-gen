@@ -81,6 +81,41 @@ def backend_bucket(provider_setting: str) -> str:
     return "openai" if provider_setting == "openai" else "kaggle"
 
 
+# Chunk 3 (future-plans/subscription-and-access-roadmap.md): which plans may
+# pick OpenAI explicitly for a single generation, instead of always getting
+# whichever backend the app is configured to use by default. Matches the
+# approved pricing table's "Model access" row exactly - Free is "our model
+# only", Pro/Studio get "Kaggle + OpenAI toggle".
+PLAN_ALLOWS_MODEL_CHOICE: dict[str, bool] = {FREE: False, PRO: True, STUDIO: True}
+
+
+def resolve_preferred_backend(plan: str | None, requested: str | None) -> str | None:
+    """Decides whether a generation request's requested backend should
+    actually override the app's configured default.
+
+    Returns "kaggle"/"openai" when the override should apply, or None when it
+    should NOT (the caller should then fall back to whatever the app is
+    already configured to use - see app/main.py's callers, which pass None
+    straight through to run_pipeline()/run_house_pipeline() so an unaffected
+    request's provider call is byte-for-byte identical to before this
+    parameter existed).
+
+    `plan=None` means an ANONYMOUS (pre-login trial) caller - always allowed
+    to choose, per the roadmap's literal pre-login spec ("user may choose
+    OpenAI or Kaggle for each"). A real plan that isn't in
+    PLAN_ALLOWS_MODEL_CHOICE (i.e. Free) - or a `requested` value that isn't
+    exactly "kaggle"/"openai" - never overrides; client input is never
+    trusted to bypass a plan restriction, same "silently correct nonsense
+    rather than error the whole request" treatment already used elsewhere in
+    app/main.py's form validation.
+    """
+    if requested not in ("kaggle", "openai"):
+        return None
+    if plan is not None and not PLAN_ALLOWS_MODEL_CHOICE.get(plan, False):
+        return None
+    return requested
+
+
 class QuotaExceededError(Exception):
     """Raised by consume_quota() when the requested (kind, backend) generation
     would exceed the user's plan allowance. Carries enough detail for the

@@ -230,6 +230,7 @@ def run_house_pipeline(
     username: str | None = None,
     floor_count: int | None = None,
     facing_input: str | None = None,
+    preferred_backend: str | None = None,
 ) -> None:
     """Runs the "Build a House" pipeline for one HouseProject. Mirrors
     app/pipeline/generate.py's run_pipeline shape: its own DB session (runs as
@@ -255,6 +256,19 @@ def run_house_pipeline(
     request). Named "_input" rather than "facing" to make clear this is the
     UNVALIDATED raw value; the resolved, always-valid `facing` local variable
     is what actually gets passed to layout_floor().
+
+    preferred_backend ("kaggle"/"openai"/None) - Chunk 3 of future-plans/
+    subscription-and-access-roadmap.md, same meaning/reasoning as
+    run_pipeline()'s own preferred_backend param in generate.py: resolved and
+    permission-checked by app/main.py's create_house_project before this ever
+    runs, so a Free-tier request always arrives as None here. Passed to
+    provider.generate_house_render() only when not None (see the
+    `**backend_kwargs` construction below), so an unaffected call is
+    byte-for-byte identical to before this parameter existed. NOTE: this only
+    affects the render step - a "kaggle" request currently still resolves to
+    OpenAI under the hood (no trained Kaggle house model exists yet - see
+    HybridProvider._resolve_house_provider()'s docstring), an honest,
+    already-documented gap, not something this parameter fixes.
     """
     key_prefix = f"users/{username}/buildAHouse/output" if username else "local.output"
     with Session(engine) as session:
@@ -594,7 +608,8 @@ def run_house_pipeline(
                 )
             else:
                 primary_prompt = build_house_prompt(dimensions, prompt, plot_description, room_layout)
-                render_bytes = provider.generate_house_render(plot_bytes, primary_prompt)
+                backend_kwargs = {"preferred_backend": preferred_backend} if preferred_backend else {}
+                render_bytes = provider.generate_house_render(plot_bytes, primary_prompt, **backend_kwargs)
                 render_key = f"{key_prefix}/{house_project_id}/render.png"
                 storage.put(render_key, render_bytes, content_type="image/png")
                 house_project.render_key = render_key

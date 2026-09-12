@@ -158,6 +158,58 @@ changed from `require_user` to `get_current_user` (optional). When there's no lo
   documented SQLite-lock-contention flake under full-suite load - passes in isolation and on a clean
   rerun, unrelated to this change).
 
+## Chunk 3 done (2026-09-12): per-request Kaggle-vs-OpenAI routing
+
+`POST /api/projects`/`POST /api/house-projects` both gained an optional `preferred_model` Form
+field (`"kaggle"`/`"openai"`, anything else silently ignored - same "correct nonsense rather than
+error" convention this endpoint already uses). Whether it's honored depends on who's asking:
+
+- **Anonymous (pre-login trial)**: always allowed to choose, per the roadmap's literal spec ("user
+  may choose OpenAI or Kaggle for each").
+- **Free plan**: never honored - `app/plans.py`'s `resolve_preferred_backend()` always returns
+  `None` for Free, so the request silently falls back to the app's configured default, exactly as
+  if `preferred_model` had never been sent. Verified end-to-end
+  (`test_free_plan_room_preferred_model_is_ignored_not_honored`): a Free user explicitly requesting
+  `"openai"` still succeeds (200), which only happens if their choice was ignored and the request
+  ran against the Kaggle quota bucket - if the choice had wrongly been honored, it would have 403'd
+  immediately (Free's OpenAI allowance is 0).
+- **Pro/Studio**: honored, and the request is quota-checked against whichever bucket
+  ("room_openai"/"room_kaggle"/etc.) the CHOSEN backend maps to, not the app's default.
+
+**Provider-side plumbing** (`app/providers/hybrid.py`): `HybridProvider` gained
+`_resolve_room_provider(preferred_backend)`/`_resolve_house_provider(preferred_backend)` -
+`"openai"` always resolves to `self._openai` (always real); `"kaggle"` or `None` resolves to
+whatever the site's own configured self-hosted backend already is (`self._room_image_provider`/
+`self._house_image_provider`) - so a `None`/no-preference call is 100% identical to before this
+feature existed. `generate_image()`/`generate_images_batch()`/`generate_house_render()` all gained
+an optional `preferred_backend` param that does nothing but pick which already-constructed provider
+instance to delegate to for that one call - the runtime OpenAI-fallback-on-failure logic is
+unaffected (still compares object identity against `self._openai`).
+
+**Threaded through the pipelines conditionally, not unconditionally** - `run_pipeline()`/
+`run_house_pipeline()` gained a `preferred_backend` param, but only include it in the
+`provider.generate_image(...)`/`generate_images_batch(...)`/`generate_house_render(...)` calls
+when it's not `None` (`backend_kwargs = {"preferred_backend": ...} if preferred_backend else {}`).
+This was a deliberate scope-control decision: threading a required new kwarg through every call
+site would have meant updating ~25+ duck-typed `FakeProvider` test doubles across 5 test files
+(none of which inherit from the `Provider` ABC) just to accept an unused parameter. The
+conditional-kwargs approach means a call with no explicit backend preference (the overwhelming
+majority of requests, and every pre-existing test) is byte-for-byte identical to the call made
+before this feature existed - zero of those ~25+ fakes needed touching. Only new tests that
+specifically exercise backend routing needed fakes that accept the parameter.
+
+**Known, still-open gap, unchanged by this chunk**: Build a House's ongoing MONTHLY quota is still
+not enforced for logged-in users (see the "House quota gap" note below) - that requires either a
+real Kaggle house model or a pricing-table rework, neither of which per-request routing code alone
+can fix. What Chunk 3 DOES add for house: the model-*choice* restriction (Free can never explicitly
+force `"openai"`) is enforced independent of quota tracking - it doesn't fully close the cost-
+exposure gap (a Free user's house request still runs on OpenAI today regardless of their non-choice,
+since that's the only configured backend), but it stops a Free user from actively making it worse.
+
+Tests: `tests/test_plans.py` (4 new, `resolve_preferred_backend()` unit tests),
+`tests/test_hybrid_provider.py` (10 new, backend-resolution + label-recording tests),
+`tests/test_api.py` (4 new), `tests/test_house_api.py` (2 new). 534/534 passing.
+
 ## Chunk 1 finding: Free tier's House quota can't be fulfilled yet (2026-09-12)
 
 `app/main.py::create_house_project` is **deliberately NOT gated** on the quota system yet, unlike

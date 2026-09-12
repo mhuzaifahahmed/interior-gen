@@ -7,7 +7,13 @@ class Provider(ABC):
     """
 
     @abstractmethod
-    def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
+    def generate_image(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        tier: str | None = None,
+        preferred_backend: str | None = None,
+    ) -> bytes:
         """Edit/redecorate the given room photo per the prompt. Returns PNG bytes.
 
         prompt is a complete natural-language edit instruction (see
@@ -20,6 +26,14 @@ class Provider(ABC):
         OpenAIImageProvider raising input_fidelity for tiers that need to stay
         more tightly anchored to the input - see its module docstring). Not every
         implementation needs to use it.
+
+        preferred_backend ("kaggle"/"openai"/None), added for Chunk 3 of
+        future-plans/subscription-and-access-roadmap.md, lets a caller request
+        a specific backend for THIS generation instead of whatever the app is
+        configured to use by default - only HybridProvider actually acts on
+        this (see its _resolve_room_provider()); a single concrete provider
+        (OpenAIImageProvider, KaggleImageProvider, etc.) has nothing to choose
+        between and simply ignores it.
         """
         ...
 
@@ -34,7 +48,7 @@ class Provider(ABC):
         return False
 
     def generate_images_batch(
-        self, image_bytes: bytes, tier_prompts: dict[str, str]
+        self, image_bytes: bytes, tier_prompts: dict[str, str], preferred_backend: str | None = None
     ) -> dict[str, bytes]:
         """Generate 3 tier images in one batch call (if supported) or sequentially
         (default). tier_prompts is {"economical": "...", "mid": "...", "premium": "..."}.
@@ -43,6 +57,9 @@ class Provider(ABC):
 
         Default implementation calls generate_image() sequentially for each tier;
         Kaggle overrides this with a true /generate_batch endpoint call.
+
+        preferred_backend: see generate_image()'s docstring above - same
+        meaning, same "only HybridProvider acts on it" caveat.
         """
         return {tier: self.generate_image(image_bytes, prompt, tier)
                 for tier, prompt in tier_prompts.items()}
@@ -180,13 +197,18 @@ class Provider(ABC):
         ...
 
     @abstractmethod
-    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
+    def generate_house_render(
+        self, image_bytes: bytes, prompt: str, preferred_backend: str | None = None
+    ) -> bytes:
         """Edit/render an exterior or interior concept visualization from a plot
         photo (or floor plan, once a vendor is wired in) per the prompt. Returns
         PNG bytes. NOT best-effort - mirrors generate_image()'s treatment in the
         room-redesign pipeline: this is the core paid deliverable of the house
         feature, so a failure here should fail the whole house-project rather
         than degrade silently.
+
+        preferred_backend: see generate_image()'s docstring above - same
+        meaning, same "only HybridProvider acts on it" caveat.
         """
         ...
 

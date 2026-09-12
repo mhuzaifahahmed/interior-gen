@@ -69,6 +69,7 @@ def run_pipeline(
     username: str | None = None,
     user_room_area_sqft: float | None = None,
     user_wall_area_sqft: float | None = None,
+    preferred_backend: str | None = None,
 ) -> None:
     """Runs the full 3-tier generation for a project. Intended to run as a
     background task; opens its own DB session since the request-scoped one
@@ -107,6 +108,18 @@ def run_pipeline(
     user_wall_area_sqft is independently optional on top of that (only present
     if the user also gave a height) and feeds Paint/wall-finish's own quantity
     rule in generate_materials() - see gemini.py's docstring there.
+
+    preferred_backend ("kaggle"/"openai"/None) - Chunk 3 of future-plans/
+    subscription-and-access-roadmap.md: a Pro/Studio user (or an anonymous
+    pre-login trial caller) may have explicitly requested a specific backend
+    for this generation (see app/main.py's create_project, which resolves
+    plan-based permission before this ever reaches here - a Free-tier user's
+    request can never arrive with a real override, always None). Passed to
+    provider.generate_image()/generate_images_batch() ONLY when not None (see
+    the `**backend_kwargs` construction below), so a call with no explicit
+    preference is byte-for-byte identical to before this parameter existed -
+    no test double/fake provider needed updating for this feature unless it
+    specifically exercises backend routing.
     """
     timer = PipelineTimer(project_id)
 
@@ -241,6 +254,12 @@ def run_pipeline(
                         storage.put(key, image_bytes, content_type=content_type)
                     return key
 
+                # Only included when set, so a call with no explicit backend
+                # preference is IDENTICAL to before this parameter existed -
+                # see this function's own docstring for why (no existing test
+                # fake needed updating for this feature).
+                backend_kwargs = {"preferred_backend": preferred_backend} if preferred_backend else {}
+
                 # getattr with a default rather than a direct call - some
                 # test fakes are plain duck-typed classes that don't inherit
                 # from Provider (and thus lack the base class's default
@@ -253,8 +272,18 @@ def run_pipeline(
                     # for why OpenAI doesn't take this branch (it already
                     # parallelizes at the per-tier request level below, and
                     # gains nothing from a sequential-fallback batch loop).
+                    # NOTE: supports_batch() is checked against the app's
+                    # DEFAULT room provider, not preferred_backend - if a user
+                    # explicitly requests OpenAI while the default backend
+                    # supports real batching, this still takes the batch code
+                    # path, but generate_images_batch() then internally
+                    # resolves to OpenAI and runs its own (correct, just
+                    # sequential-not-parallel) default fallback loop. A minor,
+                    # accepted inefficiency in that one specific combination,
+                    # not a correctness issue - see HybridProvider's
+                    # _resolve_room_provider().
                     with timer.stage("generate_images_batch(all tiers)"):
-                        tier_images = provider.generate_images_batch(original_bytes, tier_prompts)
+                        tier_images = provider.generate_images_batch(original_bytes, tier_prompts, **backend_kwargs)
 
                     with ThreadPoolExecutor(max_workers=3) as upload_executor:
                         upload_futures = {
@@ -275,7 +304,9 @@ def run_pipeline(
 
                         def _generate(tier: str) -> bytes:
                             with timer.stage(f"generate_image:{tier}"):
-                                return provider.generate_image(original_bytes, tier_prompts[tier], tier)
+                                return provider.generate_image(
+                                    original_bytes, tier_prompts[tier], tier, **backend_kwargs
+                                )
 
                         image_futures = {image_executor.submit(_generate, tier): tier for tier in TIERS}
                         upload_futures = {}

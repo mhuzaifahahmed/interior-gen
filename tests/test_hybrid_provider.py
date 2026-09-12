@@ -14,6 +14,13 @@ class FakeImageProvider:
     def generate_house_render(self, image_bytes, prompt):
         return f"{self.name}:house".encode()
 
+    def generate_images_batch(self, image_bytes, tier_prompts):
+        # Same default sequential fallback shape as Provider's own base
+        # implementation - lets a plain FakeImageProvider (no real batch
+        # support) still be usable as the OpenAI side of a preferred_backend
+        # test without a separate, more elaborate fake.
+        return {tier: self.generate_image(image_bytes, prompt) for tier, prompt in tier_prompts.items()}
+
 
 class FailingImageProvider:
     """Always raises from generate_image() - simulates a dead Kaggle tunnel,
@@ -42,6 +49,123 @@ def test_room_image_generation_defaults_to_the_injected_house_provider(monkeypat
 
     assert provider.generate_image(b"x", "prompt") == b"shared:image"
     assert provider.generate_house_render(b"x", "prompt") == b"shared:house"
+
+
+def test_preferred_backend_openai_uses_openai_even_when_kaggle_is_the_configured_default(monkeypatch):
+    # Chunk 3 (future-plans/subscription-and-access-roadmap.md): a Pro/
+    # Studio user (or anonymous trial caller) explicitly requesting "openai"
+    # must get OpenAI for THIS generation, regardless of what the site's own
+    # default room backend is configured to.
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: FakeImageProvider("kaggle"))
+    openai_fake = FakeImageProvider("openai")
+    provider = HybridProvider(image_provider=openai_fake)
+
+    assert provider.generate_image(b"x", "prompt", preferred_backend="openai") == b"openai:image"
+
+
+def test_preferred_backend_kaggle_uses_the_configured_self_hosted_provider(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: FakeImageProvider("kaggle"))
+    openai_fake = FakeImageProvider("openai")
+    provider = HybridProvider(image_provider=openai_fake)
+
+    assert provider.generate_image(b"x", "prompt", preferred_backend="kaggle") == b"kaggle:image"
+
+
+def test_preferred_backend_kaggle_honestly_degrades_to_openai_when_no_self_hosted_backend_is_configured(
+    monkeypatch,
+):
+    # Requesting "kaggle" when the site has no self-hosted room backend
+    # configured at all (image_provider="openai") must still return a real
+    # image (via OpenAI) rather than crashing.
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "openai")
+    openai_fake = FakeImageProvider("openai")
+    provider = HybridProvider(image_provider=openai_fake)
+
+    assert provider.generate_image(b"x", "prompt", preferred_backend="kaggle") == b"openai:image"
+
+
+def test_preferred_backend_none_keeps_the_existing_default_behavior(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: FakeImageProvider("kaggle"))
+    openai_fake = FakeImageProvider("openai")
+    provider = HybridProvider(image_provider=openai_fake)
+
+    assert provider.generate_image(b"x", "prompt") == b"kaggle:image"
+
+
+def test_preferred_backend_openai_for_house_render(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "house_image_provider", "modal")
+    monkeypatch.setattr(hybrid_module, "ModalImageProvider", lambda: FakeImageProvider("modal"))
+    openai_fake = FakeImageProvider("openai")
+    provider = HybridProvider(image_provider=openai_fake)
+
+    assert provider.generate_house_render(b"x", "prompt", preferred_backend="openai") == b"openai:house"
+
+
+def test_preferred_backend_kaggle_for_house_render_uses_configured_house_backend(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "house_image_provider", "modal")
+    monkeypatch.setattr(hybrid_module, "ModalImageProvider", lambda: FakeImageProvider("modal"))
+    openai_fake = FakeImageProvider("openai")
+    provider = HybridProvider(image_provider=openai_fake)
+
+    assert provider.generate_house_render(b"x", "prompt", preferred_backend="kaggle") == b"modal:house"
+
+
+def test_preferred_backend_for_generate_images_batch(monkeypatch):
+    class FakeBatchProvider(FakeImageProvider):
+        def supports_batch(self):
+            return True
+
+        def generate_images_batch(self, image_bytes, tier_prompts):
+            return {tier: f"{self.name}:{tier}".encode() for tier in tier_prompts}
+
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: FakeBatchProvider("kaggle"))
+    openai_fake = FakeImageProvider("openai")
+    provider = HybridProvider(image_provider=openai_fake)
+
+    result = provider.generate_images_batch(b"x", {"economical": "p1"}, preferred_backend="openai")
+
+    assert result == {"economical": b"openai:image"}
+
+
+def test_preferred_backend_openai_records_the_openai_label_for_the_tier(monkeypatch):
+    # get_image_model_label() only records a tier's label when generate_image()
+    # is called with a real tier (not None) - uses the class-name-keyed fakes
+    # (see the "Provider labels" section below) rather than the generic
+    # FakeImageProvider, since the label lookup keys off type(provider).__name__.
+    _register_fake_labels(monkeypatch)
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", FakeOurModelProvider)
+    provider = HybridProvider(image_provider=FakeOpenAIProvider())
+
+    provider.generate_image(b"x", "prompt", "economical", preferred_backend="openai")
+
+    assert provider.get_image_model_label() == "OpenAI"
+
+
+def test_preferred_backend_kaggle_records_the_our_model_label_for_the_tier(monkeypatch):
+    _register_fake_labels(monkeypatch)
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", FakeOurModelProvider)
+    provider = HybridProvider(image_provider=FakeOpenAIProvider())
+
+    provider.generate_image(b"x", "prompt", "economical", preferred_backend="kaggle")
+
+    assert provider.get_image_model_label() == "our model"
+
+
+def test_preferred_backend_openai_records_the_openai_label_for_house_render(monkeypatch):
+    _register_fake_labels(monkeypatch)
+    monkeypatch.setattr(hybrid_module.settings, "house_image_provider", "modal")
+    monkeypatch.setattr(hybrid_module, "ModalImageProvider", FakeOurModelProvider)
+    provider = HybridProvider(image_provider=FakeOpenAIProvider())
+
+    provider.generate_house_render(b"x", "prompt", preferred_backend="openai")
+
+    assert provider.get_house_render_model_label() == "OpenAI"
 
 
 def test_kaggle_toggle_only_swaps_room_image_generation(monkeypatch):
