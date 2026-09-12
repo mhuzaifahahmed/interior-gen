@@ -281,6 +281,22 @@ production today - this is a known, deliberate gap, not a bug.
   403 quota-card's new "View full pricing" button correctly switches to the Pricing tab. Backend
   test suite unaffected (534/534 passing) since this chunk touched no Python.
 
+**Same-day follow-up fixes (2026-09-12), after the user reviewed the live Pricing tab:**
+- **Chrome's default I-beam text cursor over plain static copy** (headings, pricing card text, nav
+  labels...) made the whole page look "writable" even though none of it was ever editable - a
+  site-wide default, not something new to this chunk, just first noticed while reviewing the new
+  Pricing page. Fixed with a global `user-select: none` on `body` (`components.css`) - Chrome falls
+  back to a normal pointer/arrow cursor over non-selectable text - with an explicit
+  `user-select: text` override on `input`/`textarea`/`[contenteditable]` so real form fields (style
+  notes, city, room dimensions, etc.) are completely unaffected. Verified with a Playwright check
+  that typing into `#additional-instructions` still works normally after this change.
+- **"Self-serve upgrades aren't live yet" disclaimer removed from both the Pricing tab and the 403
+  quota-card, per explicit request ("remove the self serve line for now")** - along with the
+  click-to-flash-it behavior on the Pricing tab's Upgrade buttons (`pricingNote` and its handler
+  removed from `app.js`, the now-unreachable `.pricing-note-flash` CSS removed too). Upgrade buttons
+  are enabled but currently inert (no click handler at all) until this messaging is revisited -
+  a deliberate "do nothing rather than something half-considered" choice, not an oversight.
+
 ## Open questions for whoever picks this up next
 
 - 7-day Pro trial: explicitly skipped for this build phase (2026-09-12 decision) — build Free/Pro/

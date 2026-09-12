@@ -34,6 +34,25 @@
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
+/* Chrome shows an I-beam text cursor over any plain text by default, which
+   reads as "this is an editable field" even on static copy (headings,
+   pricing card text, nav labels...) - disabling selection site-wide makes
+   Chrome fall back to a normal pointer/arrow cursor over that text instead.
+   Real form fields are unaffected: browsers give <input>/<textarea>/
+   [contenteditable] their own selection behavior regardless of an ancestor's
+   user-select, so typing/selecting inside the upload forms still works
+   normally - re-declared explicitly below anyway for clarity, not because
+   it's strictly required. */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input, textarea, [contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 [hidden] {
   display: none !important;
 }
@@ -158,18 +177,6 @@ html, body {
    static badge Pro already has in the markup. */
 .pricing-card-current {
   box-shadow: 0 0 0 2px var(--accent) inset;
-}
-
-/* Briefly draws attention to the "self-serve upgrades aren't live yet" note
-   when an Upgrade button is clicked (there's no real checkout to send the
-   user to) - see the click handler in app.js. */
-.pricing-note-flash {
-  animation: pricing-note-pulse 1.2s ease;
-}
-
-@keyframes pricing-note-pulse {
-  0% { color: var(--accent); }
-  100% { color: inherit; }
 }
 
 /* ---- Scroll reveal ---- */

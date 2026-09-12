@@ -330,7 +330,6 @@ const roomModelToggle = document.getElementById("room-model-toggle");
 const roomModelSelect = document.getElementById("room-model-select");
 const roomQuotaNote = document.getElementById("room-quota-note");
 const quotaViewPricingBtn = document.getElementById("quota-view-pricing-btn");
-const pricingNote = document.getElementById("pricing-note");
 
 // Cached across calls within one page load - re-fetched (not invalidated)
 // whenever plan-dependent UI needs a fresh number, since GET /api/plan is
@@ -442,19 +441,6 @@ async function applyPricingUI() {
     btn.textContent = isCurrent ? "Current plan" : `Upgrade to ${plan === "studio" ? "Studio" : "Pro"}`;
   });
 }
-
-// No real payment integration exists yet (see future-plans/subscription-and-
-// access-roadmap.md) - clicking Upgrade can't start a real checkout, so it
-// draws attention to the honest disclaimer already printed under the cards
-// instead of pretending to do something it can't.
-document.querySelectorAll(".pricing-cta").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    if (btn.disabled || !pricingNote) return;
-    pricingNote.scrollIntoView({ behavior: "smooth", block: "center" });
-    pricingNote.classList.add("pricing-note-flash");
-    setTimeout(() => pricingNote.classList.remove("pricing-note-flash"), 1200);
-  });
-});
 
 quotaViewPricingBtn?.addEventListener("click", () => {
   resetToUpload();
