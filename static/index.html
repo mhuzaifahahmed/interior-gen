@@ -925,6 +925,34 @@ Interior&#8209;Gen
 </div>
 </div>
 
+<!-- Manual JazzCash payment instructions - opened from the Pricing tab's
+     Upgrade to Pro/Studio buttons (see app.js's openJazzCashModal()). There's
+     no automated payment processor wired up yet (see future-plans/
+     subscription-and-access-roadmap.md's "Decisions made" entry on the
+     payment processor) - this is a manual-transfer stopgap: the user sends
+     the shown amount via JazzCash, then reaches out for a manual plan
+     upgrade (Chunk 5's dev-only admin endpoint). -->
+<div class="materials-modal-overlay fixed inset-0 z-[62] bg-black/70 flex items-center justify-center p-6" id="jazzcash-modal-overlay" hidden>
+<div class="materials-modal relative w-full max-w-md bg-surface-container p-8 border border-outline-variant shadow-2xl text-center" id="jazzcash-modal-card">
+<button type="button" class="absolute top-4 right-4 bg-surface-container-high hover:bg-primary hover:text-on-primary hover:scale-110 hover:shadow-md text-on-surface w-9 h-9 rounded-full flex items-center justify-center text-xl transition-all duration-200" id="jazzcash-modal-close" aria-label="Close">&times;</button>
+<div class="flex justify-center mb-5">
+<span class="jazzcash-badge">JazzCash</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-1">Upgrade to <span id="jazzcash-plan-name">Pro</span></h3>
+<p class="font-body-md text-on-surface-variant text-sm mb-6">Send <span id="jazzcash-plan-price" class="font-semibold text-on-surface">PKR 2,499/mo</span> via JazzCash to the account below, then reach out to us with your transaction ID and we'll activate your plan.</p>
+<div class="bg-surface-container-low border border-outline-variant rounded-xl p-5 text-left">
+<p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Account Title</p>
+<p class="font-body-md text-on-surface mb-4">Muddassir Ahmed</p>
+<p class="font-label-caps text-label-caps text-on-surface-variant mb-1">JazzCash Number</p>
+<div class="flex items-center justify-between gap-3">
+<p class="font-technical-data text-technical-data text-on-surface" id="jazzcash-number">0321-8249255</p>
+<button type="button" class="font-label-caps text-label-caps text-primary hover:underline shrink-0" id="jazzcash-copy-btn">Copy</button>
+</div>
+</div>
+<p class="font-body-md text-on-surface-variant/70 text-xs mt-3" id="jazzcash-copy-confirm" style="visibility:hidden;">Copied to clipboard.</p>
+</div>
+</div>
+
 <div class="fixed bottom-6 right-6 left-6 sm:left-auto z-[70] sm:max-w-sm" id="real-example-toast" hidden>
 <div class="bg-background/70 backdrop-blur-xl border border-home-line rounded-2xl shadow-[0_20px_50px_rgba(28,24,21,0.25)] p-6 flex flex-col gap-3 relative overflow-hidden">
 <div class="absolute inset-0 z-0 bg-[radial-gradient(circle_at_0%_0%,rgba(122,71,18,0.12)_0%,transparent_60%)]"></div>

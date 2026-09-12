@@ -294,8 +294,40 @@ production today - this is a known, deliberate gap, not a bug.
   quota-card, per explicit request ("remove the self serve line for now")** - along with the
   click-to-flash-it behavior on the Pricing tab's Upgrade buttons (`pricingNote` and its handler
   removed from `app.js`, the now-unreachable `.pricing-note-flash` CSS removed too). Upgrade buttons
-  are enabled but currently inert (no click handler at all) until this messaging is revisited -
-  a deliberate "do nothing rather than something half-considered" choice, not an oversight.
+  were enabled but inert (no click handler at all) at that point - superseded by the manual-payment
+  modal immediately below.
+
+## Manual JazzCash payment modal (2026-09-12)
+
+Per explicit request: clicking "Upgrade to Pro" or "Upgrade to Studio" on the Pricing tab now opens
+a modal with manual JazzCash transfer instructions, instead of doing nothing. This is a **manual,
+honest stopgap** - not a real payment integration (that's still the undecided
+Safepay/PayFast/JazzCash-API question in "Decisions made" above, unaffected by this). The flow is:
+the user sends the shown amount to a real JazzCash mobile-wallet account, then reaches out to get
+manually upgraded via Chunk 5's dev-only admin endpoint (not yet built).
+
+- **`#jazzcash-modal-overlay`** (`static/index.html`) shows the plan name + price (dynamic per
+  button - `openJazzCashModal("pro"|"studio")` in `app.js`), a fixed account title ("Muddassir
+  Ahmed") and JazzCash number ("0321-8249255"), and a Copy button
+  (`navigator.clipboard.writeText()`, best-effort - degrades silently if the Clipboard API is
+  unavailable, the number is already shown in plain text either way).
+- **No real JazzCash logo asset exists anywhere in this repo, and none was fetched from an external
+  source for it** - fetching/hotlinking a third-party trademarked logo image wasn't done without a
+  real, vetted asset to use. `.jazzcash-badge` (`components.css`) is a stylized text wordmark in
+  JazzCash's brand red instead - a facsimile, not the literal mark. If a real logo file is ever
+  added under `static/` (e.g. the user supplies one), swap the `<span class="jazzcash-badge">` for
+  an `<img>` - everything else (sizing, placement in the modal) stays the same.
+- **GSAP "morph" open/close, per explicit request and matching this project's own established
+  convention** (see CLAUDE.md's Motion/GSAP section - the nav account menu's exact recipe: `gsap.set`
+  to a scaled-down/faded/offset start state, `.to()` a springy `back.out(1.7)` settle, with the
+  card's children staggered in right after) - adapted here for a centered modal by also fading the
+  backdrop in/out alongside the card's scale, rather than positioning from a corner like the nav
+  menu does. Guarded by the same `typeof gsap === "undefined" || prefersReducedMotion` fallback to
+  an instant show/hide used everywhere else GSAP is used in this codebase.
+- **Verified with a headless Chromium smoke test** (Playwright, same approach as Chunk 4's
+  verification above): opening via the Pro button shows "Pro" / "PKR 2,499/mo", opening via Studio
+  shows "Studio" / "PKR 6,999/mo", Escape closes it, zero console/page errors. Backend suite
+  unaffected (534/534 passing) - this is frontend-only.
 
 ## Open questions for whoever picks this up next
 

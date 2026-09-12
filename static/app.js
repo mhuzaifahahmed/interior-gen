@@ -2028,11 +2028,101 @@ materialsModalOverlay.addEventListener("click", (e) => {
   if (e.target === materialsModalOverlay) closeMaterialsModal();
 });
 
+/* ---------- JazzCash manual-payment modal (Pricing tab Upgrade buttons) ----------
+   No automated payment processor is wired up yet (see future-plans/
+   subscription-and-access-roadmap.md) - this is a manual-transfer stopgap,
+   not a real checkout. Uses the same "morph" open/close GSAP recipe as the
+   nav account menu (openNavUserMenu/closeNavUserMenu above) per this
+   project's own convention that every dropdown/popover reuse that exact
+   motion, adapted here for a centered modal (backdrop fade + card scale). */
+
+const jazzcashModalOverlay = document.getElementById("jazzcash-modal-overlay");
+const jazzcashModalCard = document.getElementById("jazzcash-modal-card");
+const jazzcashModalClose = document.getElementById("jazzcash-modal-close");
+const jazzcashPlanNameEl = document.getElementById("jazzcash-plan-name");
+const jazzcashPlanPriceEl = document.getElementById("jazzcash-plan-price");
+const jazzcashNumberEl = document.getElementById("jazzcash-number");
+const jazzcashCopyBtn = document.getElementById("jazzcash-copy-btn");
+const jazzcashCopyConfirm = document.getElementById("jazzcash-copy-confirm");
+
+const JAZZCASH_PLAN_LABELS = { pro: "Pro", studio: "Studio" };
+const JAZZCASH_PLAN_PRICES = { pro: "PKR 2,499/mo", studio: "PKR 6,999/mo" };
+
+let jazzcashModalTl = null;
+
+function openJazzCashModal(plan) {
+  jazzcashPlanNameEl.textContent = JAZZCASH_PLAN_LABELS[plan] || "Pro";
+  jazzcashPlanPriceEl.textContent = JAZZCASH_PLAN_PRICES[plan] || JAZZCASH_PLAN_PRICES.pro;
+  jazzcashModalOverlay.hidden = false;
+
+  if (typeof gsap === "undefined" || prefersReducedMotion) return;
+
+  if (jazzcashModalTl) jazzcashModalTl.kill();
+  gsap.set(jazzcashModalOverlay, { opacity: 0 });
+  gsap.set(jazzcashModalCard, { transformOrigin: "center", scale: 0.85, opacity: 0, y: -8 });
+  const items = Array.from(jazzcashModalCard.children);
+  gsap.set(items, { opacity: 0, y: -6 });
+
+  jazzcashModalTl = gsap.timeline();
+  jazzcashModalTl
+    .to(jazzcashModalOverlay, { opacity: 1, duration: 0.2, ease: "power1.out" }, 0)
+    .to(jazzcashModalCard, { scale: 1, opacity: 1, y: 0, duration: 0.32, ease: "back.out(1.7)" }, 0)
+    .to(items, { opacity: 1, y: 0, duration: 0.22, ease: "power2.out", stagger: 0.05 }, "-=0.18");
+}
+
+function closeJazzCashModal() {
+  if (jazzcashModalOverlay.hidden) return;
+
+  if (typeof gsap === "undefined" || prefersReducedMotion) {
+    jazzcashModalOverlay.hidden = true;
+    return;
+  }
+
+  if (jazzcashModalTl) jazzcashModalTl.kill();
+  jazzcashModalTl = gsap.timeline({
+    onComplete: () => {
+      jazzcashModalOverlay.hidden = true;
+      gsap.set(jazzcashModalCard, { clearProps: "all" });
+      gsap.set(jazzcashModalOverlay, { clearProps: "all" });
+    },
+  });
+  jazzcashModalTl
+    .to(jazzcashModalCard, { scale: 0.9, opacity: 0, y: -6, duration: 0.16, ease: "power1.in" }, 0)
+    .to(jazzcashModalOverlay, { opacity: 0, duration: 0.16, ease: "power1.in" }, 0);
+}
+
+document.querySelectorAll(".pricing-cta").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    const plan = btn.closest(".pricing-card")?.dataset.plan;
+    if (plan === "pro" || plan === "studio") openJazzCashModal(plan);
+  });
+});
+
+jazzcashModalClose.addEventListener("click", closeJazzCashModal);
+jazzcashModalOverlay.addEventListener("click", (e) => {
+  if (e.target === jazzcashModalOverlay) closeJazzCashModal();
+});
+
+jazzcashCopyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(jazzcashNumberEl.textContent.replace(/-/g, ""));
+    jazzcashCopyConfirm.style.visibility = "visible";
+    setTimeout(() => {
+      jazzcashCopyConfirm.style.visibility = "hidden";
+    }, 1500);
+  } catch {
+    // Clipboard API unavailable (e.g. insecure context/older browser) - not
+    // fatal, the number is already shown in plain text for manual copy.
+  }
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   lightbox.hidden = true;
   closeMaterialsModal();
   closeHistoryModal();
+  closeJazzCashModal();
 });
 
 /* ---------- Error / retry ---------- */
