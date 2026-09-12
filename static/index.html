@@ -50,6 +50,7 @@
 <button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full is-active" id="tab-btn-home" data-tab="home">HOME</button>
 <button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full" id="tab-btn-room" data-tab="room">ROOM REDESIGN</button>
 <button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full" id="tab-btn-house" data-tab="house">BUILD A HOUSE</button>
+<button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full" id="tab-btn-pricing" data-tab="pricing">PRICING</button>
 </nav>
 <div class="hidden md:flex items-center gap-4 shrink-0 pr-2">
 <div class="flex items-center gap-4" id="nav-auth-guest">
@@ -112,6 +113,7 @@ LOG OUT
 <button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" data-tab="home">HOME</button>
 <button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" data-tab="room">ROOM REDESIGN</button>
 <button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" data-tab="house">BUILD A HOUSE</button>
+<button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" data-tab="pricing">PRICING</button>
 <div class="mt-2 pt-2 border-t border-night-border" id="mobile-sidebar-auth-guest">
 <a href="/static/login.html" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">LOG IN</a>
 <a href="/static/signup.html" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">SIGN UP</a>
@@ -518,6 +520,27 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 </div>
 <p class="font-body-md text-on-surface-variant/70 text-xs mt-2">Left blank, our AI will estimate the room's size from the photo instead, which may lead to less accurate pricing for flooring, paint, and lighting. Height is optional and only improves paint quantity accuracy.</p>
 </div>
+<!-- Kaggle-vs-OpenAI model choice (see app/plans.py's resolve_preferred_backend())
+     - hidden entirely for a logged-in Free-plan user (the backend silently
+     ignores it for them anyway, so showing it would just be a control that
+     does nothing); shown for an anonymous pre-login visitor (their one trial
+     generation) and for Pro/Studio plans. Visibility + the note under it are
+     driven live by applyRoomPlanUI() in app.js. -->
+<div id="room-model-toggle-wrap" hidden>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Generation model</label>
+<div class="flex gap-2" id="room-model-toggle" role="radiogroup">
+<button type="button" class="model-toggle-btn flex-1 border border-outline-variant rounded-lg px-4 py-3 text-left transition-all duration-200" data-value="kaggle">
+<span class="font-label-caps text-label-caps block">Our Model</span>
+<span class="font-body-md text-xs text-on-surface-variant block mt-0.5">Free, fast</span>
+</button>
+<button type="button" class="model-toggle-btn flex-1 border border-outline-variant rounded-lg px-4 py-3 text-left transition-all duration-200" data-value="openai">
+<span class="font-label-caps text-label-caps block">OpenAI</span>
+<span class="font-body-md text-xs text-on-surface-variant block mt-0.5">Premium quality</span>
+</button>
+</div>
+<input type="hidden" id="room-model-select" value="kaggle"/>
+</div>
+<p class="font-body-md text-on-surface-variant/70 text-xs" id="room-quota-note" hidden></p>
 <div class="pt-2">
 <button type="submit" id="generate-btn" disabled class="group relative w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 overflow-hidden disabled:opacity-35 disabled:cursor-not-allowed enabled:hover:-translate-y-0.5 enabled:hover:shadow-[0_8px_28px_rgba(122,71,18,0.35)] transition-all duration-300 shadow-md">
 <span class="relative z-10 font-label-caps text-label-caps font-bold uppercase btn-label">Generate 3 Tiers</span>
@@ -589,7 +612,10 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 </div>
 </div>
 <p class="font-body-md text-on-surface-variant/70 text-xs mb-6">Self-serve upgrades aren't live yet — reach out and we'll get you set up on a paid plan directly.</p>
+<div class="flex items-center justify-center gap-3">
 <button type="button" id="quota-back-btn" class="border border-outline-variant text-on-surface px-6 py-2 font-label-caps text-label-caps hover:border-primary hover:text-primary hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">Back</button>
+<button type="button" id="quota-view-pricing-btn" class="border border-primary text-primary px-6 py-2 font-label-caps text-label-caps hover:bg-primary/10 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">View full pricing</button>
+</div>
 </section>
 
 <section class="results max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop mt-14 mb-section-gap" id="results" hidden>
@@ -748,6 +774,14 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <label for="house-extras" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Anything else? (optional)</label>
 <input type="text" id="house-extras" name="extras" maxlength="200" placeholder="e.g. garage, kitchen on every floor, modern style" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200"/>
 </div>
+<!-- No Our-Model/OpenAI toggle here yet, unlike Room Redesign - there's no
+     trained self-hosted house-render model in production, so both choices
+     would silently hit the same OpenAI backend today (see CLAUDE.md's "Build
+     a House feature" / future-plans/subscription-and-access-roadmap.md's
+     "House quota gap"). Showing a toggle that doesn't actually change
+     anything would be misleading, so this stays a plain, honest note until a
+     real self-hosted option exists. -->
+<p class="font-body-md text-on-surface-variant/70 text-xs">Build a House renders currently use OpenAI &mdash; our self-hosted house model isn't live yet.</p>
 <div class="pt-2">
 <button type="submit" id="house-generate-btn" disabled class="group relative w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 overflow-hidden disabled:opacity-35 disabled:cursor-not-allowed enabled:hover:-translate-y-0.5 enabled:hover:shadow-[0_8px_28px_rgba(122,71,18,0.35)] transition-all duration-300 shadow-md">
 <span class="relative z-10 font-label-caps text-label-caps font-bold uppercase btn-label">Generate Concept</span>
@@ -786,6 +820,68 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <div class="text-center mt-10">
 <button type="button" id="house-start-over-btn" class="border border-outline-variant text-on-surface px-6 py-3 font-label-caps text-label-caps hover:border-primary hover:text-primary hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">Upload another plot</button>
 </div>
+</section>
+
+</div>
+
+<!-- ================= PRICING ================= -->
+<div id="pricing-tab-panel" hidden>
+
+<section class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop pt-16 pb-8 text-center">
+<span class="font-label-caps text-label-caps text-primary mb-3 block tracking-[0.3em]">SIMPLE, TRANSPARENT PRICING</span>
+<h1 class="font-display-lg text-display-lg-mobile text-on-surface mb-4">Plans built around <span class="italic text-primary">real usage.</span></h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-xl mx-auto">Start free on our self-hosted model. Upgrade for OpenAI-quality renders and higher monthly limits.</p>
+</section>
+
+<section class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop mb-section-gap w-full">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter items-stretch">
+
+<div class="pricing-card border border-outline-variant rounded-xl p-8 flex flex-col bg-surface-container" data-plan="free">
+<p class="font-label-caps text-label-caps text-on-surface-variant mb-2">Free</p>
+<p class="font-headline-md text-headline-md text-on-surface mb-1">PKR 0</p>
+<p class="font-body-md text-on-surface-variant text-sm mb-6">Forever free</p>
+<ul class="font-body-md text-sm text-on-surface-variant space-y-2.5 flex-1">
+<li>5 Room generations / mo</li>
+<li>3 House generations / mo</li>
+<li>Our self-hosted model only</li>
+<li>Full generation History</li>
+</ul>
+<button type="button" class="pricing-cta mt-8 border border-outline-variant text-on-surface px-6 py-3 font-label-caps text-label-caps rounded-full cursor-default" disabled>Included by default</button>
+</div>
+
+<div class="pricing-card border-2 border-primary rounded-xl p-8 flex flex-col relative bg-primary-container/20" data-plan="pro">
+<span class="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-on-primary font-label-caps text-[10px] px-3 py-1 rounded-full">MOST POPULAR</span>
+<p class="font-label-caps text-label-caps text-primary mb-2">Pro</p>
+<p class="font-headline-md text-headline-md text-on-surface mb-1">PKR 2,499<span class="text-sm font-body-md text-on-surface-variant">/mo</span></p>
+<p class="font-body-md text-on-surface-variant text-sm mb-6">For frequent, higher-quality use</p>
+<ul class="font-body-md text-sm text-on-surface-variant space-y-2.5 flex-1">
+<li>150 Room (our model) + 30 Room (OpenAI) / mo</li>
+<li>60 House (our model) + 10 House (OpenAI) / mo</li>
+<li>Choice of our model or OpenAI per generation</li>
+<li>Priority queue, full History</li>
+</ul>
+<button type="button" class="pricing-cta mt-8 bg-primary text-on-primary px-6 py-3 font-label-caps text-label-caps hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 rounded-full">Upgrade to Pro</button>
+</div>
+
+<div class="pricing-card border border-outline-variant rounded-xl p-8 flex flex-col bg-surface-container" data-plan="studio">
+<p class="font-label-caps text-label-caps text-on-surface-variant mb-2">Studio</p>
+<p class="font-headline-md text-headline-md text-on-surface mb-1">PKR 6,999<span class="text-sm font-body-md text-on-surface-variant">/mo</span></p>
+<p class="font-body-md text-on-surface-variant text-sm mb-6">For professional, high-volume use</p>
+<ul class="font-body-md text-sm text-on-surface-variant space-y-2.5 flex-1">
+<li>Unlimited Room (our model) + 100 (OpenAI) / mo</li>
+<li>Unlimited House (our model) + 40 (OpenAI) / mo</li>
+<li>Choice of our model or OpenAI per generation</li>
+<li>Commercial-use license, priority support</li>
+</ul>
+<button type="button" class="pricing-cta mt-8 border border-outline-variant text-on-surface px-6 py-3 font-label-caps text-label-caps hover:border-primary hover:text-primary hover:shadow-md transition-all duration-200 rounded-full">Upgrade to Studio</button>
+</div>
+
+</div>
+<!-- Honest, unavoidable while there's no real payment integration yet - see
+     future-plans/subscription-and-access-roadmap.md's "Decisions made" entry
+     on the payment processor. Clicking an Upgrade button draws attention to
+     this note (see app.js) rather than pretending to start a real checkout. -->
+<p class="font-body-md text-on-surface-variant/70 text-xs text-center mt-8" id="pricing-note">Self-serve upgrades aren't live yet — reach out and we'll get you set up on a paid plan directly.</p>
 </section>
 
 </div>

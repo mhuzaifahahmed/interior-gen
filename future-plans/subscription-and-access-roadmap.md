@@ -228,6 +228,59 @@ for an OpenAI-only house-generation reality (e.g. a smaller free OpenAI house al
 Kaggle one). Until then, Build a House stays fully unmetered for every plan, exactly as it behaves in
 production today - this is a known, deliberate gap, not a bug.
 
+## Chunk 4 done (2026-09-12): frontend - pricing tab, model toggle, quota display
+
+- **New standalone "PRICING" tab** (`static/index.html`'s nav + mobile sidebar, a 4th entry in
+  `TAB_ORDER`/`TAB_PANELS`/`TAB_BTNS` in `app.js`, reusing the exact same `switchTab()` machinery
+  Home/Room/House already use - no new tab-switching logic). Shows the same Free/Pro/Studio
+  comparison the 403 quota-card already had inline, but reachable any time, not just after hitting
+  a limit. Pro/Studio cards dynamically show "Current plan" (disabled) instead of "Upgrade to X"
+  when `GET /api/plan` confirms that's the user's real plan (`applyPricingUI()`).
+- **No real checkout exists** (payment processor still undecided - see "Decisions made" above), so
+  clicking an enabled Upgrade button doesn't pretend to start one. It scrolls to and flashes the
+  existing honest disclaimer text ("Self-serve upgrades aren't live yet — reach out and we'll get
+  you set up on a paid plan directly.") instead - deliberately not a fake success state or a fake
+  contact form, since neither reflects a real capability. Chunk 5's dev-only admin endpoint is the
+  only way to actually change a plan for now.
+- **Room Redesign gained a Kaggle/OpenAI model-choice toggle** (`#room-model-toggle-wrap`), shown
+  only when the choice is real: anonymous (pre-login trial - the roadmap's literal spec) and
+  Pro/Studio. Hidden entirely for a logged-in Free-plan user, since `resolve_preferred_backend()`
+  already silently ignores their choice server-side - showing a control that does nothing would be
+  its own bug. `applyRoomPlanUI()` (`app.js`) decides this live off `GET /api/plan`, and also drives
+  the quota-remaining note under it: Free sees real remaining-this-month numbers + an "Upgrade" link
+  that jumps to the Pricing tab; Pro/Studio see remaining counts for BOTH backends since they have a
+  real choice to make. Wired into the submit handler: `preferred_model` is only appended to the
+  upload `FormData` when the toggle is actually visible - a hidden/Free-plan submission is
+  byte-for-byte the same request as before this feature existed.
+- **Build a House deliberately did NOT get the same toggle.** `settings.house_image_provider`
+  defaults to `"openai"` and no trained self-hosted house-render model exists yet (see the "House
+  quota gap" note above) - `HybridProvider._resolve_house_provider("kaggle")` resolves to
+  whatever the site's configured house backend already is, which today is OpenAI regardless of
+  which option a user picked. Showing a toggle where both choices silently do the same (paid) thing
+  would misrepresent a capability the app doesn't have yet (see CLAUDE.md's "Stitch reconciliation"
+  standing rule: no UI may imply data/capability the backend doesn't produce). Replaced with a
+  plain, honest static note instead: "Build a House renders currently use OpenAI — our self-hosted
+  house model isn't live yet." Revisit once a real Kaggle house model exists (tracked in
+  `HouseProject`'s ongoing "House quota gap" note above) - the toggle markup pattern in Room
+  Redesign is directly reusable then.
+- **Quota display is refreshed at the moments it can actually change**: on Clerk sign-in/out, on
+  switching to the Room or Pricing tab, and immediately after a Room generation is successfully
+  submitted (`consume_quota()` runs synchronously inside `POST /api/projects`, before the background
+  pipeline even starts - so the remaining count is already stale the instant the request succeeds,
+  not when the generation finishes rendering).
+- **403 quota-exceeded card gained a "View full pricing" button** (`#quota-view-pricing-btn`)
+  alongside the existing "Back" button, jumping straight to the new Pricing tab - the card's own
+  inline comparison stays as-is (already useful in the moment), this just adds a path to the
+  fuller, dynamically-updating version.
+- **Manually verified end-to-end with a headless Chromium smoke test** (Playwright, not part of the
+  committed test suite - this is frontend JS with no existing test harness in this repo, see
+  CLAUDE.md's "Frontend" section) against a real running `uvicorn` instance: Pricing tab renders
+  with zero console/page errors, clicking Upgrade flashes the disclaimer note without error,
+  the Room model toggle is visible+clickable for an anonymous visitor and correctly updates the
+  hidden `preferred_model` value, the House tab shows the static OpenAI note (no toggle), and the
+  403 quota-card's new "View full pricing" button correctly switches to the Pricing tab. Backend
+  test suite unaffected (534/534 passing) since this chunk touched no Python.
+
 ## Open questions for whoever picks this up next
 
 - 7-day Pro trial: explicitly skipped for this build phase (2026-09-12 decision) — build Free/Pro/

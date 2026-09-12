@@ -201,9 +201,11 @@ const historyModalTabs = document.getElementById("history-modal-tabs");
 const tabBtnHome = document.getElementById("tab-btn-home");
 const tabBtnRoom = document.getElementById("tab-btn-room");
 const tabBtnHouse = document.getElementById("tab-btn-house");
+const tabBtnPricing = document.getElementById("tab-btn-pricing");
 const homeTabPanel = document.getElementById("home-tab-panel");
 const roomTabPanel = document.getElementById("room-tab-panel");
 const houseTabPanel = document.getElementById("house-tab-panel");
+const pricingTabPanel = document.getElementById("pricing-tab-panel");
 const homeCtaBtns = document.querySelectorAll(".js-cta-room");
 const homeHeroHouseBtn = document.getElementById("home-hero-house-btn");
 const homeToolsHouseRow = document.getElementById("home-tools-house-row");
@@ -302,12 +304,162 @@ function applyAuthUI(user) {
 clerkReady
   .then((Clerk) => {
     applyAuthUI(Clerk.user);
-    Clerk.addListener(({ user }) => applyAuthUI(user));
+    applyRoomPlanUI();
+    applyPricingUI();
+    Clerk.addListener(({ user }) => {
+      applyAuthUI(user);
+      applyRoomPlanUI();
+      applyPricingUI();
+    });
   })
   .catch((err) => {
     console.error("Clerk failed to load", err);
     applyAuthUI(null);
   });
+
+/* ---------- Subscription plan / model-choice UI (Chunk 4) ----------
+   GET /api/plan (app/plans.py's plan_status()) is the only source of truth
+   for a logged-in user's plan + rolling quota usage - everything below just
+   renders it. Two places actually show it: the Room Redesign model toggle +
+   quota note (applyRoomPlanUI), and the Pricing tab's "current plan" state
+   (applyPricingUI). Build a House has no toggle yet - see the note next to
+   its markup in index.html for why. */
+
+const roomModelToggleWrap = document.getElementById("room-model-toggle-wrap");
+const roomModelToggle = document.getElementById("room-model-toggle");
+const roomModelSelect = document.getElementById("room-model-select");
+const roomQuotaNote = document.getElementById("room-quota-note");
+const quotaViewPricingBtn = document.getElementById("quota-view-pricing-btn");
+const pricingNote = document.getElementById("pricing-note");
+
+// Cached across calls within one page load - re-fetched (not invalidated)
+// whenever plan-dependent UI needs a fresh number, since GET /api/plan is
+// cheap/read-only. null means "anonymous, or the fetch failed" - callers
+// treat both the same way (fail closed, see applyRoomPlanUI below).
+let cachedPlanStatus = null;
+
+async function fetchPlanStatus() {
+  const Clerk = await clerkReady;
+  if (!Clerk.user) {
+    cachedPlanStatus = null;
+    return null;
+  }
+  try {
+    const res = await authFetch(apiUrl("/api/plan"));
+    if (!res.ok) throw new Error(await res.text());
+    cachedPlanStatus = await res.json();
+  } catch (err) {
+    console.error("Failed to load plan status", err);
+    cachedPlanStatus = null;
+  }
+  return cachedPlanStatus;
+}
+
+function formatRemaining(remaining, quota) {
+  if (remaining === null || remaining === undefined) return "unlimited";
+  return `${remaining} of ${quota} left`;
+}
+
+function setModelToggleValue(groupEl, selectEl, value) {
+  selectEl.value = value;
+  groupEl.querySelectorAll(".model-toggle-btn").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.value === value);
+  });
+}
+
+function wireModelToggle(groupEl, selectEl) {
+  groupEl.querySelectorAll(".model-toggle-btn").forEach((btn) => {
+    btn.addEventListener("click", () => setModelToggleValue(groupEl, selectEl, btn.dataset.value));
+  });
+}
+wireModelToggle(roomModelToggle, roomModelSelect);
+setModelToggleValue(roomModelToggle, roomModelSelect, "kaggle");
+
+// Decides whether Room Redesign's Kaggle/OpenAI toggle is shown at all, and
+// what the quota note under it says. Only anonymous (pre-login trial) and
+// Pro/Studio users get a real choice - see app/plans.py's
+// resolve_preferred_backend(), which silently ignores the choice for a
+// logged-in Free-plan user regardless of what's sent, so showing the toggle
+// to them would just be a control that does nothing.
+async function applyRoomPlanUI() {
+  const Clerk = await clerkReady;
+  if (!Clerk.user) {
+    // Anonymous pre-login trial - the roadmap's spec explicitly lets an
+    // anonymous visitor choose a backend for their one free trial.
+    roomModelToggleWrap.hidden = false;
+    roomQuotaNote.hidden = true;
+    return;
+  }
+
+  const status = await fetchPlanStatus();
+  if (!status) {
+    // Plan lookup failed (network hiccup, etc.) - fail closed: hide the
+    // toggle rather than show a stale/broken quota number or send a
+    // preferred_model the backend might not expect from this plan.
+    roomModelToggleWrap.hidden = true;
+    roomQuotaNote.hidden = true;
+    return;
+  }
+
+  if (status.plan === "free") {
+    roomModelToggleWrap.hidden = true;
+    setModelToggleValue(roomModelToggle, roomModelSelect, "kaggle");
+    roomQuotaNote.hidden = false;
+    roomQuotaNote.innerHTML =
+      `Free plan &mdash; ${formatRemaining(status.remaining.room_kaggle, status.quotas.room_kaggle)} ` +
+      `Room generations this month. <a href="#" class="text-primary underline" id="room-upgrade-link">` +
+      `Upgrade for OpenAI-quality output &amp; higher limits</a>.`;
+    document.getElementById("room-upgrade-link")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      switchTab("pricing");
+    });
+    return;
+  }
+
+  // Pro/Studio - a real choice, with real remaining counts for both backends.
+  roomModelToggleWrap.hidden = false;
+  roomQuotaNote.hidden = false;
+  const planLabel = status.plan === "studio" ? "Studio" : "Pro";
+  const kaggleLeft = formatRemaining(status.remaining.room_kaggle, status.quotas.room_kaggle);
+  const openaiLeft = formatRemaining(status.remaining.room_openai, status.quotas.room_openai);
+  roomQuotaNote.textContent = `${planLabel} plan — Our Model: ${kaggleLeft} · OpenAI: ${openaiLeft} this month.`;
+}
+
+// Pricing tab: marks whichever plan the logged-in user is actually on as
+// "Current plan" (disabled) instead of an actionable Upgrade button. Free's
+// card has no dynamic state - see its static markup in index.html.
+async function applyPricingUI() {
+  const Clerk = await clerkReady;
+  const status = Clerk.user ? await fetchPlanStatus() : null;
+  const currentPlan = status ? status.plan : null;
+  ["pro", "studio"].forEach((plan) => {
+    const card = document.querySelector(`.pricing-card[data-plan="${plan}"]`);
+    if (!card) return;
+    const btn = card.querySelector(".pricing-cta");
+    const isCurrent = currentPlan === plan;
+    card.classList.toggle("pricing-card-current", isCurrent);
+    btn.disabled = isCurrent;
+    btn.textContent = isCurrent ? "Current plan" : `Upgrade to ${plan === "studio" ? "Studio" : "Pro"}`;
+  });
+}
+
+// No real payment integration exists yet (see future-plans/subscription-and-
+// access-roadmap.md) - clicking Upgrade can't start a real checkout, so it
+// draws attention to the honest disclaimer already printed under the cards
+// instead of pretending to do something it can't.
+document.querySelectorAll(".pricing-cta").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (btn.disabled || !pricingNote) return;
+    pricingNote.scrollIntoView({ behavior: "smooth", block: "center" });
+    pricingNote.classList.add("pricing-note-flash");
+    setTimeout(() => pricingNote.classList.remove("pricing-note-flash"), 1200);
+  });
+});
+
+quotaViewPricingBtn?.addEventListener("click", () => {
+  resetToUpload();
+  switchTab("pricing");
+});
 
 /* ---------- Mobile nav sidebar open/close (GSAP) ---------- */
 /* Slide-in-from-the-right panel + backdrop fade, not the small anchored
@@ -688,9 +840,9 @@ const houseStartOverBtn = document.getElementById("house-start-over-btn");
    below), so leaving mid-progress on one tab and coming back to it later
    still shows the right thing. */
 
-const TAB_ORDER = ["home", "room", "house"];
-const TAB_PANELS = { home: homeTabPanel, room: roomTabPanel, house: houseTabPanel };
-const TAB_BTNS = { home: tabBtnHome, room: tabBtnRoom, house: tabBtnHouse };
+const TAB_ORDER = ["home", "room", "house", "pricing"];
+const TAB_PANELS = { home: homeTabPanel, room: roomTabPanel, house: houseTabPanel, pricing: pricingTabPanel };
+const TAB_BTNS = { home: tabBtnHome, room: tabBtnRoom, house: tabBtnHouse, pricing: tabBtnPricing };
 let currentTab = "home";
 let tabSwitchTl = null;
 
@@ -725,7 +877,14 @@ function switchTab(tab) {
   tabBtnHome.classList.toggle("is-active", tab === "home");
   tabBtnRoom.classList.toggle("is-active", tab === "room");
   tabBtnHouse.classList.toggle("is-active", tab === "house");
+  tabBtnPricing.classList.toggle("is-active", tab === "pricing");
   moveTabActivePill(tab);
+
+  // Refresh plan-dependent UI whenever landing on a tab that shows it - not
+  // on every poll/render, since GET /api/plan is a real (if cheap) network
+  // call and these are the only two places its result is actually displayed.
+  if (tab === "room") applyRoomPlanUI();
+  if (tab === "pricing") applyPricingUI();
 
   const oldTab = currentTab;
   const oldPanel = TAB_PANELS[oldTab];
@@ -782,6 +941,7 @@ function switchTab(tab) {
 tabBtnHome.addEventListener("click", () => switchTab("home"));
 tabBtnRoom.addEventListener("click", () => switchTab("room"));
 tabBtnHouse.addEventListener("click", () => switchTab("house"));
+tabBtnPricing.addEventListener("click", () => switchTab("pricing"));
 
 homeCtaBtns.forEach((btn) => btn.addEventListener("click", () => switchTab("room")));
 homeHeroHouseBtn.addEventListener("click", () => switchTab("house"));
@@ -925,6 +1085,7 @@ async function restorePendingGeneration() {
     roomHeightInput.value = pending.roomHeight || "";
     roomDimensionUnitInput.value = pending.roomDimensionUnit || "ft";
     updateGenerateButtonState();
+    applyRoomPlanUI();
   } else {
     houseLengthInput.value = pending.length || "";
     houseWidthInput.value = pending.width || "";
@@ -1257,6 +1418,10 @@ form.addEventListener("submit", async (e) => {
   if (roomWidthInput.value) formData.append("room_width", roomWidthInput.value);
   if (roomHeightInput.value) formData.append("room_height", roomHeightInput.value);
   formData.append("dimension_unit", roomDimensionUnitInput.value);
+  // Only sent when the toggle is actually visible/meaningful (anonymous
+  // trial or Pro/Studio - see applyRoomPlanUI()) - a logged-in Free-plan
+  // user's request omits it entirely, same as before this feature existed.
+  if (!roomModelToggleWrap.hidden) formData.append("preferred_model", roomModelSelect.value);
 
   let projectId;
   try {
@@ -1289,6 +1454,13 @@ form.addEventListener("submit", async (e) => {
     showError(err.message);
     return;
   }
+
+  // Quota is consumed synchronously by POST /api/projects (before the
+  // background pipeline even starts), not when the generation finishes - so
+  // the displayed remaining count is already stale the moment this request
+  // succeeds. Best-effort, fire-and-forget - the next time the room form is
+  // shown it'll be correct either way.
+  applyRoomPlanUI();
 
   activeRoomProjectId = projectId;
   roomPollCancelled = false;
@@ -1907,6 +2079,7 @@ function resetToUpload() {
   colorPaletteDropdown.setValue("");
   additionalInstructionsInput.value = "";
   showState("upload");
+  applyRoomPlanUI();
 }
 
 retryBtn.addEventListener("click", resetToUpload);

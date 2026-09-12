@@ -139,6 +139,39 @@ html, body {
   border-color: var(--accent);
 }
 
+/* ---- Subscription plan UI (Chunk 4) ---- */
+/* Kaggle/OpenAI model-choice toggle (Room Redesign) - setModelToggleValue()
+   in app.js toggles this class, the visual selected/unselected look lives
+   here, matching the .tab-btn.is-active pattern above. */
+.model-toggle-btn {
+  cursor: pointer;
+  background: transparent;
+}
+
+.model-toggle-btn.is-active {
+  border-color: var(--accent) !important;
+  background: rgba(122, 71, 18, 0.08);
+}
+
+/* Pricing tab - highlights whichever plan card matches the logged-in user's
+   real plan (applyPricingUI() in app.js), on top of the "Most Popular"
+   static badge Pro already has in the markup. */
+.pricing-card-current {
+  box-shadow: 0 0 0 2px var(--accent) inset;
+}
+
+/* Briefly draws attention to the "self-serve upgrades aren't live yet" note
+   when an Upgrade button is clicked (there's no real checkout to send the
+   user to) - see the click handler in app.js. */
+.pricing-note-flash {
+  animation: pricing-note-pulse 1.2s ease;
+}
+
+@keyframes pricing-note-pulse {
+  0% { color: var(--accent); }
+  100% { color: inherit; }
+}
+
 /* ---- Scroll reveal ---- */
 
 [data-reveal] {
