@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, UploadFile, File
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Response, UploadFile, File
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -14,7 +14,7 @@ from sqlmodel import Session, select
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
-from app.auth import AuthUser, require_user
+from app.auth import AuthUser, get_current_user, require_user
 from app.config import settings
 from app.db import get_session, init_db
 from app.models import HouseProject, Project
@@ -22,10 +22,12 @@ from app.pipeline.generate import TIERS, run_pipeline
 from app.pipeline.generate_house import run_house_pipeline
 from app.pipeline.house_prompts import USER_PROMPT_MAX_CHARS
 from app.pipeline.prompts import ADDITIONAL_INSTRUCTIONS_MAX_CHARS, COLOR_PALETTES, STYLE_OPTIONS
+from app.plans import QuotaExceededError, backend_bucket, consume_quota, plan_status
 from app.providers import get_provider
 from app.schemas import (
     HouseProjectCreateResponse,
     HouseProjectStatusResponse,
+    PlanStatusResponse,
     ProjectCreateResponse,
     ProjectStatusResponse,
 )
@@ -150,9 +152,77 @@ def _storage_namespace(user_id: str, display_name: str) -> str:
     return f"{user_id}_{label}" if label else user_id
 
 
+# Shared S3 prefix for every anonymous (pre-login) generation - see
+# _consume_anonymous_trial() below. Deliberately ONE fixed namespace, not a
+# per-visitor id: these are one-off trial generations with no History/
+# ownership feature attached, so there's no need to distinguish one
+# anonymous visitor's S3 objects from another's the way a real per-user
+# namespace does.
+ANONYMOUS_STORAGE_NAMESPACE = "anonymous"
+
+# Pre-login trial cookie (future-plans/subscription-and-access-roadmap.md):
+# 1 free Room + 1 free House generation before login is required, tracked by
+# a plain browser cookie - the user's own explicit choice over IP/fingerprint
+# tracking (simple, no new infra, accepted as trivially bypassable via
+# clearing cookies/private browsing in exchange for zero friction - matches
+# this app's existing localStorage-based low-friction conventions
+# elsewhere). A long max-age (1 year) since the whole point is "used once,
+# ever", not a session-scoped allowance.
+_ANON_TRIAL_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365
+
+
+def _anon_trial_cookie_name(kind: str) -> str:
+    return f"ig_anon_trial_{kind}"
+
+
+def _owns_project(project_user_id: str | None, user: AuthUser | None) -> bool:
+    """Ownership check that also covers anonymous (pre-login trial) projects,
+    which have user_id=None. An anonymous caller (also `user=None`, since
+    static/app.js's authFetch() sends no Authorization header when nobody's
+    logged in) can view/cancel an anonymous project - there's no per-visitor
+    id to scope by (see ANONYMOUS_STORAGE_NAMESPACE's comment), so this is a
+    deliberately coarse "any anonymous caller can see any anonymous project"
+    check, same low-stakes/low-security posture already accepted for the
+    cookie-based trial gate itself. A real project (user_id set) still
+    requires an exact Clerk id match, unchanged from before this feature."""
+    return project_user_id == (user.id if user else None)
+
+
+def _consume_anonymous_trial(request: Request, response: Response, kind: str) -> None:
+    """Called only when there's no logged-in user at all (create_project/
+    create_house_project's `user` dependency resolved to None). Raises 401
+    if this browser's pre-login trial for `kind` ("room"/"house") was already
+    used - the SAME status code the frontend already handles for "you need to
+    log in" (see static/app.js's savePendingGeneration() + redirect-to-login
+    flow on a 401 from these endpoints), so no new frontend error-handling
+    path was needed for this case. Otherwise marks the trial used via the
+    cookie and lets the request proceed anonymously.
+    """
+    cookie_name = _anon_trial_cookie_name(kind)
+    if request.cookies.get(cookie_name) == "used":
+        raise HTTPException(401, "Free trial already used - please log in to continue.")
+    response.set_cookie(
+        cookie_name,
+        "used",
+        max_age=_ANON_TRIAL_COOKIE_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+@app.get("/api/plan", response_model=PlanStatusResponse)
+def get_plan(session: Session = Depends(get_session), user: AuthUser = Depends(require_user)):
+    """Current user's subscription plan + rolling quota usage - see
+    app/plans.py. No plan-change logic here (that's the payment
+    integration/admin-stopgap chunks); this is read-only status."""
+    return PlanStatusResponse(**plan_status(session, user.id))
+
+
 @app.post("/api/projects", response_model=ProjectCreateResponse)
 async def create_project(
     background_tasks: BackgroundTasks,
+    request: Request,
+    response: Response,
     file: UploadFile = File(...),
     interior_style: str = Form(""),
     color_palette: str = Form(""),
@@ -164,7 +234,7 @@ async def create_project(
     room_height: float | None = Form(None),
     dimension_unit: str = Form("ft"),
     session: Session = Depends(get_session),
-    user: AuthUser = Depends(require_user),
+    user: AuthUser | None = Depends(get_current_user),
 ):
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(400, f"unsupported file type: {file.content_type}")
@@ -200,6 +270,24 @@ async def create_project(
     # it entirely.
     room_dimensions = _compute_room_dimensions(room_length, room_width, room_height, dimension_unit)
 
+    # Access gate - after every cheap/free validation above (so a request
+    # that was going to 400 anyway never burns a generation), but before any
+    # real storage/pipeline cost is incurred. Two paths (see
+    # future-plans/subscription-and-access-roadmap.md):
+    #   - No logged-in user: the pre-login trial (1 free Room generation per
+    #     browser, cookie-tracked) - 401s once already used, matching the
+    #     existing "log in to continue" frontend handling.
+    #   - Logged-in user: Chunk 1's plan quota, against the app's currently
+    #     CONFIGURED backend (settings.image_provider) - a per-request
+    #     Kaggle-vs-OpenAI choice for Pro/Studio users is a later chunk.
+    if user is None:
+        _consume_anonymous_trial(request, response, "room")
+    else:
+        try:
+            consume_quota(session, user.id, "room", backend_bucket(settings.image_provider))
+        except QuotaExceededError as exc:
+            raise HTTPException(403, exc.user_message())
+
     storage = get_storage()
     provider = get_provider()
 
@@ -208,7 +296,7 @@ async def create_project(
         interior_style=interior_style,
         color_palette=color_palette,
         additional_instructions=additional_instructions,
-        user_id=user.id,
+        user_id=user.id if user else None,
         room_dimensions_json=json.dumps(room_dimensions) if room_dimensions else None,
     )
     session.add(project)
@@ -219,8 +307,9 @@ async def create_project(
     # appended (see _storage_namespace) so every user's uploads/renders group
     # under their own S3 prefix, and that prefix is actually identifiable by
     # name when browsing the bucket - see CLAUDE.md's "Authentication"
-    # section.
-    storage_namespace = _storage_namespace(user.id, display_name)
+    # section. Anonymous (pre-login trial) uploads share one fixed namespace
+    # instead - see ANONYMOUS_STORAGE_NAMESPACE's comment.
+    storage_namespace = _storage_namespace(user.id, display_name) if user else ANONYMOUS_STORAGE_NAMESPACE
     original_key = f"users/{storage_namespace}/roomRedesign/input/{project.id}/original.png"
     storage.put(original_key, data, content_type=file.content_type)
     project.original_key = original_key
@@ -348,13 +437,14 @@ def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
 
 @app.get("/api/projects/{project_id}", response_model=ProjectStatusResponse)
 def get_project(
-    project_id: str, session: Session = Depends(get_session), user: AuthUser = Depends(require_user)
+    project_id: str, session: Session = Depends(get_session), user: AuthUser | None = Depends(get_current_user)
 ):
     project = session.get(Project, project_id)
     # 404 (not 403) for both "doesn't exist" and "not yours" - doesn't let a
     # caller distinguish "wrong id" from "someone else's real project", so
-    # project ids aren't enumerable across accounts.
-    if project is None or project.user_id != user.id:
+    # project ids aren't enumerable across accounts. See _owns_project()'s
+    # docstring for the anonymous-project case.
+    if project is None or not _owns_project(project.user_id, user):
         raise HTTPException(404, "project not found")
 
     return _project_to_response(project, get_storage())
@@ -362,7 +452,7 @@ def get_project(
 
 @app.post("/api/projects/{project_id}/cancel", response_model=ProjectStatusResponse)
 def cancel_project(
-    project_id: str, session: Session = Depends(get_session), user: AuthUser = Depends(require_user)
+    project_id: str, session: Session = Depends(get_session), user: AuthUser | None = Depends(get_current_user)
 ):
     """Best-effort cancel-and-discard for an in-progress generation (the
     "Cancel generating..." button on the progress screen). Generation itself
@@ -376,7 +466,7 @@ def cancel_project(
     get_project.
     """
     project = session.get(Project, project_id)
-    if project is None or project.user_id != user.id:
+    if project is None or not _owns_project(project.user_id, user):
         raise HTTPException(404, "project not found")
 
     if project.status in ("queued", "running"):
@@ -408,6 +498,8 @@ def list_projects(session: Session = Depends(get_session), user: AuthUser = Depe
 @app.post("/api/house-projects", response_model=HouseProjectCreateResponse)
 async def create_house_project(
     background_tasks: BackgroundTasks,
+    request: Request,
+    response: Response,
     file: UploadFile | None = File(None),
     length: float | None = Form(None),
     width: float | None = Form(None),
@@ -420,7 +512,7 @@ async def create_house_project(
     extras: str = Form(""),
     facing: str | None = Form(None),
     session: Session = Depends(get_session),
-    user: AuthUser = Depends(require_user),
+    user: AuthUser | None = Depends(get_current_user),
 ):
     """Mirrors create_project()'s validate -> create-row -> commit ->
     upload-original -> commit -> background_tasks.add_task shape. length/width
@@ -504,6 +596,25 @@ async def create_house_project(
     if length and width:
         dimensions = {"length": length, "width": width, "unit": unit.strip()[:10]}
 
+    # Anonymous (pre-login) trial gate ONLY - a logged-in user's ONGOING
+    # monthly quota is NOT enforced here yet (unlike create_project above),
+    # deliberately, not an oversight. The approved pricing table
+    # (future-plans/subscription-and-access-roadmap.md) gives Free tier
+    # "3 Kaggle house generations/mo, 0 OpenAI", but settings.house_image_provider
+    # defaults to "openai" (no trained Kaggle house-render model exists in
+    # production yet - see CLAUDE.md's "Build a House feature" section).
+    # Gating a LOGGED-IN user's ongoing quota on the REAL configured backend
+    # would 403 every Free-tier user's second-and-later Build a House
+    # generation; hardcoding the "kaggle" bucket instead would silently let
+    # Free users burn real, paid OpenAI calls at zero counted cost. Revisit
+    # once Chunk 3's per-request routing exists and/or a real Kaggle house
+    # model ships - see the roadmap doc's "House quota gap" note
+    # (2026-09-12). The one-shot ANONYMOUS trial below is unaffected by that
+    # gap (it's a single free generation, not an ongoing monthly allowance),
+    # so it's still enforced here.
+    if user is None:
+        _consume_anonymous_trial(request, response, "house")
+
     storage = get_storage()
     provider = get_provider()
 
@@ -511,7 +622,7 @@ async def create_house_project(
         status="queued",
         dimensions_json=json.dumps(dimensions),
         prompt=prompt,
-        user_id=user.id,
+        user_id=user.id if user else None,
         house_inputs_json=json.dumps(house_inputs),
     )
     session.add(house_project)
@@ -521,7 +632,7 @@ async def create_house_project(
     # storage_namespace is needed below (metadata.json key, background task)
     # regardless of whether a photo was uploaded - only plot_image_key itself
     # is conditional on data being present.
-    storage_namespace = _storage_namespace(user.id, display_name)
+    storage_namespace = _storage_namespace(user.id, display_name) if user else ANONYMOUS_STORAGE_NAMESPACE
     if data is not None:
         plot_image_key = f"users/{storage_namespace}/buildAHouse/input/{house_project.id}/plot.png"
         storage.put(plot_image_key, data, content_type=file.content_type)
@@ -647,10 +758,12 @@ def _house_project_to_response(house_project: HouseProject, storage) -> HousePro
 
 @app.get("/api/house-projects/{house_project_id}", response_model=HouseProjectStatusResponse)
 def get_house_project(
-    house_project_id: str, session: Session = Depends(get_session), user: AuthUser = Depends(require_user)
+    house_project_id: str,
+    session: Session = Depends(get_session),
+    user: AuthUser | None = Depends(get_current_user),
 ):
     house_project = session.get(HouseProject, house_project_id)
-    if house_project is None or house_project.user_id != user.id:
+    if house_project is None or not _owns_project(house_project.user_id, user):
         raise HTTPException(404, "house project not found")
 
     return _house_project_to_response(house_project, get_storage())
@@ -658,12 +771,14 @@ def get_house_project(
 
 @app.post("/api/house-projects/{house_project_id}/cancel", response_model=HouseProjectStatusResponse)
 def cancel_house_project(
-    house_project_id: str, session: Session = Depends(get_session), user: AuthUser = Depends(require_user)
+    house_project_id: str,
+    session: Session = Depends(get_session),
+    user: AuthUser | None = Depends(get_current_user),
 ):
     """Mirrors cancel_project() above - see its docstring for the full
     best-effort cancel-and-discard contract."""
     house_project = session.get(HouseProject, house_project_id)
-    if house_project is None or house_project.user_id != user.id:
+    if house_project is None or not _owns_project(house_project.user_id, user):
         raise HTTPException(404, "house project not found")
 
     if house_project.status in ("queued", "running"):

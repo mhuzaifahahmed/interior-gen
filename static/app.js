@@ -171,6 +171,10 @@ const errorCard = document.getElementById("error-card");
 const errorDetail = document.getElementById("error-detail");
 const retryBtn = document.getElementById("retry-btn");
 
+const quotaCard = document.getElementById("quota-card");
+const quotaDetail = document.getElementById("quota-detail");
+const quotaBackBtn = document.getElementById("quota-back-btn");
+
 const resultsSection = document.getElementById("results");
 const roomDescriptionEl = document.getElementById("room-description");
 const imageModelNoteEl = document.getElementById("image-model-note");
@@ -1274,6 +1278,11 @@ form.addEventListener("submit", async (e) => {
       window.location.href = "/static/login.html";
       return;
     }
+    if (res.status === 403) {
+      const body = await res.json().catch(() => ({}));
+      showQuotaExceeded(body.detail || "You've reached your plan's generation limit.");
+      return;
+    }
     if (!res.ok) throw new Error(await res.text());
     ({ project_id: projectId } = await res.json());
   } catch (err) {
@@ -1876,6 +1885,19 @@ function showError(message) {
   showState("error");
 }
 
+// Shown instead of showError() specifically for a 403 quota-exceeded
+// response from POST /api/projects (see app/plans.py's QuotaExceededError -
+// the backend already composes a clear, specific message naming the plan
+// and limit, so this just displays it verbatim alongside the pricing cards
+// rather than a generic "something went wrong").
+function showQuotaExceeded(message) {
+  stopProgressMessages();
+  quotaDetail.textContent = message;
+  showState("quota");
+}
+
+quotaBackBtn.addEventListener("click", resetToUpload);
+
 function resetToUpload() {
   stopProgressMessages();
   roomPollCancelled = true;
@@ -1896,6 +1918,7 @@ function showState(state) {
   uploadView.hidden = state !== "upload";
   progressCard.hidden = state !== "progress";
   errorCard.hidden = state !== "error";
+  quotaCard.hidden = state !== "quota";
   resultsSection.hidden = state !== "results";
 }
 
@@ -2570,7 +2593,6 @@ if (typeof gsap !== "undefined" && !prefersReducedMotion) {
 
   const heroCopy = document.getElementById("hero-copy");
   if (heroCopy) {
-    const eyebrow = heroCopy.querySelector(".hero-eyebrow");
     const heading = heroCopy.querySelector("h1");
     const subtext = heroCopy.querySelector("p");
     const ctaItems = gsap.utils.toArray(heroCopy.querySelectorAll(".hero-cta-row > *"));
@@ -2580,13 +2602,12 @@ if (typeof gsap !== "undefined" && !prefersReducedMotion) {
     // its start values in this GSAP version (verified live: the timeline
     // reported progress() === 1 while the DOM never got the final
     // opacity/transform). .set()+.to() does not have that failure mode.
-    gsap.set([eyebrow, subtext], { y: 16, opacity: 0 });
+    gsap.set(subtext, { y: 16, opacity: 0 });
     gsap.set(heading, { y: 24, opacity: 0 });
     gsap.set(ctaItems, { y: 14, opacity: 0 });
     gsap
       .timeline({ defaults: { ease: "power3.out" } })
-      .to(eyebrow, { y: 0, opacity: 1, duration: 0.5 })
-      .to(heading, { y: 0, opacity: 1, duration: 0.7 }, "-=0.25")
+      .to(heading, { y: 0, opacity: 1, duration: 0.7 })
       .to(subtext, { y: 0, opacity: 1, duration: 0.6 }, "-=0.35")
       .to(ctaItems, { y: 0, opacity: 1, duration: 0.5, stagger: 0.1 }, "-=0.3");
   }

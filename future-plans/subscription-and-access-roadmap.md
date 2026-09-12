@@ -82,11 +82,108 @@ from the current (unmetered) generation logic so nothing here can accidentally t
   research came from — deferred until the user explicitly asks for the subscription frontend pass).
 - The pre-login/post-login free-generation counter described above.
 
+## Decisions made (2026-09-12, build phase started on feat/subscription-and-access)
+
+- **Payment processor: researched, not yet chosen.** Stripe ruled out entirely — Pakistan has no
+  Stripe support (SBP requires local PSO/PSP licensing, which Stripe hasn't obtained; a foreign-LLC
+  workaround gives no PKR settlement/local rails). Compared Safepay (SBP-regulated PSO, native
+  tokenized recurring billing, transparent fees ~2.9%+Rs30/domestic txn, developer-friendly REST API —
+  **recommended**), PayFast Pakistan (has a subscriptions API but multiple sources report subscription
+  businesses needing workarounds or migrating off it), and JazzCash (token-based recurring exists but
+  it's fundamentally a mobile-wallet API with heavier merchant onboarding; some third-party libraries
+  report subscription features "not fully enabled"). User chose to hold off committing to one — the
+  quota/plan backend below is being built processor-agnostic (a plan is just a string on a DB row) so
+  whichever processor is picked later only needs a webhook handler that flips that field, not a
+  redesign.
+- **Free-tier / access-rules reconciliation**: the pricing table's ongoing "5 room + 3 house/month"
+  Free tier IS the real, permanent post-login state — the access-rules section's literal "1 additional
+  generation after login" was early/rough wording, superseded by the pricing table. So: pre-login
+  trial (1 room + 1 house, anonymous, user's choice of Kaggle/OpenAI) -> login -> the account is simply
+  on the Free plan and gets its full 5/3 monthly quota (Kaggle-only, no OpenAI access) -> upgrading to
+  Pro/Studio is required only once THAT quota (or wanting OpenAI at all) is exceeded.
+- **Retry-buffer feature (2/5 free retries per generation on Pro/Studio before a retry counts as a new
+  generation) is explicitly DEFERRED**, not dropped. It requires a "regenerate this same generation"
+  concept (a parent/retry link between projects, a regenerate endpoint/button) that doesn't exist in
+  the app at all today — building the core plan/quota gating first, without inventing retry semantics
+  under time pressure, was judged higher value. When this IS built: needs a `parent_project_id`/
+  `parent_house_project_id` self-referential column on `Project`/`HouseProject`, a regenerate endpoint
+  that copies the parent's inputs into a new row with that link set, and quota logic that checks the
+  count of existing retries against `PLAN_QUOTAS[plan]["free_retries"]` before deciding whether the
+  new retry consumes quota or not. Free tier's own "every retry counts" behavior needs no special
+  handling — it's just the existing quota check with no retry-buffer carve-out, since a retry with no
+  buffer is indistinguishable from any other generation.
+- **Build sequence (approved, each chunk reviewed before the next)**: (1) `UserPlan` DB model + quota
+  logic + gate `create_project`/`create_house_project` on the logged-in Free-tier 5/3 quota, (2)
+  anonymous pre-login 1-trial cookie gate, (3) per-request Kaggle-vs-OpenAI routing for Pro/Studio, (4)
+  frontend pricing page + toggle + quota display + upgrade prompts, (5) a dev-only admin endpoint to
+  manually set a user's plan until real payment exists (there is currently NO way to move a user off
+  Free without one, since payment isn't wired — this is a deliberate, temporary stopgap, not meant to
+  ship to real users once a real processor is integrated).
+
+## Chunk 2 done (2026-09-12): anonymous pre-login trial
+
+`create_project`/`create_house_project` no longer require login at all - their `user` dependency
+changed from `require_user` to `get_current_user` (optional). When there's no logged-in user:
+- A plain, `httponly`, 1-year `ig_anon_trial_room`/`ig_anon_trial_house` cookie (one per kind,
+  `app/main.py`'s `_consume_anonymous_trial()`) tracks whether this browser's single free trial for
+  that generation type was already used. First request: allowed, cookie set. Second request: 401
+  ("Free trial already used - please log in to continue") - the SAME status code the frontend already
+  handles (`static/app.js`'s `savePendingGeneration()` + redirect-to-`login.html`), so **zero frontend
+  changes were needed** for the "please log in now" case.
+- `Project.user_id`/`HouseProject.user_id` stay `None` for a trial generation (already a nullable
+  column). Storage keys use a single fixed `ANONYMOUS_STORAGE_NAMESPACE = "anonymous"` prefix instead
+  of a per-user one (no per-visitor id exists to key by, and there's no History/ownership feature for
+  anonymous generations anyway).
+- `get_project`/`cancel_project`/`get_house_project`/`cancel_house_project` also relaxed to optional
+  auth, with a new shared `_owns_project(project_user_id, user)` check: an anonymous caller (also
+  `user=None`, since `authFetch()` sends no `Authorization` header at all when logged out) can view/
+  cancel an anonymous project. Deliberately coarse - any anonymous caller can see any anonymous
+  project, since there's no per-visitor id to scope by - same low-stakes, low-security posture already
+  accepted for the cookie itself. A real (logged-in-owned) project is completely unaffected - still an
+  exact Clerk-id match, 404 for everyone else.
+- Per-request Kaggle/OpenAI choice for the anonymous trial (the roadmap's literal "user may choose
+  OpenAI or Kaggle for each") is **not built yet** - deferred to Chunk 3 alongside the same choice for
+  logged-in Pro/Studio users, so it's built once, not twice.
+- **Two pre-existing tests were genuinely superseded, not broken**: `test_create_project_requires_login`/
+  `test_create_house_project_requires_login` asserted the OLD "no login at all -> 401 immediately"
+  contract - renamed to `..._no_longer_requires_login_for_the_first_anonymous_trial` and updated to
+  assert 200. Real gap caught while fixing this: neither test had EVER mocked `get_provider`/
+  `get_storage` (harmless before, since the request 401'd before reaching any of that code) - now that
+  the request actually runs the full pipeline, they needed the same `FakeProvider`/`FakeStorage`
+  mocking every other `TestClient(app)` test already uses (see CLAUDE.md's "Storage seam" testing note)
+  to avoid silently hitting real S3/providers.
+- Tests: 7 new (`test_api.py`: anonymous trial success, blocked-on-second-attempt, per-browser
+  isolation, logged-in-user unaffected, anonymous-cannot-see-a-real-user's-project;
+  `test_house_api.py`: the house-side trial equivalent). 514/514 passing (one pre-existing, already-
+  documented SQLite-lock-contention flake under full-suite load - passes in isolation and on a clean
+  rerun, unrelated to this change).
+
+## Chunk 1 finding: Free tier's House quota can't be fulfilled yet (2026-09-12)
+
+`app/main.py::create_house_project` is **deliberately NOT gated** on the quota system yet, unlike
+`create_project` (which IS gated, since Room Redesign's default backend is Kaggle and matches Free
+tier's real allowance). Real reason: `settings.house_image_provider` defaults to `"openai"` — **no
+trained Kaggle house-render model exists in production** (see CLAUDE.md's "Build a House feature"
+section) — so gating House creation against the REAL configured backend would 403 every Free-tier
+user's very first Build a House generation (their real OpenAI allowance is 0, not the pricing table's
+assumed 3 Kaggle generations). Hardcoding the "kaggle" bucket regardless of the real backend was
+considered and rejected — it would silently let Free users consume real, paid OpenAI calls
+(~$0.19/generation) at zero counted cost, a real cost-exposure risk, not just a quota nuance.
+
+**Resolve this in Chunk 3** (per-request Kaggle/OpenAI routing) — by then, either a real Kaggle house
+model exists (making the pricing table's assumption true) or the pricing table itself needs revisiting
+for an OpenAI-only house-generation reality (e.g. a smaller free OpenAI house allowance instead of a
+Kaggle one). Until then, Build a House stays fully unmetered for every plan, exactly as it behaves in
+production today - this is a known, deliberate gap, not a bug.
+
 ## Open questions for whoever picks this up next
 
-- 7-day Pro trial: exact entry point and abuse-prevention mechanism (see above).
-- Payment processor for PKR billing (Stripe's Pakistan support is limited — needs its own research
-  pass before the backend phase starts).
-- Whether "1 generation before login" is tracked by IP, browser fingerprint, or cookie — each has
-  different abuse/UX trade-offs, undecided.
-- Whether Free-tier monthly quotas reset on a rolling 30-day window or a calendar month.
+- 7-day Pro trial: explicitly skipped for this build phase (2026-09-12 decision) — build Free/Pro/
+  Studio plan gating first, add the trial as its own follow-up once core paid-plan mechanics are proven.
+- Payment processor: Safepay recommended (see above) but not yet confirmed by the user — needs a final
+  decision before chunk 3's "upgrade to Pro/Studio" path can be anything but the dev-only admin stopgap.
+- Pre-login trial tracking: **decided — browser cookie** (simple, no new infra, accepted as
+  bypassable/low-abuse-resistance in exchange for zero friction — matches this app's existing
+  localStorage-based low-friction conventions elsewhere).
+- Free-tier (and all plans') quota reset: **decided — rolling 30-day window per user**, anchored to
+  `UserPlan.quota_window_start`, not a shared calendar-month cutover.

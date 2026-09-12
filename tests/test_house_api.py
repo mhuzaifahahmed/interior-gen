@@ -119,6 +119,31 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
         assert body["blueprint_dxf_urls"][0].endswith(".dxf")
 
 
+def test_anonymous_user_gets_one_free_house_trial_generation(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        first = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "prompt": "2 floors, modern style"},
+        )
+        assert first.status_code == 200
+        house_project_id = first.json()["house_project_id"]
+
+        status_res = client.get(f"/api/house-projects/{house_project_id}")
+        assert status_res.status_code == 200
+
+        second = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "prompt": "2 floors, modern style"},
+        )
+        assert second.status_code == 401
+
+
 def test_full_house_upload_without_photo_still_completes(monkeypatch):
     # Plot photo is optional (2026-09) - the deterministic floor plan/
     # blueprint/DXF/Concept Layout are computed purely from dimensions + room
@@ -469,11 +494,16 @@ def test_house_project_rejects_unsupported_file_type():
         assert res.status_code == 400
 
 
-def test_create_house_project_requires_login():
+def test_create_house_project_no_longer_requires_login_for_the_first_anonymous_trial(monkeypatch):
+    # Superseded by the pre-login trial feature - see
+    # test_create_project_no_longer_requires_login_for_the_first_anonymous_trial
+    # in test_api.py for the full reasoning (same change, mirrored here).
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
     with TestClient(app) as client:
         files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
         res = client.post("/api/house-projects", files=files)
-        assert res.status_code == 401
+        assert res.status_code == 200
 
 
 def test_unknown_house_project_returns_404():
