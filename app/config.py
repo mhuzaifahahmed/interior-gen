@@ -305,5 +305,20 @@ class Settings(BaseSettings):
     clerk_publishable_key: str = ""
     clerk_secret_key: str = ""
 
+    # Comma-separated Clerk user ids (e.g. "user_abc,user_def") that bypass
+    # ALL subscription quota enforcement entirely (app/plans.py's
+    # consume_quota() checks this first) - a dev/testing-only escape hatch so
+    # a real account can be used to exercise the full generation pipeline
+    # without tripping the Free-tier 5/mo room limit, without needing to fake
+    # a paid plan. NOT meant to ship to real users - see
+    # future-plans/subscription-and-access-roadmap.md. Empty by default;
+    # set via UNLIMITED_TEST_USER_IDS in .env (real ids belong in .env only,
+    # never .env.example, per this project's secrets convention).
+    unlimited_test_user_ids: str = ""
+
+    @property
+    def unlimited_test_user_id_set(self) -> set[str]:
+        return {uid.strip() for uid in self.unlimited_test_user_ids.split(",") if uid.strip()}
+
 
 settings = Settings()

@@ -25,6 +25,11 @@ class FakeProvider:
         self.image_prompts = []
         self.materials_calls = []
         self.estimate_room_area_calls = 0
+        # Chunk 3 (subscription model-choice routing) - records whichever
+        # preferred_backend value (if any) each generate_image() call
+        # actually received, so a test can assert on real end-to-end
+        # routing, not just the HTTP response code.
+        self.received_preferred_backends = []
 
     def describe_room(self, image_bytes: bytes) -> str:
         return "A small rectangular room with one window."
@@ -32,8 +37,11 @@ class FakeProvider:
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         return {}
 
-    def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
+    def generate_image(
+        self, image_bytes: bytes, prompt: str, tier: str | None = None, preferred_backend: str | None = None
+    ) -> bytes:
         self.image_prompts.append(prompt)
+        self.received_preferred_backends.append(preferred_backend)
         buf = io.BytesIO()
         Image.new("RGB", (4, 4), color=(200, 200, 200)).save(buf, format="PNG")
         return buf.getvalue()
@@ -120,6 +128,205 @@ def test_full_upload_and_poll_flow(monkeypatch):
         # No city was submitted - images-only path, no materials/pricing calls.
         assert body["materials_status"] == "skipped"
         assert body["materials"] is None
+
+
+def test_anonymous_user_gets_one_free_room_trial_generation(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        # No login at all - authFetch() sends no Authorization header when
+        # logged out (see static/app.js), so a bare TestClient call already
+        # matches that.
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        first = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        assert first.status_code == 200
+        project_id = first.json()["project_id"]
+
+        # Anonymous caller can poll their own trial project without logging in.
+        status_res = client.get(f"/api/projects/{project_id}")
+        assert status_res.status_code == 200
+        assert status_res.json()["status"] == "done"
+
+
+def test_anonymous_user_is_prompted_to_log_in_after_the_trial_is_used(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        first = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        assert first.status_code == 200
+
+        second = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        assert second.status_code == 401
+
+
+def test_a_different_anonymous_browser_gets_its_own_trial(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+    with TestClient(app) as client_a:
+        used = client_a.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        assert used.status_code == 200
+
+    with TestClient(app) as client_b:
+        fresh = client_b.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        assert fresh.status_code == 200
+
+
+def test_logged_in_user_is_unaffected_by_the_anonymous_trial_cookie(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        anon = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        assert anon.status_code == 200  # burns the anonymous trial cookie on this client
+
+        _signup_and_login(client)
+        logged_in = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        assert logged_in.status_code == 200  # goes through the Free-plan quota path instead
+
+
+def test_anonymous_caller_cannot_see_someone_elses_real_project(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as owner_client:
+        _signup_and_login(owner_client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        owned = owner_client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        project_id = owned.json()["project_id"]
+
+    with TestClient(app) as anon_client:
+        res = anon_client.get(f"/api/projects/{project_id}")
+        assert res.status_code == 404
+
+
+def _set_plan(user_id: str, plan: str) -> None:
+    """Chunk 5 (dev-only admin plan endpoint) doesn't exist yet - tests set a
+    user's plan directly via the real app DB (same engine TestClient's
+    requests use), same "no isolation, real configured DATABASE_URL"
+    convention documented in CLAUDE.md for this test suite."""
+    from app.plans import get_or_create_user_plan
+
+    with Session(engine) as session:
+        plan_row = get_or_create_user_plan(session, user_id)
+        plan_row.plan = plan
+        session.add(plan_row)
+        session.commit()
+
+
+def test_free_plan_room_preferred_model_is_ignored_not_honored(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        data = {**_REQUIRED_STYLE_FIELDS, "preferred_model": "openai"}
+        res = client.post("/api/projects", files=files, data=data)
+
+    # If the Free user's explicit "openai" choice had been honored, this
+    # would 403 immediately (Free's OpenAI allowance is 0, per PLAN_QUOTAS) -
+    # it succeeds instead, proving the choice was ignored and the request
+    # ran against the Kaggle bucket like any other Free-tier generation.
+    assert res.status_code == 200
+
+
+def test_pro_plan_room_can_choose_openai_backend(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        _set_plan(user_id, "pro")
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        data = {**_REQUIRED_STYLE_FIELDS, "preferred_model": "openai"}
+        res = client.post("/api/projects", files=files, data=data)
+
+    assert res.status_code == 200
+    assert provider.received_preferred_backends == ["openai", "openai", "openai"]
+
+
+def test_pro_plan_room_with_no_preference_uses_the_configured_default(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        _set_plan(user_id, "pro")
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+
+    assert res.status_code == 200
+    # No preferred_model sent - the provider must receive no override at all
+    # (None), same call shape as before this feature existed.
+    assert provider.received_preferred_backends == [None, None, None]
+
+
+def test_anonymous_trial_can_choose_openai_backend(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        data = {**_REQUIRED_STYLE_FIELDS, "preferred_model": "openai"}
+        res = client.post("/api/projects", files=files, data=data)
+
+    assert res.status_code == 200
+    assert provider.received_preferred_backends == ["openai", "openai", "openai"]
+
+
+def test_free_plan_room_quota_is_enforced(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+
+        for _ in range(5):
+            res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+            assert res.status_code == 200
+
+        sixth = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        assert sixth.status_code == 403
+        assert "Upgrade" in sixth.json()["detail"]
+
+
+def test_get_plan_reports_free_plan_and_usage(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+
+        before = client.get("/api/plan")
+        assert before.status_code == 200
+        body = before.json()
+        assert body["plan"] == "free"
+        assert body["used"]["room_kaggle"] == 0
+        assert body["remaining"]["room_kaggle"] == 5
+        assert body["remaining"]["room_openai"] == 0
+
+        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+        client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+
+        after = client.get("/api/plan").json()
+        assert after["used"]["room_kaggle"] == 1
+        assert after["remaining"]["room_kaggle"] == 4
+
+
+def test_get_plan_requires_login():
+    with TestClient(app) as client:
+        res = client.get("/api/plan")
+    assert res.status_code == 401
 
 
 def test_input_metadata_json_written_to_storage(monkeypatch):
@@ -324,11 +531,21 @@ def test_rejects_unsupported_file_type():
         assert res.status_code == 400
 
 
-def test_create_project_requires_login():
+def test_create_project_no_longer_requires_login_for_the_first_anonymous_trial(monkeypatch):
+    # Superseded by the pre-login trial feature (see
+    # future-plans/subscription-and-access-roadmap.md) - a first-ever
+    # anonymous request now succeeds instead of 401ing immediately.
+    # test_anonymous_user_is_prompted_to_log_in_after_the_trial_is_used
+    # covers the "login required after the trial is used" case this test
+    # used to check. MUST mock get_provider/get_storage - unlike before,
+    # this request now actually runs the real pipeline instead of failing
+    # fast on auth.
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
     with TestClient(app) as client:
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
         res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
-        assert res.status_code == 401
+        assert res.status_code == 200
 
 
 def test_unknown_project_returns_404():

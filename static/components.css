@@ -34,6 +34,25 @@
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
+/* Chrome shows an I-beam text cursor over any plain text by default, which
+   reads as "this is an editable field" even on static copy (headings,
+   pricing card text, nav labels...) - disabling selection site-wide makes
+   Chrome fall back to a normal pointer/arrow cursor over that text instead.
+   Real form fields are unaffected: browsers give <input>/<textarea>/
+   [contenteditable] their own selection behavior regardless of an ancestor's
+   user-select, so typing/selecting inside the upload forms still works
+   normally - re-declared explicitly below anyway for clarity, not because
+   it's strictly required. */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input, textarea, [contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 [hidden] {
   display: none !important;
 }
@@ -137,6 +156,27 @@ html, body {
   color: var(--on-accent);
   background: var(--accent);
   border-color: var(--accent);
+}
+
+/* ---- Subscription plan UI (Chunk 4) ---- */
+/* Kaggle/OpenAI model-choice toggle (Room Redesign) - setModelToggleValue()
+   in app.js toggles this class, the visual selected/unselected look lives
+   here, matching the .tab-btn.is-active pattern above. */
+.model-toggle-btn {
+  cursor: pointer;
+  background: transparent;
+}
+
+.model-toggle-btn.is-active {
+  border-color: var(--accent) !important;
+  background: rgba(122, 71, 18, 0.08);
+}
+
+/* Pricing tab - highlights whichever plan card matches the logged-in user's
+   real plan (applyPricingUI() in app.js), on top of the "Most Popular"
+   static badge Pro already has in the markup. */
+.pricing-card-current {
+  box-shadow: 0 0 0 2px var(--accent) inset;
 }
 
 /* ---- Scroll reveal ---- */

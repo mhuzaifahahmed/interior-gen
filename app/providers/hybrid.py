@@ -148,18 +148,44 @@ class HybridProvider(Provider):
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         return self._gemini.generate_tier_notes(image_bytes)
 
-    def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
+    def _resolve_room_provider(self, preferred_backend: str | None = None):
+        """Picks which already-constructed provider instance to use for ONE
+        generation - Chunk 3 of the subscription build (future-plans/
+        subscription-and-access-roadmap.md): a Pro/Studio user (or an
+        anonymous pre-login trial caller) may request "openai" or "kaggle"
+        explicitly for a single generation, instead of always getting
+        whatever the app is configured to use by default.
+
+        preferred_backend="openai" always resolves to self._openai (always a
+        real instance). preferred_backend="kaggle" resolves to
+        self._room_image_provider - whatever the site's self-hosted backend
+        is CONFIGURED to be (Kaggle, Modal, or - if none is configured at all
+        - the same self._openai instance, an honest degrade rather than a
+        crash; the caller still gets a real image, just not actually
+        self-hosted). None (no explicit choice, the overwhelmingly common
+        case) also resolves to self._room_image_provider - IDENTICAL to this
+        method not existing at all, so every call site that never passes
+        preferred_backend behaves exactly as before this feature existed.
+        """
+        if preferred_backend == "openai":
+            return self._openai
+        return self._room_image_provider
+
+    def generate_image(
+        self, image_bytes: bytes, prompt: str, tier: str | None = None, preferred_backend: str | None = None
+    ) -> bytes:
+        provider = self._resolve_room_provider(preferred_backend)
         try:
-            result = self._room_image_provider.generate_image(image_bytes, prompt, tier)
-            self._record_tier_label(tier, self._room_image_provider)
+            result = provider.generate_image(image_bytes, prompt, tier)
+            self._record_tier_label(tier, provider)
             return result
         except Exception:
-            if self._room_image_provider is self._openai:
+            if provider is self._openai:
                 raise  # already OpenAI (the fallback itself) - nothing left to try
             logger.exception(
                 "room image provider %s failed for tier %s - falling back to OpenAI "
                 "for this generation",
-                type(self._room_image_provider).__name__,
+                type(provider).__name__,
                 tier,
             )
             result = self._openai.generate_image(image_bytes, prompt, tier)
@@ -176,22 +202,23 @@ class HybridProvider(Provider):
         return self._room_image_provider.supports_batch()
 
     def generate_images_batch(
-        self, image_bytes: bytes, tier_prompts: dict[str, str]
+        self, image_bytes: bytes, tier_prompts: dict[str, str], preferred_backend: str | None = None
     ) -> dict[str, bytes]:
+        provider = self._resolve_room_provider(preferred_backend)
         try:
-            result = self._room_image_provider.generate_images_batch(image_bytes, tier_prompts)
-            label = _label_for(self._room_image_provider)
+            result = provider.generate_images_batch(image_bytes, tier_prompts)
+            label = _label_for(provider)
             with self._label_lock:
                 for tier in tier_prompts:
                     self._tier_provider_labels[tier] = label
             return result
         except Exception:
-            if self._room_image_provider is self._openai:
+            if provider is self._openai:
                 raise  # already OpenAI (the fallback itself) - nothing left to try
             logger.exception(
                 "room image provider %s batch generation failed - falling back to OpenAI "
                 "(per-tier concurrent, not batched)",
-                type(self._room_image_provider).__name__,
+                type(provider).__name__,
             )
             with ThreadPoolExecutor(max_workers=len(tier_prompts)) as pool:
                 futures = {
@@ -255,8 +282,22 @@ class HybridProvider(Provider):
             plot_description, dimensions, prompt, room_layout, facing
         )
 
-    def house_render_needs_photo(self) -> bool:
-        """Whether the active "Build a House" render backend actually consumes
+    def _resolve_house_provider(self, preferred_backend: str | None = None):
+        """Mirrors _resolve_room_provider() above, for the house-render slot.
+        preferred_backend="kaggle" resolves to self._house_image_provider -
+        which, once a real Kaggle elevation model is configured
+        (HOUSE_IMAGE_PROVIDER=kaggle + KAGGLE_HOUSE_API_URL - see
+        KaggleImageProvider.generate_house_render()), is a real, working
+        TEXT-TO-IMAGE elevation backend, not just an honest not-yet-useful
+        degrade to OpenAI.
+        """
+        if preferred_backend == "openai":
+            return self._openai
+        return self._house_image_provider
+
+    def house_render_needs_photo(self, preferred_backend: str | None = None) -> bool:
+        """Whether the ACTUAL backend that would run for this request (after
+        preferred_backend resolution - see _resolve_house_provider) consumes
         the plot photo. The Kaggle backend is a TEXT-TO-IMAGE elevation model
         (RealVisXL) - it generates a facade from the floors/room-program and
         ignores any photo, so it runs fine when the (optional, as of 2026-09)
@@ -264,13 +305,18 @@ class HybridProvider(Provider):
         paint onto the real photo and genuinely need one. The pipeline
         (app/pipeline/generate_house.py) reads this to decide whether to skip
         the render for a photo-less project vs. run it anyway."""
-        return not isinstance(self._house_image_provider, KaggleImageProvider)
+        return not isinstance(self._resolve_house_provider(preferred_backend), KaggleImageProvider)
 
     def generate_house_render(
-        self, image_bytes: bytes | None, prompt: str, floor_count: int | None = None
+        self,
+        image_bytes: bytes | None,
+        prompt: str,
+        floor_count: int | None = None,
+        preferred_backend: str | None = None,
     ) -> bytes:
-        result = self._house_image_provider.generate_house_render(image_bytes, prompt, floor_count)
-        self._house_provider_label = _label_for(self._house_image_provider)
+        provider = self._resolve_house_provider(preferred_backend)
+        result = provider.generate_house_render(image_bytes, prompt, floor_count)
+        self._house_provider_label = _label_for(provider)
         return result
 
     def get_house_render_model_label(self) -> str | None:

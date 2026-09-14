@@ -21,6 +21,9 @@ _signup_and_login = login_as
 class FakeProvider:
     def __init__(self):
         self.render_prompts = []
+        # Chunk 3 (subscription model-choice routing) - records whichever
+        # preferred_backend value (if any) generate_house_render() received.
+        self.received_preferred_backends = []
 
     def analyze_plot(self, image_bytes, dimensions):
         return "A rectangular plot facing north."
@@ -31,8 +34,9 @@ class FakeProvider:
     def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
         return {"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]}]}
 
-    def generate_house_render(self, image_bytes, prompt, floor_count=None):
+    def generate_house_render(self, image_bytes, prompt, floor_count=None, preferred_backend=None):
         self.render_prompts.append(prompt)
+        self.received_preferred_backends.append(preferred_backend)
         buf = io.BytesIO()
         Image.new("RGB", (4, 4), color=(200, 200, 200)).save(buf, format="PNG")
         return buf.getvalue()
@@ -117,6 +121,82 @@ def test_full_house_upload_and_poll_flow(monkeypatch):
         assert f"users/{username}/buildAHouse/output/" in body["blueprint_urls"][0]
         assert f"users/{username}/buildAHouse/output/" in body["blueprint_dxf_urls"][0]
         assert body["blueprint_dxf_urls"][0].endswith(".dxf")
+
+
+def _set_plan(user_id: str, plan: str) -> None:
+    """See tests/test_api.py's identical helper for the full reasoning."""
+    from app.plans import get_or_create_user_plan
+
+    with Session(engine) as session:
+        plan_row = get_or_create_user_plan(session, user_id)
+        plan_row.plan = plan
+        session.add(plan_row)
+        session.commit()
+
+
+def test_free_plan_house_preferred_model_is_ignored_not_honored(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "preferred_model": "openai"},
+        )
+
+    assert res.status_code == 200
+    # A Free user's explicit "openai" request must never reach the provider -
+    # resolve_preferred_backend() always returns None for Free (see
+    # app/plans.py), same as if preferred_model had never been sent.
+    assert provider.received_preferred_backends == [None]
+
+
+def test_pro_plan_house_can_choose_openai_backend(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        _set_plan(user_id, "pro")
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "preferred_model": "openai"},
+        )
+
+    assert res.status_code == 200
+    assert provider.received_preferred_backends == ["openai"]
+
+
+def test_anonymous_user_gets_one_free_house_trial_generation(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        first = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "prompt": "2 floors, modern style"},
+        )
+        assert first.status_code == 200
+        house_project_id = first.json()["house_project_id"]
+
+        status_res = client.get(f"/api/house-projects/{house_project_id}")
+        assert status_res.status_code == 200
+
+        second = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "prompt": "2 floors, modern style"},
+        )
+        assert second.status_code == 401
 
 
 def test_full_house_upload_without_photo_still_completes(monkeypatch):
@@ -469,11 +549,16 @@ def test_house_project_rejects_unsupported_file_type():
         assert res.status_code == 400
 
 
-def test_create_house_project_requires_login():
+def test_create_house_project_no_longer_requires_login_for_the_first_anonymous_trial(monkeypatch):
+    # Superseded by the pre-login trial feature - see
+    # test_create_project_no_longer_requires_login_for_the_first_anonymous_trial
+    # in test_api.py for the full reasoning (same change, mirrored here).
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
     with TestClient(app) as client:
         files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
         res = client.post("/api/house-projects", files=files)
-        assert res.status_code == 401
+        assert res.status_code == 200
 
 
 def test_unknown_house_project_returns_404():

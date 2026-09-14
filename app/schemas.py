@@ -1,6 +1,24 @@
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel
+
+
+class PlanStatusResponse(BaseModel):
+    """GET /api/plan - a logged-in user's current subscription plan and
+    rolling quota usage, per app/plans.py's plan_status(). Frontend reads
+    this to show quota-remaining UI and decide whether to show the
+    Kaggle/OpenAI toggle at all (Free plan never gets it - see
+    future-plans/subscription-and-access-roadmap.md, Chunk 3/4)."""
+
+    plan: str
+    # Keyed by "room_kaggle"/"room_openai"/"house_kaggle"/"house_openai".
+    # None in quotas/remaining means "unlimited" (Studio's Kaggle fair-use).
+    quotas: dict[str, Optional[int]]
+    used: dict[str, int]
+    remaining: dict[str, Optional[int]]
+    quota_window_start: datetime
+    quota_window_reset_at: datetime
 
 
 class ProjectCreateResponse(BaseModel):

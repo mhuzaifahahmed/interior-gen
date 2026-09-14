@@ -71,6 +71,44 @@ class Project(SQLModel, table=True):
     meta_json: Optional[str] = None
 
 
+class UserPlan(SQLModel, table=True):
+    """One row per Clerk user id, tracking their subscription plan and rolling
+    quota usage - see future-plans/subscription-and-access-roadmap.md for the
+    full pricing/access design this implements. Deliberately its own table,
+    not columns bolted onto Project/HouseProject, since this is per-USER
+    state (shared across every generation that user makes), not per-generation
+    state. Created lazily (get_or_create_user_plan() in app/plans.py) the
+    first time a logged-in user's plan/quota is looked up - there's no signup
+    hook that creates this row, since Clerk owns signup entirely and this app
+    has no server-side signal for "a new user just registered" beyond their
+    first authenticated request.
+
+    Row values are deliberately plain/processor-agnostic (plan is just a
+    string) - whichever payment processor is eventually chosen (see the
+    roadmap doc's processor comparison) only needs a webhook handler that
+    updates `plan`/`plan_updated_at`, not a schema change.
+    """
+
+    user_id: str = Field(primary_key=True)
+    plan: str = Field(default="free")  # free | pro | studio - see app/plans.py's PLAN_QUOTAS
+
+    # Rolling 30-day quota window (user's explicit choice over a shared
+    # calendar-month cutover - see roadmap doc's "Quota reset" decision).
+    # Anchored to whenever the window last reset, NOT to signup/plan-change -
+    # app/plans.py's roll_quota_window_if_needed() advances this forward by
+    # QUOTA_WINDOW_DAYS (zeroing every *_used counter) once `now` passes it,
+    # lazily on each quota check rather than via a scheduled job.
+    quota_window_start: datetime = Field(default_factory=_now)
+
+    room_kaggle_used: int = Field(default=0)
+    room_openai_used: int = Field(default=0)
+    house_kaggle_used: int = Field(default=0)
+    house_openai_used: int = Field(default=0)
+
+    plan_updated_at: datetime = Field(default_factory=_now)
+    created_at: datetime = Field(default_factory=_now)
+
+
 class HouseProject(SQLModel, table=True):
     """The 'Build a House' feature's own table - kept separate from Project
     rather than overloaded onto it, since the fields genuinely differ (plot
