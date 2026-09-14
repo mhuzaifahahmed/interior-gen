@@ -70,6 +70,26 @@ def _generate_batch_status_url(base_url: str, job_id: str) -> str:
     return f"{trimmed}/generate_batch/status/{job_id}"
 
 
+def _elevation_base(base_url: str) -> str:
+    # KAGGLE_HOUSE_API_URL is a bare Cloudflare tunnel root in practice, but
+    # tolerate a trailing /generate_elevation (or the room model's /generate)
+    # having been pasted on by accident, same defensive normalization as the
+    # room helpers above.
+    trimmed = base_url.rstrip("/")
+    for suffix in ("/generate_elevation", "/generate_batch", "/generate"):
+        if trimmed.endswith(suffix):
+            return trimmed[: -len(suffix)]
+    return trimmed
+
+
+def _generate_elevation_url(base_url: str) -> str:
+    return f"{_elevation_base(base_url)}/generate_elevation"
+
+
+def _generate_elevation_status_url(base_url: str, job_id: str) -> str:
+    return f"{_elevation_base(base_url)}/generate_elevation/status/{job_id}"
+
+
 # The job-submit and each status-poll call are both near-instant server-side
 # (a dict write/lookup) - short timeout is enough; a slow response to either
 # of these specifically would indicate the tunnel/notebook is actually down,
@@ -298,67 +318,107 @@ class KaggleImageProvider:
 
             # status == "running" (or any other in-progress value) - keep polling.
 
-    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
-        """"Build a House" exterior/interior concept render, via a SEPARATE
-        Kaggle notebook/tunnel from room-redesign's (settings.kaggle_house_api_url,
+    def generate_house_render(
+        self, image_bytes: bytes | None, prompt: str, floor_count: int | None = None
+    ) -> bytes:
+        """"Build a House" front-elevation render, via a SEPARATE Kaggle
+        notebook/tunnel from room-redesign's (settings.kaggle_house_api_url,
         its own account/model - see that setting's comment in config.py).
 
-        ASSUMED contract, not yet confirmed against a real deployed endpoint
-        (added in advance of the house model being ready, mirroring
-        ModalImageProvider.generate_house_render()'s shape and this same
-        class's own generate_image() contract, since every Kaggle notebook in
-        this project so far has used the identical POST {base_url}/generate,
-        {"image_base64", "prompt"} -> {"status", "generated_image_base64"}
-        shape): if the real endpoint differs (different path, param names,
-        response keys, or a submit-then-poll job pattern like
-        generate_images_batch() above), update this method and
-        _generate_url()/its own URL helper to match - nothing else in the
-        pipeline needs to change, since HybridProvider/generate_house.py only
-        ever call this same generate_house_render(image_bytes, prompt) shape
-        regardless of which provider backs it.
+        REAL, CONFIRMED contract (read from the elevation notebook's own
+        FastAPI code - kaggle_notebooks/elevation_server.py in this repo is a
+        version-controlled reference copy of what gets pasted into Kaggle):
+        this is a TEXT-TO-IMAGE model (RealVisXL_V4.0 SDXL), NOT img2img - it
+        generates a photorealistic front elevation from scratch and takes NO
+        input image at all, so image_bytes is accepted only for interface
+        parity and deliberately IGNORED here (the plot photo is optional as of
+        2026-09, and this backend never needed it - see
+        HybridProvider.house_render_needs_photo()).
 
-        Prompt is passed through as-is (unlike generate_image, no CLIP-length
-        shortening) - house prompts are already length-capped upstream by
-        house_prompts.py, and this model's actual token-limit behavior isn't
-        confirmed yet. If the real house model turns out to need shortening
-        too (classic CLIP 77-token limit, same as the room model), add a
-        house-specific equivalent of _prepare_kaggle_prompt() here once that's
-        confirmed - don't reuse the room one as-is, since it's built from
-        TIER_SPECS (economical/mid/premium), a room-redesign-only concept
-        that doesn't apply to house prompts.
+        SUBMIT-THEN-POLL, same reason as generate_images_batch() above: the
+        free Cloudflare quick tunnel hard-kills any request open past ~100s
+        with a 524, and a single 28-step RealVisXL render on a T4 (plus a
+        possible cold model load) can exceed that. POST {base}/generate_elevation
+        registers a job and returns almost instantly ({"status": "started",
+        "job_id": str}); GET {base}/generate_elevation/status/{job_id} is then
+        polled until "done" ("generated_image_base64") or "failed" ("detail").
 
-        No _request_lock here (unlike generate_image) - this is a separate
-        Kaggle account/notebook/GPU from room-redesign's, so there's no shared
-        model instance for the two to contend over.
+        The APP sends a MINIMAL request (see build_house_elevation_prompt in
+        house_prompts.py): a short `prompt` = the user's own exterior
+        requirements text (NOT a long, detailed, error-prone paragraph - the
+        notebook owns all the heavy camera-framing/photoreal/negative-prompt
+        scaffolding + the per-floor-count aspect-ratio rules itself, exactly
+        like room-redesign's build_kaggle_prompt() keeps the app-side prompt
+        short and lets the model do the rest), plus `floors` as a STRUCTURED
+        int (drives the notebook's story-count + aspect-ratio logic reliably,
+        instead of hoping the model parses a count out of free text), plus the
+        plot width for context. Empty prompt is fine - the notebook falls back
+        to its own sensible default exterior features.
+
+        NOT best-effort (unlike the room-redesign methods above): this
+        exception propagates to house_project.error and is shown to the user
+        verbatim via showHouseError(), so a friendly, actionable message here
+        (via classify_kaggle_failure) matters. No _request_lock - separate
+        account/notebook/GPU from room-redesign's.
         """
-        image_b64 = base64.b64encode(image_bytes).decode()
-        payload = {"image_base64": image_b64, "prompt": prompt}
+        payload: dict = {"prompt": prompt or ""}
+        if floor_count:
+            payload["floors"] = floor_count
 
+        base_url = settings.kaggle_house_api_url
         try:
-            response = httpx.post(
-                _generate_url(settings.kaggle_house_api_url),
+            submit_response = httpx.post(
+                _generate_elevation_url(base_url),
                 json=payload,
-                timeout=REQUEST_TIMEOUT_SECONDS,
+                timeout=BATCH_SUBMIT_TIMEOUT_SECONDS,
             )
-            response.raise_for_status()
+            submit_response.raise_for_status()
         except Exception as exc:
-            # UNLIKE the room-redesign methods above, generate_house_render
-            # is NOT best-effort (see run_house_pipeline's docstring) - this
-            # exception propagates all the way to house_project.error and is
-            # shown to the user verbatim via showHouseError() in
-            # static/app.js, so a friendly, actionable message here matters
-            # even more than for the room-redesign path's log-only benefit.
             session_error = classify_kaggle_failure(exc, "house-render")
             if session_error:
                 raise session_error from exc
             raise
 
-        data = response.json()
-        image_b64_out = data.get("generated_image_base64")
-        if not image_b64_out:
-            logger.error("unexpected Kaggle house-render response shape: keys=%s", list(data.keys()))
-            raise RuntimeError(f"unexpected Kaggle house-render response shape: {data}")
-        return base64.b64decode(image_b64_out)
+        submit_data = submit_response.json()
+        job_id = submit_data.get("job_id")
+        if not job_id:
+            logger.error("unexpected Kaggle elevation submit response shape: %s", submit_data)
+            raise RuntimeError(f"unexpected Kaggle elevation submit response shape: {submit_data}")
+
+        status_url = _generate_elevation_status_url(base_url, job_id)
+        deadline = time.monotonic() + BATCH_POLL_MAX_SECONDS
+
+        while True:
+            if time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"Kaggle elevation job {job_id} did not complete within {BATCH_POLL_MAX_SECONDS}s"
+                )
+
+            time.sleep(BATCH_POLL_INTERVAL_SECONDS)
+
+            try:
+                poll_response = httpx.get(status_url, timeout=BATCH_POLL_TIMEOUT_SECONDS)
+                poll_response.raise_for_status()
+            except Exception as exc:
+                session_error = classify_kaggle_failure(exc, "house-render")
+                if session_error:
+                    raise session_error from exc
+                raise
+
+            job = poll_response.json()
+            status = job.get("status")
+
+            if status == "done":
+                image_b64_out = job.get("generated_image_base64")
+                if not image_b64_out:
+                    logger.error("unexpected Kaggle elevation job result shape: keys=%s", list(job.keys()))
+                    raise RuntimeError(f"unexpected Kaggle elevation job result shape: {job}")
+                return base64.b64decode(image_b64_out)
+
+            if status == "failed":
+                raise RuntimeError(f"Kaggle elevation job {job_id} failed: {job.get('detail')}")
+
+            # status == "running"/"started" (or any other in-progress value) - keep polling.
 
 
 def _prepare_kaggle_prompt(full_prompt: str, tier: str | None) -> tuple[str, str | None]:

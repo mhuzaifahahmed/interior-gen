@@ -319,68 +319,134 @@ def test_generate_images_batch_raises_on_missing_job_id(monkeypatch):
         provider.generate_images_batch(b"input-bytes", {"economical": "prompt"})
 
 
-def test_generate_house_render_decodes_generated_image_base64(monkeypatch):
-    # Advance plumbing for a house model not yet trained/hosted - see
-    # KaggleImageProvider.generate_house_render()'s docstring for why this
-    # assumes the same contract as generate_image() until a real endpoint
-    # confirms otherwise.
-    encoded = base64.b64encode(b"decoded-house-png").decode("ascii")
+# ---- house render: real elevation model (text-to-image, submit-then-poll) ----
+# The house backend is RealVisXL_V4.0 (SDXL) TEXT-TO-IMAGE - it takes NO input
+# image and uses the same submit-then-poll shape as the room batch endpoint, on
+# /generate_elevation. See KaggleImageProvider.generate_house_render()'s
+# docstring + kaggle_notebooks/elevation_server.py for the confirmed contract.
 
-    def fake_post(url, json=None, timeout=None):
-        assert url == "https://house-example.trycloudflare.com/generate"
-        assert json["prompt"] == "two-story house, 40x60 ft plot"
-        assert base64.b64decode(json["image_base64"]) == b"plot-bytes"
-        return FakeResponse(json_data={"status": "success", "generated_image_base64": encoded})
 
-    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+def test_generate_house_render_submits_and_polls_then_decodes(monkeypatch):
+    monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         kaggle_module.settings, "kaggle_house_api_url", "https://house-example.trycloudflare.com"
     )
+    encoded = base64.b64encode(b"decoded-elevation-png").decode("ascii")
+    submit_calls = []
+    poll_calls = []
 
-    provider = KaggleImageProvider()
-    result = provider.generate_house_render(b"plot-bytes", "two-story house, 40x60 ft plot")
-    assert result == b"decoded-house-png"
+    def fake_post(url, json=None, timeout=None):
+        assert url == "https://house-example.trycloudflare.com/generate_elevation"
+        # Text-to-image: NO input image is ever sent.
+        assert "image_base64" not in json
+        submit_calls.append(json)
+        return FakeResponse(json_data={"status": "started", "job_id": "elev-1"})
+
+    def fake_get(url, timeout=None):
+        assert url == "https://house-example.trycloudflare.com/generate_elevation/status/elev-1"
+        poll_calls.append(url)
+        # First poll still running, second poll done.
+        if len(poll_calls) == 1:
+            return FakeResponse(json_data={"status": "running"})
+        return FakeResponse(json_data={"status": "done", "generated_image_base64": encoded})
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+
+    result = KaggleImageProvider().generate_house_render(None, "modern car porch", floor_count=2)
+    assert result == b"decoded-elevation-png"
+    assert len(submit_calls) == 1
+    assert len(poll_calls) == 2
 
 
-def test_generate_house_render_sends_the_full_prompt_unshortened(monkeypatch):
+def test_generate_house_render_sends_prompt_and_structured_floor_count(monkeypatch):
+    monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        kaggle_module.settings, "kaggle_house_api_url", "https://house-example.trycloudflare.com"
+    )
     captured = {}
 
     def fake_post(url, json=None, timeout=None):
         captured["payload"] = json
-        encoded = base64.b64encode(b"png-bytes").decode("ascii")
-        return FakeResponse(json_data={"status": "success", "generated_image_base64": encoded})
+        return FakeResponse(json_data={"status": "started", "job_id": "elev-2"})
+
+    def fake_get(url, timeout=None):
+        encoded = base64.b64encode(b"png").decode("ascii")
+        return FakeResponse(json_data={"status": "done", "generated_image_base64": encoded})
 
     monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+
+    KaggleImageProvider().generate_house_render(None, "glass balcony, teak louvers", floor_count=3)
+    assert captured["payload"]["prompt"] == "glass balcony, teak louvers"
+    assert captured["payload"]["floors"] == 3
+
+
+def test_generate_house_render_omits_floors_when_not_given(monkeypatch):
+    monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         kaggle_module.settings, "kaggle_house_api_url", "https://house-example.trycloudflare.com"
     )
+    captured = {}
 
-    long_prompt = "word " * 200
-    KaggleImageProvider().generate_house_render(b"plot-bytes", long_prompt)
-    assert captured["payload"]["prompt"] == long_prompt
-
-
-def test_generate_house_render_raises_on_unexpected_response_shape(monkeypatch):
     def fake_post(url, json=None, timeout=None):
-        return FakeResponse(json_data={"status": "success"})  # no generated_image_base64
+        captured["payload"] = json
+        return FakeResponse(json_data={"status": "started", "job_id": "elev-3"})
+
+    def fake_get(url, timeout=None):
+        encoded = base64.b64encode(b"png").decode("ascii")
+        return FakeResponse(json_data={"status": "done", "generated_image_base64": encoded})
 
     monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+
+    KaggleImageProvider().generate_house_render(None, "")  # no floor_count
+    assert "floors" not in captured["payload"]
+    assert captured["payload"]["prompt"] == ""
+
+
+def test_generate_house_render_raises_on_job_failed(monkeypatch):
+    monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         kaggle_module.settings, "kaggle_house_api_url", "https://house-example.trycloudflare.com"
     )
 
-    with pytest.raises(RuntimeError, match="unexpected Kaggle house-render response shape"):
-        KaggleImageProvider().generate_house_render(b"plot-bytes", "prompt")
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(json_data={"status": "started", "job_id": "elev-4"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(json_data={"status": "failed", "detail": "CUDA out of memory"})
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+
+    with pytest.raises(RuntimeError, match="CUDA out of memory"):
+        KaggleImageProvider().generate_house_render(None, "prompt", floor_count=1)
+
+
+def test_generate_house_render_raises_on_missing_job_id(monkeypatch):
+    monkeypatch.setattr(
+        kaggle_module.settings, "kaggle_house_api_url", "https://house-example.trycloudflare.com"
+    )
+
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(json_data={"status": "started"})  # no job_id
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+
+    with pytest.raises(RuntimeError, match="unexpected Kaggle elevation submit response shape"):
+        KaggleImageProvider().generate_house_render(None, "prompt", floor_count=1)
 
 
 def test_generate_house_render_raises_on_http_error(monkeypatch):
+    monkeypatch.setattr(
+        kaggle_module.settings, "kaggle_house_api_url", "https://house-example.trycloudflare.com"
+    )
+
     def fake_post(url, json=None, timeout=None):
         return FakeResponse(json_data={}, status_code=500)
 
     monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
-    monkeypatch.setattr(
-        kaggle_module.settings, "kaggle_house_api_url", "https://house-example.trycloudflare.com"
-    )
 
     with pytest.raises(httpx.HTTPStatusError):
-        KaggleImageProvider().generate_house_render(b"plot-bytes", "prompt")
+        KaggleImageProvider().generate_house_render(None, "prompt", floor_count=1)

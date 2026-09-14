@@ -149,10 +149,14 @@ class ModalImageProvider:
 
         return {tier: base64.b64decode(b64) for tier, b64 in zip(tiers, images_b64_out)}
 
-    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
+    def generate_house_render(
+        self, image_bytes: bytes, prompt: str, floor_count: int | None = None
+    ) -> bytes:
         """"Build a House" exterior/interior concept render. Prompt is passed
         through as-is (unlike generate_image, no shortening) - house prompts
-        are already length-capped upstream by house_prompts.py."""
+        are already length-capped upstream by house_prompts.py. floor_count is
+        ignored (interface parity - only the Kaggle text-to-image elevation
+        model uses it; this edit backend states the count in the prompt)."""
         payload = {
             "image_base64": base64.b64encode(image_bytes).decode(),
             "prompt": prompt,

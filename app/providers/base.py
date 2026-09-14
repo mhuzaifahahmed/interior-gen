@@ -180,13 +180,29 @@ class Provider(ABC):
         ...
 
     @abstractmethod
-    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
-        """Edit/render an exterior or interior concept visualization from a plot
-        photo (or floor plan, once a vendor is wired in) per the prompt. Returns
-        PNG bytes. NOT best-effort - mirrors generate_image()'s treatment in the
+    def generate_house_render(
+        self, image_bytes: bytes | None, prompt: str, floor_count: int | None = None
+    ) -> bytes:
+        """Render an exterior concept visualization per the prompt. Returns PNG
+        bytes. NOT best-effort - mirrors generate_image()'s treatment in the
         room-redesign pipeline: this is the core paid deliverable of the house
         feature, so a failure here should fail the whole house-project rather
         than degrade silently.
+
+        image_bytes is the plot photo for EDIT-style backends (OpenAI/Modal,
+        which paint a house onto the real photo) - but the Kaggle backend is a
+        TEXT-TO-IMAGE elevation model (RealVisXL) that generates a facade from
+        scratch and ignores the photo entirely, so image_bytes may be None
+        there (the plot photo is optional as of 2026-09). See
+        HybridProvider.house_render_needs_photo(), which tells the pipeline
+        whether the active backend needs a photo at all.
+
+        floor_count, when given, is the REAL story count (from the structured
+        Floors dropdown or the computed room layout) - the Kaggle elevation
+        model uses it as a hard structured input driving the facade's story
+        count + aspect ratio, far more reliable than hoping the model reads a
+        count out of prompt text. EDIT-style backends ignore it (they already
+        state the count inside the prompt via build_house_prompt()).
         """
         ...
 

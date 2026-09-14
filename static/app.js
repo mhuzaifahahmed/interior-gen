@@ -2252,9 +2252,15 @@ async function pollFloorPlanCatchUp(houseProjectId) {
 
 /* ---------- Results ---------- */
 
+// Order of the Build a House results grid (2026-09-14): the elevation RENDER
+// comes first, then the deterministic blueprint "Floor N Layout" cards (each
+// carrying its .dxf download), then the AI "Concept Layout" diffusion cards,
+// then the original uploaded plot photo LAST (appended at the end of
+// renderHouseResults, only if a photo was uploaded - it's optional). This
+// mirrors the user's requested "rendered image first, then .dxf, then the
+// diffusion layout" ordering.
 const HOUSE_RESULT_TIERS = [
-  { key: "plot", label: "Original Plot", desc: "Your uploaded plot photo." },
-  { key: "render", label: "Concept Render", desc: "AI-generated exterior/interior concept." },
+  { key: "render", label: "Elevation Render", desc: "AI-generated photorealistic front elevation." },
 ];
 
 // Feasibility hard-gate result (app/pipeline/feasibility.py) - shown as a
@@ -2440,6 +2446,30 @@ function renderHouseResults(data) {
       }</p>
     `;
     houseResultsGrid.appendChild(notice);
+  }
+
+  // Original uploaded plot photo LAST (see HOUSE_RESULT_TIERS' ordering note) -
+  // only shown when a photo was actually uploaded (optional as of 2026-09), so
+  // a dimensions-only project simply omits it rather than showing a blank card.
+  const plotUrl = data.images.plot;
+  if (plotUrl) {
+    const card = document.createElement("div");
+    card.className = "result-card";
+    card.innerHTML = `
+      <div class="img-wrap">
+        <img src="${plotUrl}" alt="Original Plot" loading="lazy" />
+        <a class="download-btn" href="${plotUrl}" download="${downloadFilenameFor("plot", plotUrl)}" aria-label="Download Original Plot" title="Download image">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
+      <div class="caption">
+        <p class="tier-name">Original Plot</p>
+        <p class="tier-desc">Your uploaded plot photo.</p>
+      </div>
+    `;
+    card.addEventListener("click", () => openLightbox(plotUrl, "Original Plot"));
+    wireDownloadLink(card.querySelector(".download-btn"));
+    houseResultsGrid.appendChild(card);
   }
 }
 

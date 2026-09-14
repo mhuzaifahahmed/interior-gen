@@ -11,7 +11,7 @@ from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
 from app.pipeline.blueprint_svg import render_floor_blueprint
 from app.pipeline.feasibility import check_feasibility
 from app.pipeline.floor_layout import layout_floor
-from app.pipeline.house_prompts import build_house_prompt
+from app.pipeline.house_prompts import build_house_elevation_prompt, build_house_prompt
 from app.pipeline.house_requirements import mentions_garage, parse_front_yard_depth, parse_garage_cars
 from app.pipeline.room_specs import classify_room_category
 from app.providers.base import Provider
@@ -134,12 +134,17 @@ def _is_cancelled(session: Session, house_project: HouseProject) -> bool:
 # still write a floor_plan image to a project the user no longer sees
 # (list_house_projects excludes cancelled rows), same "harmless orphan"
 # treatment already accepted elsewhere in this file for S3 objects.
-HOUSE_PROMPT_VERSION = "v12"  # v12 (2026-09-04): true front-to-back zoning, real room min/max
-# proportions, kitchen-dining adjacency reordering, and garage-buffered-by-Entry-room door
-# suppression - see floor_layout.py/blueprint_svg.py module docstrings for the full detail.
-# Entry-room auto-injection (mirroring the existing garage injection just above it in this
-# file) changes what room_layout can contain, which feeds into build_house_prompt()'s
-# room_layout summary.
+HOUSE_PROMPT_VERSION = "v13"  # v13 (2026-09-14): the exterior render is now a real
+# TEXT-TO-IMAGE elevation model (RealVisXL on Kaggle, HOUSE_IMAGE_PROVIDER=kaggle) instead of
+# only the OpenAI photo-EDIT path. It needs no plot photo (generates a facade from the
+# floors/requirements), so the render step runs even for photo-less projects when the active
+# backend reports house_render_needs_photo()==False; the app sends a MINIMAL prompt
+# (build_house_elevation_prompt) + a structured floor count, and the notebook
+# (kaggle_notebooks/elevation_server.py) owns the heavy prompt scaffolding. OpenAI/Modal keep
+# their exact prior photo-edit behavior (long build_house_prompt, photo required).
+# v12 (2026-09-04): true front-to-back zoning, real room min/max proportions, kitchen-dining
+# adjacency reordering, and garage-buffered-by-Entry-room door suppression - see
+# floor_layout.py/blueprint_svg.py module docstrings for the full detail.
 
 
 def _run_floor_plan_stage(
@@ -566,35 +571,52 @@ def run_house_pipeline(
             session.add(house_project)
             session.commit()
 
-            # Exterior render is NOT best-effort when a plot photo IS
-            # available - it's the core paid deliverable of this feature,
-            # same treatment as the room-redesign image loop, and an
-            # exception here still propagates out to the outer except and
-            # fails the whole project. But the render is an image-EDIT call
-            # (see app/providers/openai.py/kaggle.py's generate_house_render)
-            # - it has no photo to edit when the plot photo was skipped
-            # (optional as of 2026-09), so it's cleanly skipped in that case
-            # instead of erroring, exactly like the house_render_enabled
-            # dev-only escape hatch below already does for a different
-            # reason. settings.house_render_enabled (see app/config.py) -
-            # when False, this call (the ONLY OpenAI/Kaggle call left in the
-            # main pipeline path) is skipped too, so the project still
-            # completes as "done" with whatever else succeeded.
+            # Exterior render is NOT best-effort (when it runs) - it's the
+            # core deliverable of this feature, same treatment as the
+            # room-redesign image loop, and an exception here still propagates
+            # to the outer except and fails the whole project. Two backend
+            # SHAPES, decided by the active provider (not hardcoded here):
+            #   - EDIT backends (OpenAI/Modal) paint a house onto the real
+            #     plot photo, so they genuinely NEED a photo - skipped cleanly
+            #     if none was uploaded (optional as of 2026-09), same as the
+            #     house_render_enabled escape hatch, rather than erroring.
+            #   - TEXT-TO-IMAGE elevation (Kaggle RealVisXL) generates a facade
+            #     from the floors/requirements and ignores any photo, so it
+            #     runs regardless of whether a photo was uploaded.
+            # provider.house_render_needs_photo() (HybridProvider) reports
+            # which shape the active backend is; a test FakeProvider without
+            # that method defaults to True (needs photo), preserving the
+            # existing "no photo -> no render" behavior for those.
+            # settings.house_render_enabled (see app/config.py) still gates the
+            # whole step off entirely when False.
             render_model = None
+            render_needs_photo = getattr(provider, "house_render_needs_photo", lambda: True)()
             if not settings.house_render_enabled:
                 logger.info(
                     "house_render_enabled is False - skipping the render step for house project %s",
                     house_project_id,
                 )
-            elif plot_bytes is None:
+            elif render_needs_photo and plot_bytes is None:
                 logger.info(
-                    "no plot photo was uploaded for house project %s - skipping the exterior "
-                    "render step (it has no photo to edit)",
+                    "no plot photo was uploaded for house project %s and the active render backend "
+                    "edits a photo - skipping the exterior render step",
                     house_project_id,
                 )
             else:
-                primary_prompt = build_house_prompt(dimensions, prompt, plot_description, room_layout)
-                render_bytes = provider.generate_house_render(plot_bytes, primary_prompt)
+                # Real story count for the elevation model's structured
+                # `floors` input - the computed layout is authoritative when
+                # present, otherwise the dropdown value.
+                resolved_floors = (len(room_layout["floors"]) if room_layout else None) or floor_count
+                if render_needs_photo:
+                    # EDIT backend: long natural-language instruction paragraph
+                    # (build_house_prompt) that states the story count inline.
+                    render_prompt = build_house_prompt(dimensions, prompt, plot_description, room_layout)
+                else:
+                    # TEXT-TO-IMAGE elevation: minimal app-side prompt (the
+                    # notebook owns the heavy scaffolding) - see
+                    # build_house_elevation_prompt's docstring.
+                    render_prompt = build_house_elevation_prompt(prompt)
+                render_bytes = provider.generate_house_render(plot_bytes, render_prompt, resolved_floors)
                 render_key = f"{key_prefix}/{house_project_id}/render.png"
                 storage.put(render_key, render_bytes, content_type="image/png")
                 house_project.render_key = render_key

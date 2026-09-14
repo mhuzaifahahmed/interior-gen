@@ -62,7 +62,13 @@ class OpenAIImageProvider:
         input_fidelity = "high" if tier in HIGH_FIDELITY_TIERS else settings.openai_image_input_fidelity
         return self._edit_image(image_bytes, prompt, input_fidelity)
 
-    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
+    def generate_house_render(
+        self, image_bytes: bytes, prompt: str, floor_count: int | None = None
+    ) -> bytes:
+        # floor_count is ignored here - this is an image-EDIT backend, and
+        # build_house_prompt() already states the exact story count inside the
+        # prompt text (the structured field only matters to the Kaggle
+        # text-to-image elevation model). Accepted for interface parity.
         # Shares the exact request shape with generate_image() via _edit_image -
         # kept as its own public method (not just calling generate_image
         # directly) so the "Build a House" feature's parameters never get

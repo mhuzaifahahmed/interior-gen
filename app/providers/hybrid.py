@@ -255,8 +255,21 @@ class HybridProvider(Provider):
             plot_description, dimensions, prompt, room_layout, facing
         )
 
-    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
-        result = self._house_image_provider.generate_house_render(image_bytes, prompt)
+    def house_render_needs_photo(self) -> bool:
+        """Whether the active "Build a House" render backend actually consumes
+        the plot photo. The Kaggle backend is a TEXT-TO-IMAGE elevation model
+        (RealVisXL) - it generates a facade from the floors/room-program and
+        ignores any photo, so it runs fine when the (optional, as of 2026-09)
+        plot photo wasn't uploaded. OpenAI/Modal are image-EDIT backends that
+        paint onto the real photo and genuinely need one. The pipeline
+        (app/pipeline/generate_house.py) reads this to decide whether to skip
+        the render for a photo-less project vs. run it anyway."""
+        return not isinstance(self._house_image_provider, KaggleImageProvider)
+
+    def generate_house_render(
+        self, image_bytes: bytes | None, prompt: str, floor_count: int | None = None
+    ) -> bytes:
+        result = self._house_image_provider.generate_house_render(image_bytes, prompt, floor_count)
         self._house_provider_label = _label_for(self._house_image_provider)
         return result
 

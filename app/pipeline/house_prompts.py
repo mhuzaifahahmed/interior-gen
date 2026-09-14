@@ -42,6 +42,31 @@ HOUSE_NEGATIVE_PROMPT = (
 )
 
 
+def build_house_elevation_prompt(prompt: str | None = None) -> str:
+    """Minimal exterior-features string for the Kaggle TEXT-TO-IMAGE elevation
+    model (RealVisXL) - the counterpart to app/pipeline/prompts.py's
+    build_kaggle_prompt() for room-redesign, and deliberately the OPPOSITE of
+    build_house_prompt() below.
+
+    The elevation notebook (kaggle_notebooks/elevation_server.py) owns ALL the
+    heavy prompt scaffolding itself - camera framing, photoreal vocabulary, the
+    per-floor-count aspect-ratio + negative-prompt rules - so the app only
+    needs to hand it the user's own short requirements text and let the model
+    do the rest. A long, detailed app-side paragraph (like build_house_prompt's
+    output, meant for an instruction-following EDIT model) would just fight the
+    notebook's own scaffolding and add error surface for a from-scratch
+    diffusion model. Empty is a fully supported result - the notebook falls
+    back to its own sensible default exterior features when it gets no extras.
+
+    Story count is NOT included here - it's sent SEPARATELY as a structured
+    `floors` int (see KaggleImageProvider.generate_house_render), far more
+    reliable than embedding "2 floors" in free text for the model to parse.
+    """
+    if not prompt:
+        return ""
+    return prompt.strip()[:USER_PROMPT_MAX_CHARS]
+
+
 def build_house_prompt(
     dimensions: dict,
     prompt: str | None = None,

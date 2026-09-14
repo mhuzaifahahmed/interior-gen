@@ -11,7 +11,7 @@ class FakeImageProvider:
     def generate_image(self, image_bytes, prompt, tier=None):
         return f"{self.name}:image".encode()
 
-    def generate_house_render(self, image_bytes, prompt):
+    def generate_house_render(self, image_bytes, prompt, floor_count=None):
         return f"{self.name}:house".encode()
 
 
@@ -28,7 +28,7 @@ class FailingImageProvider:
         self.calls += 1
         raise self.exc
 
-    def generate_house_render(self, image_bytes, prompt):
+    def generate_house_render(self, image_bytes, prompt, floor_count=None):
         raise self.exc
 
 
@@ -237,7 +237,7 @@ class FakeOurModelProvider:
     def supports_batch(self):
         return False
 
-    def generate_house_render(self, image_bytes, prompt):
+    def generate_house_render(self, image_bytes, prompt, floor_count=None):
         return b"ourmodel:house"
 
 
@@ -248,7 +248,7 @@ class FakeOpenAIProvider:
     def supports_batch(self):
         return False
 
-    def generate_house_render(self, image_bytes, prompt):
+    def generate_house_render(self, image_bytes, prompt, floor_count=None):
         return b"openai:house"
 
 

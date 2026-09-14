@@ -311,12 +311,14 @@ class GeminiProvider(Provider):
         # HybridProvider - not this class.
         return None
 
-    def generate_house_render(self, image_bytes: bytes, prompt: str) -> bytes:
+    def generate_house_render(
+        self, image_bytes: bytes, prompt: str, floor_count: int | None = None
+    ) -> bytes:
         # Reuses Gemini's own (dormant in the composition root, but real and
         # working) instruction-based image editing - same call shape as
         # generate_image() above, just under the house feature's own method
         # name so its parameters never get tangled with room-redesign's tier
-        # semantics.
+        # semantics. floor_count ignored (interface parity - edit backend).
         return self.generate_image(image_bytes, prompt)
 
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:

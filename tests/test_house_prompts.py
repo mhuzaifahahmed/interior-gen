@@ -1,4 +1,32 @@
-from app.pipeline.house_prompts import HOUSE_NEGATIVE_PROMPT, USER_PROMPT_MAX_CHARS, build_house_prompt
+from app.pipeline.house_prompts import (
+    HOUSE_NEGATIVE_PROMPT,
+    USER_PROMPT_MAX_CHARS,
+    build_house_elevation_prompt,
+    build_house_prompt,
+)
+
+
+def test_build_house_elevation_prompt_is_minimal_not_an_edit_paragraph():
+    # The Kaggle text-to-image elevation model owns its own scaffolding - the
+    # app-side prompt must stay SHORT (just the user's own text), never the long
+    # "Edit this photograph..." build_house_prompt paragraph.
+    result = build_house_elevation_prompt("modern car porch, glass balcony")
+    assert result == "modern car porch, glass balcony"
+    assert "Edit this photograph" not in result
+    assert HOUSE_NEGATIVE_PROMPT not in result
+
+
+def test_build_house_elevation_prompt_empty_when_no_user_text():
+    # Empty is fully supported - the notebook falls back to its own default
+    # exterior features.
+    assert build_house_elevation_prompt(None) == ""
+    assert build_house_elevation_prompt("") == ""
+    assert build_house_elevation_prompt("   ") == ""
+
+
+def test_build_house_elevation_prompt_truncates_overlong_text():
+    overlong = "a" * (USER_PROMPT_MAX_CHARS + 100)
+    assert len(build_house_elevation_prompt(overlong)) == USER_PROMPT_MAX_CHARS
 
 
 def test_build_house_prompt_reads_as_an_edit_instruction():

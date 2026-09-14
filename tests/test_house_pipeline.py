@@ -38,8 +38,8 @@ class FakeProvider:
             ]
         }
 
-    def generate_house_render(self, image_bytes, prompt):
-        self.render_calls.append((image_bytes, prompt))
+    def generate_house_render(self, image_bytes, prompt, floor_count=None):
+        self.render_calls.append((image_bytes, prompt, floor_count))
         return b"fake-render-bytes"
 
 
@@ -203,7 +203,7 @@ def test_run_house_pipeline_marks_failed_on_render_error(monkeypatch):
         session.commit()
 
     class FailingProvider(FakeProvider):
-        def generate_house_render(self, image_bytes, prompt):
+        def generate_house_render(self, image_bytes, prompt, floor_count=None):
             raise RuntimeError("OpenAI quota exceeded")
 
     run_house_pipeline("h3", FailingProvider(), storage, {"length": 40, "width": 60, "unit": "ft"})
@@ -531,6 +531,65 @@ def test_run_house_pipeline_skips_render_when_house_render_enabled_is_false(monk
         # The rest of the pipeline still ran normally.
         assert house_project.blueprint_status == "done"
         assert json.loads(house_project.blueprint_keys_json)
+
+
+def test_run_house_pipeline_renders_elevation_without_a_photo_for_text_to_image_backend(monkeypatch):
+    # 2026-09-14: the Kaggle backend is a TEXT-TO-IMAGE elevation model that
+    # needs no plot photo. A provider reporting house_render_needs_photo()==
+    # False must have generate_house_render called even for a photo-less
+    # project (unlike the default edit backend, which skips it) - and must
+    # receive the structured floor count + the minimal (build_house_elevation_
+    # prompt) prompt, NOT the long build_house_prompt edit paragraph.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()  # note: NO plot image stored for this project
+
+    with Session(engine) as session:
+        # plot_image_key=None -> plot_bytes stays None (no photo uploaded).
+        house_project = HouseProject(id="helev1", status="queued")
+        session.add(house_project)
+        session.commit()
+
+    class ElevationProvider(FakeProvider):
+        def house_render_needs_photo(self):
+            return False
+
+        def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+            self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+            # Two floors, so the resolved story count handed to
+            # generate_house_render is a real 2 (the computed layout is
+            # authoritative over the dropdown value).
+            return {
+                "floors": [
+                    {"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}, {"name": "Kitchen", "area": 1}]},
+                    {"floor_number": 2, "rooms": [{"name": "Bedroom", "area": 2}, {"name": "Bathroom", "area": 1}]},
+                ]
+            }
+
+    provider = ElevationProvider()
+    run_house_pipeline(
+        "helev1",
+        provider,
+        storage,
+        {"length": 30, "width": 30, "unit": "ft"},
+        prompt="2 floors. Extras: modern car porch, glass balcony",
+        floor_count=2,
+    )
+
+    assert len(provider.render_calls) == 1
+    image_bytes, render_prompt, floor_count = provider.render_calls[0]
+    assert image_bytes is None  # no photo, and this backend ignores it anyway
+    assert floor_count == 2  # structured story count reached the provider
+    # Minimal prompt = the user's own requirements text, NOT build_house_prompt's
+    # long "Edit this photograph..." edit paragraph.
+    assert "Edit this photograph" not in render_prompt
+    assert "car porch" in render_prompt
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "helev1")
+        assert house_project.status == "done"
+        assert house_project.render_key is not None
 
 
 class ManyRoomsProvider(FakeProvider):
@@ -912,9 +971,9 @@ def test_run_house_pipeline_does_not_wait_for_floor_plan_before_completing(monke
             time.sleep(2.0)
             return super().generate_floor_plan(plot_description, dimensions, prompt, room_layout)
 
-        def generate_house_render(self, image_bytes, prompt):
+        def generate_house_render(self, image_bytes, prompt, floor_count=None):
             time.sleep(0.1)
-            return super().generate_house_render(image_bytes, prompt)
+            return super().generate_house_render(image_bytes, prompt, floor_count)
 
     provider = SlowProvider(floor_plan_images=[b"floor1-bytes"])
     start = time.monotonic()
