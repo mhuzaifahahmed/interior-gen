@@ -264,8 +264,12 @@ async def create_project(
     # Defensive re-truncation (also enforced in build_prompt()) - the frontend's
     # <textarea maxlength> is trivially bypassable by anyone calling the API directly.
     additional_instructions = additional_instructions.strip()[:ADDITIONAL_INSTRUCTIONS_MAX_CHARS] or None
-    # Empty city is a valid, deliberate choice (images-only path, confirmed via a
-    # dialog on the frontend) - not an error, just no materials/pricing lookup.
+    # 2026-09: the frontend no longer asks for a city at all (see
+    # app/pipeline/generate.py's run_pipeline docstring for why - a
+    # location-biased search never actually helped). city is kept accepted
+    # here only for backward-compat direct API callers; an empty/omitted
+    # value is NOT special-cased any more - materials/pricing always runs
+    # regardless of whether one is given.
     city = city.strip()[:CITY_MAX_CHARS] or None
 
     # Optional user-supplied room measurements - see _compute_room_dimensions()'s

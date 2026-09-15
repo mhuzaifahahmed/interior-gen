@@ -38,7 +38,7 @@ class FakeProvider:
             ]
         }
 
-    def generate_house_render(self, image_bytes, prompt, floor_count=None):
+    def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None):
         self.render_calls.append((image_bytes, prompt, floor_count))
         return b"fake-render-bytes"
 
@@ -203,7 +203,7 @@ def test_run_house_pipeline_marks_failed_on_render_error(monkeypatch):
         session.commit()
 
     class FailingProvider(FakeProvider):
-        def generate_house_render(self, image_bytes, prompt, floor_count=None):
+        def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None):
             raise RuntimeError("OpenAI quota exceeded")
 
     run_house_pipeline("h3", FailingProvider(), storage, {"length": 40, "width": 60, "unit": "ft"})
@@ -552,7 +552,7 @@ def test_run_house_pipeline_renders_elevation_without_a_photo_for_text_to_image_
         session.commit()
 
     class ElevationProvider(FakeProvider):
-        def house_render_needs_photo(self):
+        def house_render_needs_photo(self, preferred_backend=None):
             return False
 
         def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
@@ -971,7 +971,7 @@ def test_run_house_pipeline_does_not_wait_for_floor_plan_before_completing(monke
             time.sleep(2.0)
             return super().generate_floor_plan(plot_description, dimensions, prompt, room_layout)
 
-        def generate_house_render(self, image_bytes, prompt, floor_count=None):
+        def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None):
             time.sleep(0.1)
             return super().generate_house_render(image_bytes, prompt, floor_count)
 

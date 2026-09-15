@@ -313,9 +313,12 @@ class HybridProvider(Provider):
         prompt: str,
         floor_count: int | None = None,
         preferred_backend: str | None = None,
+        wants_garage: bool | None = None,
     ) -> bytes:
         provider = self._resolve_house_provider(preferred_backend)
-        result = provider.generate_house_render(image_bytes, prompt, floor_count)
+        result = provider.generate_house_render(
+            image_bytes, prompt, floor_count, wants_garage=wants_garage
+        )
         self._house_provider_label = _label_for(provider)
         return result
 

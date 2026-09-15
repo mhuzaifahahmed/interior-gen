@@ -34,7 +34,7 @@ class FakeProvider:
     def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
         return {"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]}]}
 
-    def generate_house_render(self, image_bytes, prompt, floor_count=None, preferred_backend=None):
+    def generate_house_render(self, image_bytes, prompt, floor_count=None, preferred_backend=None, wants_garage=None):
         self.render_prompts.append(prompt)
         self.received_preferred_backends.append(preferred_backend)
         buf = io.BytesIO()
@@ -209,7 +209,7 @@ def test_full_house_upload_without_photo_still_completes(monkeypatch):
         def analyze_plot(self, image_bytes, dimensions):
             raise AssertionError("analyze_plot must not be called when no photo was uploaded")
 
-        def generate_house_render(self, image_bytes, prompt, floor_count=None):
+        def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None):
             raise AssertionError("generate_house_render must not be called when no photo was uploaded")
 
     monkeypatch.setattr(main_module, "get_provider", lambda: NoCallProvider())

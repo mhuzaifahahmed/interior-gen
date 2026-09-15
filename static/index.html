@@ -39,11 +39,15 @@
 </div>
 
 <header class="fixed top-4 inset-x-0 z-50 px-margin-mobile pointer-events-none">
-<div class="max-w-4xl mx-auto flex items-center gap-3">
+<div class="max-w-4xl mx-auto flex items-center justify-between gap-3">
 <!-- Split into two independently-pilled containers (logo pill + everything-else
      pill) sharing the exact same visual treatment (bg/blur/shadow/border/radius)
      the single pill used to have - purely a visual split, no behavior/markup
-     inside either half changed. -->
+     inside either half changed. justify-between anchors the logo pill hard-left
+     and the everything-else pill hard-right; the right pill is content-sized
+     (not stretched), so its RIGHT edge never moves - a longer/shorter account
+     name only shifts its left edge into the transparent middle gap, keeping the
+     visual hierarchy stable regardless of name length. -->
 <div class="bg-night/50 backdrop-blur-2xl rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.3)] border border-white/10 pointer-events-auto shrink-0">
 <div class="h-16 px-4 lg:px-5 flex items-center">
 <div class="flex items-center gap-2.5 shrink-0">
@@ -52,7 +56,7 @@
 </div>
 </div>
 </div>
-<div class="bg-night/50 backdrop-blur-2xl rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.3)] border border-white/10 pointer-events-auto shrink-0 md:flex-1 md:min-w-0">
+<div class="bg-night/50 backdrop-blur-2xl rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.3)] border border-white/10 pointer-events-auto shrink-0">
 <div class="h-16 px-3 lg:px-6 flex items-center justify-between gap-4 lg:gap-6">
 <nav class="hidden md:flex items-center gap-1 relative" id="tab-bar">
 <span class="absolute top-0 bottom-0 rounded-full bg-[rgba(245,239,226,0.92)] z-0" id="tab-active-pill"></span>
@@ -61,6 +65,7 @@
 <button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full" id="tab-btn-house" data-tab="house">BUILD A HOUSE</button>
 <button type="button" class="tab-btn relative z-10 font-label-caps text-label-caps px-4 py-2 rounded-full" id="tab-btn-pricing" data-tab="pricing">PRICING</button>
 </nav>
+<span class="hidden md:block w-px h-6 bg-white/15 shrink-0"></span>
 <div class="hidden md:flex items-center gap-4 shrink-0">
 <div class="flex items-center gap-4" id="nav-auth-guest">
 <button type="button" class="font-label-caps text-label-caps text-on-night-variant hover:text-on-night transition-colors" id="nav-login-btn">LOG IN</button>
@@ -238,13 +243,13 @@ BUILD A NEW HOUSE
 </div>
 <p class="font-label-caps text-label-caps text-home-gold tracking-[0.2em]">MAIN HIGHLIGHT</p>
 <h2 class="font-headline-md text-headline-md text-home-stone-dark">Know what each tier actually costs to build</h2>
-<p class="font-body-md text-on-surface-variant">Type in your city before you generate, and every tier comes back with its own itemized materials list — paint, flooring, lighting, ceiling, feature wall, and decor — each priced from real local listings we search for, plus a rough total. Reasoned estimates, not guesses, so you can weigh the look against what it would really cost before you renovate.</p>
+<p class="font-body-md text-on-surface-variant">Every tier comes back with its own itemized materials list — paint, flooring, lighting, ceiling, feature wall, and decor — each priced from real listings we search for, plus a rough total. Reasoned estimates, not guesses, so you can weigh the look against what it would really cost before you renovate.</p>
 </div>
 <div class="lg:col-span-7 grid grid-cols-1 sm:grid-cols-3 gap-4">
 <div class="rounded-xl bg-background border border-home-line p-6 flex flex-col gap-2">
 <span class="font-technical-data text-technical-data text-home-gold">ECONOMICAL</span>
 <span class="font-headline-sm text-headline-sm text-home-stone-dark">Paint, tile &amp; lighting, priced</span>
-<span class="font-body-md text-on-surface-variant text-sm">Priced to your city, with source links where a real match was found.</span>
+<span class="font-body-md text-on-surface-variant text-sm">Priced from real listings, with source links where a real match was found.</span>
 </div>
 <div class="rounded-xl bg-background border border-home-line p-6 flex flex-col gap-2">
 <span class="font-technical-data text-technical-data text-home-gold">MID&#8209;RANGE</span>
@@ -316,7 +321,7 @@ BUILD A NEW HOUSE
 <div class="relative flex flex-col gap-3">
 <span class="relative z-10 inline-flex items-center justify-center w-12 h-12 rounded-full bg-home-gold text-white font-technical-data text-base shadow-[0_4px_16px_rgba(122,71,18,0.25)]">03</span>
 <h3 class="font-headline-sm text-headline-sm text-home-stone-dark mt-1">Estimate</h3>
-<p class="font-body-md text-on-surface-variant text-sm">Real local material costs are priced in for your city, tier by tier.</p>
+<p class="font-body-md text-on-surface-variant text-sm">Real material costs are priced in from real listings, tier by tier.</p>
 </div>
 <div class="relative flex flex-col gap-3">
 <span class="relative z-10 inline-flex items-center justify-center w-12 h-12 rounded-full bg-home-gold text-white font-technical-data text-base shadow-[0_4px_16px_rgba(122,71,18,0.25)]">04</span>
@@ -502,10 +507,6 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <textarea id="additional-instructions" name="additional_instructions" maxlength="150" rows="2" placeholder="e.g. blue sofa, more indoor plants, reading corner…" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface resize-none focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200"></textarea>
 </div>
 <div>
-<label for="city-input" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Your city (for local material pricing)</label>
-<input type="text" id="city-input" name="city" maxlength="80" placeholder="e.g. Karachi" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200"/>
-</div>
-<div>
 <label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Room measurements (optional — improves material-cost accuracy)</label>
 <div class="flex gap-4">
 <div class="flex-1">
@@ -629,7 +630,8 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 
 <section class="results max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop mt-14 mb-section-gap" id="results" hidden>
 <p class="room-description text-center font-body-md text-on-surface-variant italic max-w-2xl mx-auto mb-10" id="room-description"></p>
-<p class="text-center font-body-md text-on-surface-variant/70 text-sm -mt-6 mb-10" id="image-model-note" hidden></p>
+<p class="text-center font-body-md text-on-surface-variant/70 text-sm -mt-6 mb-2" id="image-model-note" hidden></p>
+<p class="text-center font-label-caps text-label-caps text-primary mb-10" id="plan-status-note" hidden></p>
 <div class="results-grid grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-gutter" id="results-grid"></div>
 <div class="text-center mt-10">
 <button type="button" id="start-over-btn" class="border border-outline-variant text-on-surface px-6 py-3 font-label-caps text-label-caps hover:border-primary hover:text-primary hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">Upload another photo</button>
@@ -652,18 +654,23 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <form id="house-upload-form" class="grid grid-cols-1 lg:grid-cols-12 gap-gutter items-start">
 
 <div class="lg:col-span-7 flex flex-col gap-unit">
-<label id="house-dropzone" for="house-file-input" class="group relative aspect-[4/3] bg-surface-container-low border border-outline-variant flex flex-col items-center justify-center cursor-pointer transition-all hover:border-primary/50 hover:shadow-xl overflow-hidden block">
+<div id="house-dropzone" class="group relative aspect-[4/3] bg-surface-container-low border border-outline-variant flex flex-col items-center justify-center cursor-not-allowed transition-all overflow-hidden opacity-70">
 <div class="absolute inset-0 opacity-10 pointer-events-none" style="background-image: radial-gradient(circle, #7A4712 1px, transparent 1px); background-size: 40px 40px;"></div>
-<div class="absolute top-4 left-4 w-8 h-8 border-t border-l border-primary/30 group-hover:border-primary transition-colors pointer-events-none"></div>
-<div class="absolute bottom-4 right-4 w-8 h-8 border-b border-r border-primary/30 group-hover:border-primary transition-colors pointer-events-none"></div>
-<input type="file" id="house-file-input" accept="image/png,image/jpeg,image/webp" hidden/>
-<div class="relative z-10 flex flex-col items-center text-center p-12 transition-transform group-hover:scale-105" id="house-dropzone-empty">
-<div class="w-20 h-20 mb-6 flex items-center justify-center border border-primary/30 rounded-full group-hover:border-primary group-hover:scale-110 transition-all duration-500">
+<div class="absolute top-4 left-4 w-8 h-8 border-t border-l border-primary/30 pointer-events-none"></div>
+<div class="absolute bottom-4 right-4 w-8 h-8 border-b border-r border-primary/30 pointer-events-none"></div>
+<span class="absolute top-6 left-1/2 -translate-x-1/2 z-20 font-label-caps text-sm tracking-widest uppercase bg-primary text-on-primary px-6 py-2.5 rounded-full shadow-lg">Coming Soon</span>
+<!-- Photo upload disabled for now (input has `disabled` below, and there is
+     no `for="house-file-input"` on this label-turned-div so clicking it
+     can't open the file dialog either) - Build a House still fully works
+     from dimensions alone, which is the point of this notice. -->
+<input type="file" id="house-file-input" accept="image/png,image/jpeg,image/webp" hidden disabled/>
+<div class="relative z-10 flex flex-col items-center text-center p-12" id="house-dropzone-empty">
+<div class="w-20 h-20 mb-6 flex items-center justify-center border border-primary/30 rounded-full">
 <span class="material-symbols-outlined text-primary text-4xl">add_a_photo</span>
 </div>
-<h3 class="font-headline-sm text-headline-sm text-on-surface mb-2">Drop a plot photo here</h3>
-<p class="font-body-md text-on-surface-variant max-w-xs">or click to browse · JPG, PNG, WEBP</p>
-<p class="font-label-caps text-label-caps text-on-surface-variant/70 mt-3">Optional — your floor plan works from dimensions alone</p>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-2">Photo upload coming soon</h3>
+<p class="font-body-md text-on-surface-variant max-w-xs">We're not accepting plot photos just yet.</p>
+<p class="font-label-caps text-label-caps text-on-surface-variant/70 mt-3">Generate directly from your plot dimensions below</p>
 </div>
 <div class="absolute inset-0 bg-surface" id="house-dropzone-preview" hidden>
 <img class="w-full h-full object-cover" id="house-preview-img" alt="Selected plot photo"/>
@@ -672,7 +679,7 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <span class="material-symbols-outlined">close</span>
 </button>
 </div>
-</label>
+</div>
 </div>
 
 <div class="lg:col-span-5">
@@ -823,7 +830,8 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 
 <section class="results max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop mt-14 mb-section-gap" id="house-results" hidden>
 <p class="room-description text-center font-body-md text-on-surface-variant italic max-w-2xl mx-auto mb-10" id="plot-description"></p>
-<p class="text-center font-body-md text-on-surface-variant/70 text-sm -mt-6 mb-10" id="house-image-model-note" hidden></p>
+<p class="text-center font-body-md text-on-surface-variant/70 text-sm -mt-6 mb-2" id="house-image-model-note" hidden></p>
+<p class="text-center font-label-caps text-label-caps text-primary mb-10" id="house-plan-status-note" hidden></p>
 <div class="max-w-2xl mx-auto mb-10 px-6 py-4 border" id="house-feasibility-banner" hidden></div>
 <div class="results-grid grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-gutter" id="house-results-grid"></div>
 <div class="text-center mt-10">
@@ -856,6 +864,7 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <li>Full generation History</li>
 </ul>
 <button type="button" class="pricing-cta mt-8 border border-outline-variant text-on-surface px-6 py-3 font-label-caps text-label-caps rounded-full cursor-default" disabled>Included by default</button>
+<button type="button" class="pricing-cta mt-3 text-primary font-label-caps text-label-caps underline underline-offset-4 hover:text-primary/80 transition-colors" data-plan="pro">Want more? Upgrade to Pro &rarr;</button>
 </div>
 
 <div class="pricing-card border-2 border-primary rounded-xl p-8 flex flex-col relative bg-primary-container/20" data-plan="pro">

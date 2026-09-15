@@ -88,16 +88,20 @@ def run_pipeline(
     here only so this function's signature doesn't force every caller/test to
     pass it; None falls back to the pre-auth flat key layout.
 
-    city is optional (empty/None means the user chose images-only - see
-    static/app.js's empty-city confirm dialog). When present, a materials/pricing
-    lookup for all 3 tiers is launched via a ThreadPoolExecutor at the start of
-    this function and joined after the image loop - NOT via a second
-    BackgroundTasks call, because Starlette runs BackgroundTasks sequentially,
-    which would make materials run strictly after images instead of overlapping
-    them. Each tier's lookup uses its own DEDICATED key from
-    settings.gemini_materials_api_keys (a fixed tier->key mapping, not shared
-    with gemini_api_key/the text calls) so all 3 run on separate rate-limit
-    quotas with zero contention.
+    city is optional (2026-09: no longer gates whether materials/pricing runs
+    at all - it used to, but Karachi in particular has too few real online
+    local listings for a location-biased search to actually help, so an empty
+    city no longer means "images-only"; the frontend has stopped asking for
+    one entirely). A materials/pricing lookup for all 3 tiers ALWAYS launches
+    via a ThreadPoolExecutor at the start of this function and is joined after
+    the image loop - NOT via a second BackgroundTasks call, because Starlette
+    runs BackgroundTasks sequentially, which would make materials run strictly
+    after images instead of overlapping them. Each tier's lookup uses its own
+    DEDICATED key from settings.gemini_materials_api_keys (a fixed tier->key
+    mapping, not shared with gemini_api_key/the text calls) so all 3 run on
+    separate rate-limit quotas with zero contention - and, separately, its own
+    dedicated SerpApi key from settings.serpapi_materials_api_keys for the
+    same reason.
 
     user_room_area_sqft/user_wall_area_sqft come from an optional user-supplied
     Length x Width (x Height) measurement (see app/main.py's
@@ -164,52 +168,55 @@ def run_pipeline(
 
             tier_specs = {tier: build_tier_spec(tier, interior_style, color_palette) for tier in TIERS}
 
-            executor = None
-            materials_futures = None
-            if city:
-                # A real user-supplied measurement (see app/main.py's
-                # _compute_room_dimensions()) is AUTHORITATIVE and skips the
-                # Gemini vision guess entirely - estimate_room_area() only
-                # runs as a fallback when the user didn't supply one. Best-
-                # effort either way - see estimate_room_area()'s docstring
-                # for why this exists (without it, a per-sqft price found for
-                # e.g. flooring never actually got multiplied into a real
-                # total).
-                if user_room_area_sqft:
-                    room_area_sqft = user_room_area_sqft
-                else:
-                    try:
-                        with timer.stage("estimate_room_area"):
-                            room_area_sqft = provider.estimate_room_area(original_bytes)
-                    except Exception:
-                        logger.exception(
-                            "estimate_room_area failed for project %s; continuing without it", project_id
-                        )
-                        room_area_sqft = None
-
-                project.materials_status = "running"
-                session.add(project)
-                session.commit()
-
-                materials_keys = settings.gemini_materials_api_keys
-                executor = ThreadPoolExecutor(max_workers=3)
-                materials_futures = {
-                    tier: executor.submit(
-                        provider.generate_materials,
-                        tier,
-                        tier_specs[tier],
-                        room_description,
-                        city,
-                        materials_keys[tier],
-                        room_area_sqft,
-                        user_wall_area_sqft,
-                    )
-                    for tier in TIERS
-                }
+            # Materials/pricing now ALWAYS runs regardless of city (2026-09) -
+            # previously gated on `if city:` (an empty city meant "images-only,
+            # skip materials entirely"), removed because city-biased search
+            # never actually helped: Karachi specifically has too few real
+            # online local listings, so results came back from global sites
+            # (eBay etc.) whether or not a city was given. See
+            # gemini.py's generate_materials()/MATERIALS_PROMPT_TEMPLATE for
+            # the corresponding prompt/search changes. city is still accepted
+            # and stored (a direct API caller may still supply one) but is no
+            # longer required, and no longer gates whether this step runs.
+            #
+            # A real user-supplied measurement (see app/main.py's
+            # _compute_room_dimensions()) is AUTHORITATIVE and skips the
+            # Gemini vision guess entirely - estimate_room_area() only runs as
+            # a fallback when the user didn't supply one. Best-effort either
+            # way - see estimate_room_area()'s docstring for why this exists
+            # (without it, a per-sqft price found for e.g. flooring never
+            # actually got multiplied into a real total).
+            if user_room_area_sqft:
+                room_area_sqft = user_room_area_sqft
             else:
-                project.materials_status = "skipped"
-                session.add(project)
-                session.commit()
+                try:
+                    with timer.stage("estimate_room_area"):
+                        room_area_sqft = provider.estimate_room_area(original_bytes)
+                except Exception:
+                    logger.exception(
+                        "estimate_room_area failed for project %s; continuing without it", project_id
+                    )
+                    room_area_sqft = None
+
+            project.materials_status = "running"
+            session.add(project)
+            session.commit()
+
+            materials_keys = settings.gemini_materials_api_keys
+            executor = ThreadPoolExecutor(max_workers=3)
+            materials_futures = {
+                tier: executor.submit(
+                    provider.generate_materials,
+                    tier,
+                    tier_specs[tier],
+                    room_description,
+                    city,
+                    materials_keys[tier],
+                    room_area_sqft,
+                    user_wall_area_sqft,
+                )
+                for tier in TIERS
+            }
 
             # The 3 tiers' OpenAI image-edit calls are independent (no shared
             # state, no data dependency between them) but were previously run

@@ -637,8 +637,22 @@ def run_house_pipeline(
                     # build_house_elevation_prompt's docstring.
                     render_prompt = build_house_elevation_prompt(prompt)
                 backend_kwargs = {"preferred_backend": preferred_backend} if preferred_backend else {}
+                # Real, deterministic "did the user ask for a garage" signal
+                # (from their own requirements text) - passed structured so the
+                # elevation model includes a car porch only when requested and
+                # actively excludes one otherwise, instead of RealVisXL's
+                # default bias of putting a garage on any modern-luxury facade
+                # (real user report, 2026-09: a garage appeared that was never
+                # asked for). Computed from `prompt` (the composed requirements,
+                # always in scope as a function param) so it's safe even if the
+                # room-layout stage above failed. Same "structured data beats
+                # letting the model guess from text" pattern as floor_count.
                 render_bytes = provider.generate_house_render(
-                    plot_bytes, render_prompt, resolved_floors, **backend_kwargs
+                    plot_bytes,
+                    render_prompt,
+                    resolved_floors,
+                    wants_garage=mentions_garage(prompt or ""),
+                    **backend_kwargs,
                 )
                 render_key = f"{key_prefix}/{house_project_id}/render.png"
                 storage.put(render_key, render_bytes, content_type="image/png")

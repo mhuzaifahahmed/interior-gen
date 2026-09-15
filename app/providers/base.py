@@ -203,6 +203,7 @@ class Provider(ABC):
         prompt: str,
         floor_count: int | None = None,
         preferred_backend: str | None = None,
+        wants_garage: bool | None = None,
     ) -> bytes:
         """Render an exterior concept visualization per the prompt. Returns PNG
         bytes. NOT best-effort - mirrors generate_image()'s treatment in the
@@ -229,6 +230,19 @@ class Provider(ABC):
         future-plans/subscription-and-access-roadmap.md - same meaning as
         generate_image()'s docstring above, same "only HybridProvider acts on
         this" caveat.
+
+        wants_garage is the REAL, deterministic "did the user ask for a garage"
+        signal (app/pipeline/house_requirements.mentions_garage() over the
+        user's own requirements text) - passed as a structured flag rather than
+        hoping the model reads it out of the prompt, the same "give real data,
+        don't make the model guess" pattern as floor_count. The Kaggle
+        elevation model uses it to either include a car porch or ACTIVELY
+        exclude a garage/carport/driveway via its negative prompt (RealVisXL
+        otherwise biases toward putting a garage on any "modern luxury" house,
+        so a facade would show a garage nobody asked for). None means "no
+        signal" (backward-compatible - old callers/notebooks behave as before).
+        EDIT-style backends ignore it (build_house_prompt() already states the
+        program inline).
         """
         ...
 

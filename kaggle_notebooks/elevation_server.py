@@ -16,6 +16,7 @@
 #   POST /generate_elevation
 #     body: {"prompt": str,            # SHORT user exterior-features text (may be "")
 #            "floors": int (optional),  # 1..3 - structured story count
+#            "garage": bool (optional), # True -> include car porch; False -> exclude; omit -> no signal
 #            "plot_width": str (opt),   # e.g. "30ft" - context only
 #            "theme": str (optional),   # defaults to Modern Luxury Contemporary
 #            "seed": int (optional)}    # -1 / omitted -> random
@@ -81,10 +82,18 @@ print("Model ready.")
 
 # ---- 3. Prompt scaffolding (owned here, NOT in the app) ----
 DEFAULT_THEME = "Modern Luxury Contemporary"
+# Garage-NEUTRAL default features (real user report 2026-09: a garage appeared
+# in the render when none was asked for). A car porch is added ONLY when the
+# app's structured `garage` flag says so - see _build_prompt below.
 DEFAULT_FEATURES = (
-    "ground floor open car porch with a modern sedan, upper floor glass balcony, "
-    "vertical teak wood louvers, black aluminum window frames"
+    "upper floor glass balcony, vertical teak wood louvers, "
+    "black aluminum window frames, landscaped front entrance"
 )
+GARAGE_FEATURE = "ground floor open car porch with a modern sedan"
+# When the user did NOT ask for a garage, actively steer the model away from
+# one (RealVisXL otherwise biases toward putting a garage on any modern-luxury
+# facade - a positive-prompt omission alone doesn't stop it).
+NO_GARAGE_NEGATIVE = "garage, car porch, carport, driveway, parked car, vehicle, garage door"
 
 
 def _floor_rules(floors: int):
@@ -114,9 +123,18 @@ def _floor_rules(floors: int):
     )
 
 
-def _build_prompt(theme: str, plot_width: str, floors: int, features: str):
+def _build_prompt(theme: str, plot_width: str, floors: int, features: str, garage):
+    """garage: True -> include a car porch; False -> actively exclude one;
+    None -> no signal (old app/backward-compat), leave the model to decide."""
     floor_str, floor_neg, w, h = _floor_rules(floors)
     width_frag = f"{plot_width} plot frontage, " if plot_width else ""
+
+    # Compose the exterior features. When a garage IS requested, ensure a car
+    # porch is present even if the user's short features text didn't spell one
+    # out; when it's explicitly NOT requested, don't add one.
+    if garage is True and "porch" not in features.lower() and "garage" not in features.lower():
+        features = f"{features}, {GARAGE_FEATURE}" if features else GARAGE_FEATURE
+
     prompt = (
         "street photography, orthographic 2D direct front elevation view of a "
         f"{floor_str}, {width_frag}{theme} style, {features}. Direct eye-level "
@@ -134,6 +152,8 @@ def _build_prompt(theme: str, plot_width: str, floors: int, features: str):
         "bottom half, driveway taking over frame, blurry, CGI cartoon, 3d render "
         "sketch, oversaturated, text, labels, watermark"
     )
+    if garage is False:
+        negative_prompt = f"{NO_GARAGE_NEGATIVE}, {negative_prompt}"
     return prompt, negative_prompt, w, h
 
 
@@ -166,7 +186,8 @@ def _run_job(job_id: str, payload: dict):
         if seed == -1:
             seed = random.randint(0, 2147483647)
 
-        prompt, negative_prompt, w, h = _build_prompt(theme, plot_width, floors, features)
+        garage = payload.get("garage", None)  # True / False / None (no signal)
+        prompt, negative_prompt, w, h = _build_prompt(theme, plot_width, floors, features, garage)
 
         with _gpu_lock:
             generator = torch.Generator("cuda").manual_seed(seed)
@@ -203,6 +224,7 @@ class ElevationRequest(BaseModel):
     plot_width: str | None = None
     theme: str | None = None
     seed: int | None = -1
+    garage: bool | None = None  # True -> include car porch; False -> exclude; None -> no signal
 
 
 @app.get("/")
@@ -229,35 +251,82 @@ def elevation_status(job_id: str):
 
 
 # ---- 6. Public tunnel (Cloudflare quick tunnel, no account/token needed) ----
-def _start_cloudflared():
-    subprocess.run(
-        "wget -q -O cloudflared "
-        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 "
-        "&& chmod +x cloudflared",
-        shell=True,
-        check=False,
-    )
-    proc = subprocess.Popen(
-        ["./cloudflared", "tunnel", "--url", "http://localhost:8000", "--no-autoupdate"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    # cloudflared prints the public URL to its log within a few seconds.
-    for line in proc.stdout:
-        print(line, end="")
-        if "trycloudflare.com" in line:
-            # Keep the process alive; the URL is now visible above.
-            break
-    threading.Thread(target=lambda: [print(l, end="") for l in proc.stdout], daemon=True).start()
+#
+# IMPORTANT, real bug fixed here (2026-09): this used to start cloudflared and
+# scan for the URL on a background daemon thread. Jupyter/ipykernel only
+# reliably routes print() output into the cell's visible output when it comes
+# from the notebook's MAIN execution thread - prints issued from a spawned
+# thread frequently vanish (a well-documented ipykernel behavior, not a bug in
+# this script's logic). That's why the AutoCAD notebook's URL always showed up
+# and this one didn't: this was the one script in this repo doing tunnel
+# detection off-thread. Fixed by running cloudflared + URL detection
+# synchronously on the MAIN thread, with explicit flush=True and a loud
+# banner, before ever starting uvicorn.
+import re  # noqa: E402
 
+subprocess.run(
+    "wget -q -O cloudflared "
+    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 "
+    "&& chmod +x cloudflared",
+    shell=True,
+    check=False,
+)
 
-threading.Thread(target=_start_cloudflared, daemon=True).start()
-time.sleep(8)  # give cloudflared a moment to print the URL above
+_cf_proc = subprocess.Popen(
+    ["./cloudflared", "tunnel", "--url", "http://localhost:8000", "--no-autoupdate"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+    bufsize=1,
+)
+
+_TUNNEL_URL_RE = re.compile(r"https://[a-zA-Z0-9\-]+\.trycloudflare\.com")
+_tunnel_url = None
+_deadline = time.monotonic() + 30  # cloudflared normally prints the URL within a few seconds
+for _line in _cf_proc.stdout:
+    print(_line, end="", flush=True)
+    _match = _TUNNEL_URL_RE.search(_line)
+    if _match:
+        _tunnel_url = _match.group(0)
+        break
+    if time.monotonic() > _deadline:
+        print("WARNING: no trycloudflare.com URL seen within 30s - see raw log above.", flush=True)
+        break
+
+if _tunnel_url:
+    print(
+        "\n"
+        + "=" * 72
+        + f"\nPUBLIC URL: {_tunnel_url}\n"
+        + "Copy this into .env as KAGGLE_HOUSE_API_URL and restart your local server.\n"
+        + "=" * 72
+        + "\n",
+        flush=True,
+    )
+else:
+    print(
+        "\nERROR: could not detect a trycloudflare.com URL from cloudflared's output.\n"
+        "Check the raw log above for what went wrong (e.g. a download/network failure).\n",
+        flush=True,
+    )
+
+# Drain the rest of cloudflared's log on a background thread so its stdout
+# pipe never fills up and blocks the process - we don't need to print these
+# further lines (the URL is already shown above), just keep reading them.
+threading.Thread(target=lambda: [None for _ in _cf_proc.stdout], daemon=True).start()
 
 import nest_asyncio  # noqa: E402
 import uvicorn  # noqa: E402
+import asyncio  # noqa: E402
+
+# NOTE (2026-09): plain uvicorn.run() failed inside Kaggle's already-running
+# event loop (nest_asyncio patches the loop but uvicorn.run() still tries to
+# create/manage its own) - user found the real fix live: build the
+# Config/Server explicitly and drive it via asyncio.get_event_loop() so it
+# reuses the existing (nest_asyncio-patched) loop instead of fighting it.
+config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
+server = uvicorn.Server(config)
 
 nest_asyncio.apply()
-print("\nStarting server on :8000 - copy the trycloudflare.com URL above into .env as KAGGLE_HOUSE_API_URL\n")
-uvicorn.run(app, host="0.0.0.0", port=8000)
+print("Starting server on :8000 ...\n", flush=True)
+asyncio.get_event_loop().run_until_complete(server.serve())

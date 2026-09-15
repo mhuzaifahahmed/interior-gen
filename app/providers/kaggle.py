@@ -319,7 +319,11 @@ class KaggleImageProvider:
             # status == "running" (or any other in-progress value) - keep polling.
 
     def generate_house_render(
-        self, image_bytes: bytes | None, prompt: str, floor_count: int | None = None
+        self,
+        image_bytes: bytes | None,
+        prompt: str,
+        floor_count: int | None = None,
+        wants_garage: bool | None = None,
     ) -> bytes:
         """"Build a House" front-elevation render, via a SEPARATE Kaggle
         notebook/tunnel from room-redesign's (settings.kaggle_house_api_url,
@@ -364,6 +368,12 @@ class KaggleImageProvider:
         payload: dict = {"prompt": prompt or ""}
         if floor_count:
             payload["floors"] = floor_count
+        # Structured garage signal - the notebook uses it to include a car
+        # porch (True) or actively exclude a garage/carport/driveway via its
+        # negative prompt (False). Only sent when we actually have a signal;
+        # omitted when None so an un-updated notebook keeps its old behavior.
+        if wants_garage is not None:
+            payload["garage"] = bool(wants_garage)
 
         base_url = settings.kaggle_house_api_url
         try:

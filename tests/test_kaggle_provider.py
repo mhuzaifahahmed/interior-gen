@@ -405,6 +405,40 @@ def test_generate_house_render_omits_floors_when_not_given(monkeypatch):
     assert captured["payload"]["prompt"] == ""
 
 
+def test_generate_house_render_sends_structured_garage_flag(monkeypatch):
+    # Real user report (2026-09): a garage appeared in the render nobody asked
+    # for. The app now sends a deterministic garage bool so the notebook can
+    # include/exclude one instead of the model deciding on its own.
+    monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        kaggle_module.settings, "kaggle_house_api_url", "https://house-example.trycloudflare.com"
+    )
+    captured = {}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["payload"] = json
+        return FakeResponse(json_data={"status": "started", "job_id": "elev-g"})
+
+    def fake_get(url, timeout=None):
+        encoded = base64.b64encode(b"png").decode("ascii")
+        return FakeResponse(json_data={"status": "done", "generated_image_base64": encoded})
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+
+    provider = KaggleImageProvider()
+    provider.generate_house_render(None, "", wants_garage=False)
+    assert captured["payload"]["garage"] is False
+
+    provider.generate_house_render(None, "", wants_garage=True)
+    assert captured["payload"]["garage"] is True
+
+    # No signal (None) -> the key is omitted entirely, so an un-updated
+    # notebook keeps its old behavior.
+    provider.generate_house_render(None, "", wants_garage=None)
+    assert "garage" not in captured["payload"]
+
+
 def test_generate_house_render_raises_on_job_failed(monkeypatch):
     monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(

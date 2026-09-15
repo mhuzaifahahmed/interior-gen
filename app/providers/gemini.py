@@ -58,9 +58,20 @@ MATERIALS_GEMINI_FALLBACK_MODEL = "gemini-flash-latest"
 # ~13-14 generations/month on SerpApi's 250/month free tier (down from ~83) -
 # an explicit, accepted tradeoff (the user chose real-per-item coverage over
 # more generations/month after seeing most items come back as guesses).
+#
+# 2026-09: city/location REMOVED from both the search bias and the prompt's
+# currency instruction. Real, user-reported reason: Karachi specifically has
+# too few real online local listings for a location-biased search to actually
+# surface local results - real searches kept coming back from global sites
+# (eBay etc.) regardless of the city typed in, so the localization was pure
+# theater. generate_materials() no longer requires (or asks the user for) a
+# city at all; {location_block}/{currency_block} below are always blank in
+# practice now but the template stays parameterized rather than hardcoded to
+# "no location", in case a future caller ever has a genuinely useful location
+# to pass again.
 MATERIALS_PROMPT_TEMPLATE = (
-    "You are pricing renovation materials for a {tier_label} interior-renovation concept, "
-    "for a buyer located in {city}.\n\n"
+    "You are pricing renovation materials for a {tier_label} interior-renovation concept"
+    "{location_block}.\n\n"
     "{area_block}"
     "Price EXACTLY these items - do not add, skip, merge, or rename any of them:\n\n"
     "{items_block}\n\n"
@@ -90,15 +101,10 @@ MATERIALS_PROMPT_TEMPLATE = (
     "downlight, Rs. 800/fixture x 15 fixtures\"). Feature wall and Decor ARE priced as a single "
     "piece/set with NO multiplication - those genuinely are one purchase regardless of room "
     "size, unlike Lighting.\n\n"
-    "IMPORTANT - currency: always express every price (and the total) in the LOCAL currency "
-    "actually used in {city} (e.g. PKR for Pakistan, INR for India, USD for the United States) - "
-    "never a different country's currency, even if a source result quotes one. If a real "
-    "source's price is in a different currency, convert it to {city}'s local currency using your "
-    "best knowledge of exchange rates and state the converted amount - this does NOT make it an "
-    "estimate (is_estimate still reflects whether a real reference price was found, not whether a "
-    "currency conversion was applied). Also compute a rough total across all items as a plain "
-    "string, in that same local currency - this total must be the sum of each item's ALREADY-"
-    "multiplied price, not a sum of any bare per-unit rates.\n\n"
+    "{currency_block}"
+    "Also compute a rough total across all items as a plain string, in that same currency - this "
+    "total must be the sum of each item's ALREADY-multiplied price, not a sum of any bare "
+    "per-unit rates.\n\n"
     'Respond with ONLY raw JSON, no markdown fences, in this exact shape: '
     '{{"items": [{{"name": "...", "spec": "...", "price": "...", "currency": "...", '
     '"source_url": "https://... or null", "is_estimate": false}}], '
@@ -312,13 +318,18 @@ class GeminiProvider(Provider):
         return None
 
     def generate_house_render(
-        self, image_bytes: bytes, prompt: str, floor_count: int | None = None
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        floor_count: int | None = None,
+        wants_garage: bool | None = None,
     ) -> bytes:
         # Reuses Gemini's own (dormant in the composition root, but real and
         # working) instruction-based image editing - same call shape as
         # generate_image() above, just under the house feature's own method
         # name so its parameters never get tangled with room-redesign's tier
-        # semantics. floor_count ignored (interface parity - edit backend).
+        # semantics. floor_count/wants_garage ignored (interface parity - edit
+        # backend, states the program in the prompt).
         return self.generate_image(image_bytes, prompt)
 
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
@@ -348,6 +359,19 @@ class GeminiProvider(Provider):
     ) -> dict:
         line_items = _tier_line_items(tier_spec)
 
+        # City is optional and, as of 2026-09, no longer biases the search at
+        # all (see the module docstring above _tier_line_items/
+        # MATERIALS_PROMPT_TEMPLATE for why) - it's only ever used, when given,
+        # to phrase the query text itself. A blank/None city means a plain,
+        # unlocalized query - not an error, not a degraded path.
+        city_suffix = f" in {city}" if city else ""
+
+        # Each tier gets its own dedicated SerpApi key (mirrors
+        # gemini_materials_api_keys' per-tier Gemini keys) so 3 concurrently-
+        # running tiers never contend for one shared SerpApi quota - see
+        # app/config.py's serpapi_materials_api_keys.
+        serpapi_key = settings.serpapi_materials_api_keys.get(tier)
+
         # One dedicated SerpApi search per item (not one combined search) - see
         # the module docstring for why. A failed individual search isn't fatal -
         # that one item just can't be marked is_estimate=false, the rest of the
@@ -355,9 +379,9 @@ class GeminiProvider(Provider):
         item_results: dict[str, list[dict]] = {}
         for name, spec in line_items:
             try:
-                item_results[name] = serpapi.search(f"price of {spec} in {city}", location=city)
+                item_results[name] = serpapi.search(f"price of {spec}{city_suffix}", api_key=serpapi_key)
             except Exception:
-                logger.exception("materials search failed for item %s, tier %s in %s", name, tier, city)
+                logger.exception("materials search failed for item %s, tier %s", name, tier)
                 item_results[name] = []
 
         # Real bug this fixes: without a known area, a found per-sqft price
@@ -401,10 +425,32 @@ class GeminiProvider(Provider):
                 "its spec field before applying its own multiplication rule below.\n\n"
             )
 
+        location_block = f", for a buyer located in {city}" if city else ""
+        if city:
+            currency_block = (
+                f"IMPORTANT - currency: always express every price (and the total) in the LOCAL "
+                f"currency actually used in {city} (e.g. PKR for Pakistan, INR for India, USD for "
+                "the United States) - never a different country's currency, even if a source "
+                f"result quotes one. If a real source's price is in a different currency, convert "
+                f"it to {city}'s local currency using your best knowledge of exchange rates and "
+                "state the converted amount - this does NOT make it an estimate (is_estimate still "
+                "reflects whether a real reference price was found, not whether a currency "
+                "conversion was applied).\n\n"
+            )
+        else:
+            currency_block = (
+                "IMPORTANT - currency: express every price (and the total) in USD, unless a "
+                "specific item's own real search result quotes a different currency, in which "
+                "case report that price in the source's own original currency as found - do not "
+                "force-convert it. Every item's currency field should reflect whichever currency "
+                "its own price is actually expressed in.\n\n"
+            )
+
         prompt = MATERIALS_PROMPT_TEMPLATE.format(
             tier_label=tier_spec.get("label", tier),
-            city=city,
+            location_block=location_block,
             area_block=area_block,
+            currency_block=currency_block,
             items_block=_format_line_items_with_results(line_items, item_results),
         )
 
@@ -416,7 +462,7 @@ class GeminiProvider(Provider):
                 all_real_results = [r for results in item_results.values() for r in results]
                 return _sanitize_source_urls(parsed, all_real_results)
         except Exception:
-            logger.exception("generate_materials failed for tier %s in %s", tier, city)
+            logger.exception("generate_materials failed for tier %s", tier)
 
         return fallback_materials(tier_spec, city)
 
@@ -815,7 +861,7 @@ def _enforce_floor_count(parsed: dict, explicit_floor_count: int | None) -> dict
     return {"floors": floors}
 
 
-def fallback_materials(tier_spec: dict[str, str], city: str) -> dict:
+def fallback_materials(tier_spec: dict[str, str], city: str | None) -> dict:
     """Never-empty materials fallback for when the Gemini call itself fails
     entirely (network/auth/quota/timeout - a harder failure than "couldn't
     find a price for one item", which generate_materials's prompt already
@@ -823,6 +869,9 @@ def fallback_materials(tier_spec: dict[str, str], city: str) -> dict:
     fixed item list as generate_materials (_tier_line_items), each flagged as
     an estimate with a search-URL that's guaranteed to resolve (unlike a
     guessed product link), so the UI never renders a blank price or a dead link.
+
+    city is optional (2026-09) - when blank/None, the search-URL query just
+    omits it rather than leaving a dangling "price " with nothing after it.
     """
     items = [
         {
@@ -830,7 +879,10 @@ def fallback_materials(tier_spec: dict[str, str], city: str) -> dict:
             "spec": spec,
             "price": "Estimate unavailable",
             "currency": "",
-            "source_url": f"https://www.google.com/search?q={urllib.parse.quote(f'{name} {spec} price {city}')}",
+            "source_url": (
+                "https://www.google.com/search?q="
+                + urllib.parse.quote(f"{name} {spec} price" + (f" {city}" if city else ""))
+            ),
             "is_estimate": True,
         }
         for name, spec in _tier_line_items(tier_spec)

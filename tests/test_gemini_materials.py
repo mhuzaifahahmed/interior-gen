@@ -193,7 +193,7 @@ def test_generate_materials_uses_search_results_when_client_succeeds(monkeypatch
     monkeypatch.setattr(
         gemini_module.serpapi,
         "search",
-        lambda query, location=None: [
+        lambda query, location=None, api_key=None: [
             {"title": "Paint Shop", "snippet": "$40/gal", "link": "https://real.com/paint"}
         ],
     )
@@ -227,7 +227,7 @@ def test_generate_materials_states_area_in_prompt_when_provided(monkeypatch):
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
 
     provider = GeminiProvider()
     provider.generate_materials(
@@ -256,7 +256,7 @@ def test_generate_materials_states_wall_area_in_prompt_when_provided(monkeypatch
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
 
     provider = GeminiProvider()
     provider.generate_materials(
@@ -288,7 +288,7 @@ def test_generate_materials_asks_for_an_assumption_when_area_unknown(monkeypatch
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
 
     provider = GeminiProvider()
     provider.generate_materials("economical", {"label": "x", "flooring": "tile"}, None, "Karachi")
@@ -323,7 +323,7 @@ def test_generate_materials_states_fixture_count_in_prompt_when_area_known(monke
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
 
     provider = GeminiProvider()
     provider.generate_materials(
@@ -349,7 +349,7 @@ def test_generate_materials_asks_for_a_fixture_assumption_when_area_unknown(monk
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
 
     provider = GeminiProvider()
     provider.generate_materials("economical", {"label": "x", "lighting_temp": "warm"}, None, "Karachi")
@@ -424,7 +424,7 @@ def test_generate_materials_searches_once_per_item_not_once_per_tier(monkeypatch
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
 
-    def fake_search(query, location=None):
+    def fake_search(query, location=None, api_key=None):
         search_calls.append(query)
         return []
 
@@ -446,14 +446,16 @@ def test_generate_materials_searches_once_per_item_not_once_per_tier(monkeypatch
     assert len(search_calls) == 5
 
 
-def test_generate_materials_passes_city_as_search_location(monkeypatch):
-    # Regression guard for a real bug: without geo-biasing the search, results
-    # skewed toward global/US retailers (Home Depot, Alibaba) instead of local
-    # sellers, so prices came back in USD instead of the local currency.
+def test_generate_materials_no_longer_biases_search_by_location(monkeypatch):
+    # Location-biased search was removed (2026-09): Karachi in particular has
+    # too few real online local listings, so biasing by city was never
+    # actually returning local results anyway - real searches came back from
+    # global sites (eBay etc.) regardless. generate_materials must not pass a
+    # location to serpapi.search at all any more, for any city value.
     captured = {}
 
     class FakeResponse:
-        text = '{"items": [{"name": "Paint", "price": "PKR 4000"}], "total": "PKR 4000"}'
+        text = '{"items": [{"name": "Paint", "price": "$40"}], "total": "$40"}'
 
     class FakeModels:
         def generate_content(self, model, contents):
@@ -465,7 +467,7 @@ def test_generate_materials_passes_city_as_search_location(monkeypatch):
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
 
-    def fake_search(query, location=None):
+    def fake_search(query, location=None, api_key=None):
         captured["location"] = location
         return []
 
@@ -474,7 +476,43 @@ def test_generate_materials_passes_city_as_search_location(monkeypatch):
     provider = GeminiProvider()
     provider.generate_materials("premium", {"label": "x", "paint": "marble"}, None, "Karachi")
 
-    assert captured["location"] == "Karachi"
+    assert captured["location"] is None
+
+
+def test_generate_materials_passes_the_tier_dedicated_serpapi_key(monkeypatch):
+    # Each tier now gets its own dedicated SerpApi key (mirrors the existing
+    # per-tier Gemini materials keys) so 3 concurrent tiers never contend for
+    # one shared SerpApi quota.
+    captured = {}
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Paint", "price": "$40"}], "total": "$40"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    def fake_search(query, location=None, api_key=None):
+        captured["api_key"] = api_key
+        return []
+
+    monkeypatch.setattr(gemini_module.serpapi, "search", fake_search)
+    # serpapi_materials_api_keys is a read-only property derived from these 3
+    # fields (see app/config.py) - patch the underlying fields, not the property.
+    monkeypatch.setattr(gemini_module.settings, "serpapi_api_key", "econ-key")
+    monkeypatch.setattr(gemini_module.settings, "serpapi_api_key_2", "mid-key")
+    monkeypatch.setattr(gemini_module.settings, "serpapi_api_key_3", "premium-key")
+
+    provider = GeminiProvider()
+    provider.generate_materials("premium", {"label": "x", "paint": "marble"}, None, "")
+
+    assert captured["api_key"] == "premium-key"
 
 
 def test_generate_materials_still_works_when_search_itself_fails(monkeypatch):
@@ -494,7 +532,7 @@ def test_generate_materials_still_works_when_search_itself_fails(monkeypatch):
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
 
-    def failing_search(query, location=None):
+    def failing_search(query, location=None, api_key=None):
         raise RuntimeError("SerpApi quota exceeded")
 
     monkeypatch.setattr(gemini_module.serpapi, "search", failing_search)
@@ -514,7 +552,7 @@ def test_generate_materials_falls_back_when_client_raises(monkeypatch):
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
 
     provider = GeminiProvider()
     tier_spec = {
@@ -548,7 +586,7 @@ def test_generate_materials_uses_distinct_client_per_api_key(monkeypatch):
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
     monkeypatch.setattr(gemini_module.settings, "gemini_api_key", "default-key")
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
 
     provider = GeminiProvider()
     provider.generate_materials("economical", {"label": "x"}, None, "Karachi", api_key="default-key")
@@ -583,7 +621,7 @@ def test_generate_materials_retries_on_transient_server_error(monkeypatch):
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
     monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
 
     provider = GeminiProvider()
@@ -604,7 +642,7 @@ def test_generate_materials_falls_back_after_exhausting_retries(monkeypatch):
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
     monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
 
     provider = GeminiProvider()
@@ -640,7 +678,7 @@ def test_generate_materials_uses_fallback_model_after_primary_exhausts_retries(m
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
     monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
 
     provider = GeminiProvider()
@@ -677,7 +715,7 @@ def test_generate_materials_retries_on_rate_limit_error(monkeypatch):
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
     monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
 
     provider = GeminiProvider()
@@ -706,7 +744,7 @@ def test_generate_materials_uses_fallback_model_after_rate_limit_exhausts_retrie
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
     monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
 
     provider = GeminiProvider()
@@ -735,7 +773,7 @@ def test_generate_materials_does_not_retry_non_rate_limit_client_errors(monkeypa
             self.models = FakeModels()
 
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None: [])
+    monkeypatch.setattr(gemini_module.serpapi, "search", lambda query, location=None, api_key=None: [])
     monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
 
     provider = GeminiProvider()

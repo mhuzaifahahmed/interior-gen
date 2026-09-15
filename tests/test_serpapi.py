@@ -66,6 +66,87 @@ def test_search_includes_location_when_given(monkeypatch):
     assert captured["params"]["location"] == "Karachi"
 
 
+def test_search_with_explicit_api_key_uses_it_directly_when_it_works(monkeypatch):
+    # 2026-09: gemini.py passes each tier's own dedicated SerpApi key here -
+    # the normal case (that key has quota left) must use EXACTLY that key,
+    # a single call, never touching the shared settings.serpapi_api_keys pool
+    # at all - that's the whole point of dedicating a key per tier.
+    captured = {"calls": []}
+
+    def fake_get(url, params=None, timeout=None):
+        captured["calls"].append(params["api_key"])
+        return FakeResponse({"search_metadata": {"status": "Success"}, "organic_results": []})
+
+    monkeypatch.setattr(serpapi_module.httpx, "get", fake_get)
+    # A different key is configured in the shared pool - must never be tried.
+    monkeypatch.setattr(serpapi_module.settings, "serpapi_api_key", "pool-key")
+
+    search("tile price", api_key="tier-dedicated-key")
+
+    assert captured["calls"] == ["tier-dedicated-key"]
+
+
+def test_search_with_explicit_api_key_falls_back_to_another_key_on_quota_exhaustion(monkeypatch):
+    # Real gap this closes: a tier's own dedicated key can run out of its
+    # 250/month quota mid-generation. Without a fallback, that tier would get
+    # ZERO real search coverage (every item degrading to a Gemini guess) for
+    # the rest of the month. A quota-exhausted dedicated key must now borrow
+    # another configured key rather than immediately giving up.
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append(params["api_key"])
+        if params["api_key"] == "exhausted-dedicated-key":
+            return FakeResponse({"search_metadata": {"status": "Error"}, "error": "You have run out of searches"})
+        return FakeResponse(
+            {
+                "search_metadata": {"status": "Success"},
+                "organic_results": [{"title": "Tile", "link": "https://example.com/tile", "snippet": "..."}],
+            }
+        )
+
+    monkeypatch.setattr(serpapi_module.httpx, "get", fake_get)
+    monkeypatch.setattr(serpapi_module.settings, "serpapi_api_key", "exhausted-dedicated-key")
+    monkeypatch.setattr(serpapi_module.settings, "serpapi_api_key_2", "backup-key")
+
+    results = search("tile price", api_key="exhausted-dedicated-key")
+
+    assert calls == ["exhausted-dedicated-key", "backup-key"]
+    assert results[0]["title"] == "Tile"
+
+
+def test_search_with_explicit_api_key_raises_when_every_key_is_exhausted(monkeypatch):
+    def fake_get(url, params=None, timeout=None):
+        return FakeResponse({"search_metadata": {"status": "Error"}, "error": "You have run out of searches"})
+
+    monkeypatch.setattr(serpapi_module.httpx, "get", fake_get)
+    monkeypatch.setattr(serpapi_module.settings, "serpapi_api_key", "key-1")
+    monkeypatch.setattr(serpapi_module.settings, "serpapi_api_key_2", "key-2")
+
+    with pytest.raises(serpapi_module._QuotaExhaustedError):
+        search("tile price", api_key="key-1")
+
+
+def test_search_with_explicit_api_key_does_not_fall_back_on_a_non_quota_error(monkeypatch):
+    # A bad key entirely / network error / malformed query isn't fixed by
+    # trying a different key - must raise immediately, not burn 3 more doomed
+    # requests against every other configured key.
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append(params["api_key"])
+        return FakeResponse({"search_metadata": {"status": "Error"}, "error": "Invalid API key"})
+
+    monkeypatch.setattr(serpapi_module.httpx, "get", fake_get)
+    monkeypatch.setattr(serpapi_module.settings, "serpapi_api_key", "bad-key")
+    monkeypatch.setattr(serpapi_module.settings, "serpapi_api_key_2", "other-key")
+
+    with pytest.raises(RuntimeError):
+        search("tile price", api_key="bad-key")
+
+    assert calls == ["bad-key"]  # never touched the other configured key
+
+
 def test_search_parses_organic_results(monkeypatch):
     def fake_get(url, params=None, timeout=None):
         return FakeResponse(

@@ -125,9 +125,10 @@ def test_full_upload_and_poll_flow(monkeypatch):
         for tier in ("economical", "mid", "premium"):
             assert f"users/{username}/roomRedesign/output/" in body["images"][tier]
 
-        # No city was submitted - images-only path, no materials/pricing calls.
-        assert body["materials_status"] == "skipped"
-        assert body["materials"] is None
+        # No city was submitted - materials/pricing still runs (2026-09: city no
+        # longer gates this, see CLAUDE.md/app/pipeline/generate.py).
+        assert body["materials_status"] == "done"
+        assert body["materials"] is not None
 
 
 def test_anonymous_user_gets_one_free_room_trial_generation(monkeypatch):

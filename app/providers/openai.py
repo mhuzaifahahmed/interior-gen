@@ -63,11 +63,16 @@ class OpenAIImageProvider:
         return self._edit_image(image_bytes, prompt, input_fidelity)
 
     def generate_house_render(
-        self, image_bytes: bytes, prompt: str, floor_count: int | None = None
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        floor_count: int | None = None,
+        wants_garage: bool | None = None,
     ) -> bytes:
-        # floor_count is ignored here - this is an image-EDIT backend, and
-        # build_house_prompt() already states the exact story count inside the
-        # prompt text (the structured field only matters to the Kaggle
+        # floor_count and wants_garage are ignored here - this is an image-EDIT
+        # backend, and build_house_prompt() already states the exact story count
+        # and full room program (garage included, when requested) inside the
+        # prompt text (those structured fields only matter to the Kaggle
         # text-to-image elevation model). Accepted for interface parity.
         # Shares the exact request shape with generate_image() via _edit_image -
         # kept as its own public method (not just calling generate_image

@@ -154,7 +154,6 @@ const removePhotoBtn = document.getElementById("remove-photo-btn");
 const interiorStyleSelect = document.getElementById("interior-style-select");
 const colorPaletteSelect = document.getElementById("color-palette-select");
 const additionalInstructionsInput = document.getElementById("additional-instructions");
-const cityInput = document.getElementById("city-input");
 const roomLengthInput = document.getElementById("room-length");
 const roomWidthInput = document.getElementById("room-width");
 const roomHeightInput = document.getElementById("room-height");
@@ -178,6 +177,7 @@ const quotaBackBtn = document.getElementById("quota-back-btn");
 const resultsSection = document.getElementById("results");
 const roomDescriptionEl = document.getElementById("room-description");
 const imageModelNoteEl = document.getElementById("image-model-note");
+const planStatusNoteEl = document.getElementById("plan-status-note");
 const resultsGrid = document.getElementById("results-grid");
 const startOverBtn = document.getElementById("start-over-btn");
 
@@ -359,6 +359,25 @@ function formatRemaining(remaining, quota) {
   return `${remaining} of ${quota} left`;
 }
 
+const PLAN_DISPLAY_LABELS = { free: "Free", pro: "Pro", studio: "Studio" };
+
+// Shows which subscription plan the user is currently on, right next to the
+// generated output (not just pre-generation, where roomQuotaNote already
+// covers it) - re-fetches rather than trusting a possibly-stale
+// cachedPlanStatus, since results can render on a fresh page load (e.g. after
+// a reconnect - see "Resilient loading" in CLAUDE.md) where nothing else has
+// populated it yet. Hidden entirely for an anonymous/pre-login-trial
+// generation - there's no "plan" to show for a request that used no account.
+async function applyPlanStatusNote(el) {
+  const status = await fetchPlanStatus();
+  if (!status) {
+    el.hidden = true;
+    return;
+  }
+  el.textContent = `${PLAN_DISPLAY_LABELS[status.plan] || status.plan} plan`;
+  el.hidden = false;
+}
+
 function setModelToggleValue(groupEl, selectEl, value) {
   selectEl.value = value;
   groupEl.querySelectorAll(".model-toggle-btn").forEach((btn) => {
@@ -426,7 +445,10 @@ async function applyRoomPlanUI() {
 
 // Pricing tab: marks whichever plan the logged-in user is actually on as
 // "Current plan" (disabled) instead of an actionable Upgrade button. Free's
-// card has no dynamic state - see its static markup in index.html.
+// card itself has no dynamic state (see its static markup in index.html),
+// but its "Want more? Upgrade to Pro" nudge button is hidden once the user
+// has already moved past Free - no point nudging a Pro/Studio user toward a
+// plan they already have or have surpassed.
 async function applyPricingUI() {
   const Clerk = await clerkReady;
   const status = Clerk.user ? await fetchPlanStatus() : null;
@@ -440,6 +462,10 @@ async function applyPricingUI() {
     btn.disabled = isCurrent;
     btn.textContent = isCurrent ? "Current plan" : `Upgrade to ${plan === "studio" ? "Studio" : "Pro"}`;
   });
+  const freeUpgradeNudge = document.querySelector('.pricing-card[data-plan="free"] [data-plan="pro"]');
+  if (freeUpgradeNudge) {
+    freeUpgradeNudge.hidden = currentPlan === "pro" || currentPlan === "studio";
+  }
 }
 
 quotaViewPricingBtn?.addEventListener("click", () => {
@@ -815,6 +841,7 @@ const houseRetryBtn = document.getElementById("house-retry-btn");
 const houseResultsSection = document.getElementById("house-results");
 const plotDescriptionEl = document.getElementById("plot-description");
 const houseImageModelNoteEl = document.getElementById("house-image-model-note");
+const housePlanStatusNoteEl = document.getElementById("house-plan-status-note");
 const houseFeasibilityBannerEl = document.getElementById("house-feasibility-banner");
 const houseResultsGrid = document.getElementById("house-results-grid");
 const houseStartOverBtn = document.getElementById("house-start-over-btn");
@@ -1065,7 +1092,6 @@ async function restorePendingGeneration() {
     interiorStyleDropdown.setValue(pending.interiorStyle || "");
     colorPaletteDropdown.setValue(pending.colorPalette || "");
     additionalInstructionsInput.value = pending.additionalInstructions || "";
-    cityInput.value = pending.city || "";
     roomLengthInput.value = pending.roomLength || "";
     roomWidthInput.value = pending.roomWidth || "";
     roomHeightInput.value = pending.roomHeight || "";
@@ -1081,6 +1107,13 @@ async function restorePendingGeneration() {
     houseBathroomsDropdown.setValue(pending.bathrooms || "2");
     houseFacingDropdown.setValue(pending.facing || "");
     houseExtrasInput.value = pending.extras || "";
+    // Real bug fixed here: setting .value directly does NOT fire the
+    // "input" event updateHouseGenerateBtnState() listens for (unlike a
+    // real keystroke), so after a post-login restore the button stayed
+    // disabled even with both required fields filled in. The room branch
+    // above already calls its own equivalent (updateGenerateButtonState())
+    // - this was the missing counterpart for the house tab.
+    updateHouseGenerateBtnState();
   }
 
   if (!pending.fileDataUrl) return;
@@ -1351,18 +1384,11 @@ dropzone.addEventListener("drop", (e) => {
   if (file) setSelectedFile(file);
 });
 
-/* ---------- City persistence ---------- */
-/* City is asked once and remembered (localStorage) so returning users don't have to
-   retype it every time - the field only shows a placeholder ("e.g. Karachi") the very
-   first time; after that it stays filled with whatever was last entered/confirmed,
-   until the user changes it themselves. */
-
-const CITY_STORAGE_KEY = "interior-gen:city";
-
-const savedCity = localStorage.getItem(CITY_STORAGE_KEY);
-if (savedCity) cityInput.value = savedCity;
-
 /* ---------- Submit ---------- */
+// City is no longer asked for at all (2026-09) - materials/pricing now always
+// runs regardless (see CLAUDE.md/app/pipeline/generate.py): a location-biased
+// search never actually helped, since Karachi in particular has too few real
+// online local listings for it to surface local results anyway.
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1370,18 +1396,6 @@ form.addEventListener("submit", async (e) => {
   // form submits via Enter-key implicit submission even while the button itself
   // is disabled (browser behavior here is inconsistent).
   if (!selectedFile || !interiorStyleSelect.value || !colorPaletteSelect.value) return;
-
-  const city = cityInput.value.trim();
-
-  if (!city) {
-    const proceedWithoutCity = confirm(
-      "Without a location, pricing and local material info won't be available - only the " +
-        "three redesign images will be generated. Continue without a location?"
-    );
-    if (!proceedWithoutCity) return;
-  } else {
-    localStorage.setItem(CITY_STORAGE_KEY, city);
-  }
 
   generateBtn.disabled = true; // belt-and-suspenders against double-submit;
   // showState("progress") below already hides the whole upload view (button
@@ -1395,7 +1409,6 @@ form.addEventListener("submit", async (e) => {
   formData.append("interior_style", interiorStyleSelect.value);
   formData.append("color_palette", colorPaletteSelect.value);
   formData.append("additional_instructions", additionalInstructionsInput.value.trim());
-  formData.append("city", city);
   formData.append("display_name", await currentUserDisplayName());
   // Optional room measurements - improves material-cost accuracy when given;
   // left blank, the backend falls back to its existing Gemini-vision area
@@ -1420,7 +1433,6 @@ form.addEventListener("submit", async (e) => {
         interiorStyle: interiorStyleSelect.value,
         colorPalette: colorPaletteSelect.value,
         additionalInstructions: additionalInstructionsInput.value,
-        city: cityInput.value,
         roomLength: roomLengthInput.value,
         roomWidth: roomWidthInput.value,
         roomHeight: roomHeightInput.value,
@@ -1963,6 +1975,7 @@ function renderResults(data) {
   } else {
     imageModelNoteEl.hidden = true;
   }
+  applyPlanStatusNote(planStatusNoteEl);
   resultsGrid.innerHTML = "";
 
   for (const tier of TIERS) {
@@ -2101,7 +2114,10 @@ function closeJazzCashModal() {
 document.querySelectorAll(".pricing-cta").forEach((btn) => {
   btn.addEventListener("click", () => {
     if (btn.disabled) return;
-    const plan = btn.closest(".pricing-card")?.dataset.plan;
+    // A button's own data-plan (e.g. the Free card's "Upgrade to Pro" nudge,
+    // which targets a DIFFERENT plan than the card it sits in) wins over the
+    // card's plan, so one card can still link out to another plan's modal.
+    const plan = btn.dataset.plan || btn.closest(".pricing-card")?.dataset.plan;
     if (plan === "pro" || plan === "studio") openJazzCashModal(plan);
   });
 });
@@ -2233,10 +2249,17 @@ houseRemovePhotoBtn.addEventListener("click", (e) => {
   clearHouseSelectedFile();
 });
 
+// Photo upload is temporarily disabled site-wide for this dropzone (see its
+// "Coming Soon" badge in index.html) - the file input's own `disabled`
+// attribute already blocks click/label activation, but drag-and-drop
+// dispatches straight to this element regardless of that attribute, so it
+// needs its own explicit guard here rather than relying on the input alone.
+const HOUSE_PHOTO_UPLOAD_ENABLED = false;
+
 ["dragenter", "dragover"].forEach((evt) =>
   houseDropzone.addEventListener(evt, (e) => {
     e.preventDefault();
-    houseDropzone.classList.add("is-dragover");
+    if (HOUSE_PHOTO_UPLOAD_ENABLED) houseDropzone.classList.add("is-dragover");
   })
 );
 
@@ -2248,6 +2271,7 @@ houseRemovePhotoBtn.addEventListener("click", (e) => {
 );
 
 houseDropzone.addEventListener("drop", (e) => {
+  if (!HOUSE_PHOTO_UPLOAD_ENABLED) return;
   const file = e.dataTransfer.files[0];
   if (file) setHouseSelectedFile(file);
 });
@@ -2577,6 +2601,7 @@ function renderHouseResults(data) {
   } else {
     houseImageModelNoteEl.hidden = true;
   }
+  applyPlanStatusNote(housePlanStatusNoteEl);
   renderHouseFeasibilityBanner(data.feasibility);
   houseResultsGrid.innerHTML = "";
 

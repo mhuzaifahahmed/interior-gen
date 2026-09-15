@@ -377,9 +377,10 @@ def test_run_pipeline_marks_failed_on_provider_error(monkeypatch):
         assert "quota exceeded" in project.error
 
 
-def test_run_pipeline_without_city_skips_materials(monkeypatch):
-    # No city => images-only path: materials_status must be "skipped" and
-    # generate_materials must NEVER be called (no Gemini price calls at all).
+def test_run_pipeline_without_city_still_runs_materials(monkeypatch):
+    # 2026-09: an empty/omitted city no longer skips materials - city-biased
+    # search never actually helped (Karachi has too few real online local
+    # listings), so materials pricing now always runs regardless of city.
     engine = make_test_engine()
     monkeypatch.setattr(generate_module, "engine", engine)
 
@@ -394,13 +395,15 @@ def test_run_pipeline_without_city_skips_materials(monkeypatch):
     provider = FakeProvider()
     run_pipeline("p4", provider, storage, "Modern", "Neutral")  # city defaults to None
 
-    assert provider.materials_calls == []
+    called_tiers = {tier for tier, _, _, _, _ in provider.materials_calls}
+    assert called_tiers == set(TIERS)
+    assert all(city is None for _, city, _, _, _ in provider.materials_calls)
 
     with Session(engine) as session:
         project = session.get(Project, "p4")
         assert project.status == "done"
-        assert project.materials_status == "skipped"
-        assert project.materials_json is None
+        assert project.materials_status == "done"
+        assert project.materials_json is not None
 
 
 def test_run_pipeline_with_city_runs_materials_for_every_tier(monkeypatch):

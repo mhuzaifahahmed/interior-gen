@@ -36,27 +36,63 @@ _active_key_index = 0
 _active_key_lock = threading.Lock()
 
 
-def search(query: str, location: str | None = None) -> list[dict]:
+def search(query: str, location: str | None = None, api_key: str | None = None) -> list[dict]:
     """Run one real Google search via SerpApi and return organic results as
     [{"title", "link", "snippet"}]. Raises on any failure (network, bad key,
-    quota exhausted on every configured key) - callers must catch this and
-    fall back, same contract as every other best-effort external call in
-    this codebase.
+    quota exhausted) - callers must catch this and fall back, same contract
+    as every other best-effort external call in this codebase.
 
-    If settings.serpapi_api_key_2 is configured and the currently-active key
-    turns out to be out of credits, automatically retries this SAME search
-    against the next configured key before giving up - see
-    _QuotaExhaustedError/_active_key_index above for how that's detected and
-    remembered across calls. With no second key configured, behavior is
-    identical to before this existed (single key, no retry-on-quota).
+    api_key, when given (2026-09: gemini.py's generate_materials passes each
+    tier's own dedicated key here - settings.serpapi_materials_api_keys), is
+    tried FIRST. The normal case (that key has quota left) is a single direct
+    call with no round-robin overhead at all - each tier stays on its own key,
+    no cross-tier contention. But if that SPECIFIC key turns out to be out of
+    credits (_QuotaExhaustedError - a real, narrow, detectable signal, not any
+    generic failure), this now falls back through every OTHER configured key
+    (settings.serpapi_api_keys, skipping api_key itself) before giving up -
+    so one tier's key running dry mid-month degrades to "borrowing another
+    tier's key for the rest of this search" rather than "this tier gets zero
+    real search coverage until someone notices and fixes it." A GENERIC
+    failure (bad key entirely, network error, malformed query) does NOT
+    trigger this fallback - a different key can't fix a network error or a
+    bad query, so there's nothing to gain by retrying one, and the original
+    failure surfaces immediately/cleanly instead of being obscured by 3 more
+    doomed attempts.
 
-    location biases results toward that geographic area (SerpApi's `location`
-    param, same field shown in their playground UI) - without it, results skew
-    toward whatever global/US retailers rank highest for the query text alone,
-    which is what caused a real observed bug: prices for a Karachi search came
-    back in USD from Home Depot/Alibaba instead of local PKR listings.
+    With api_key omitted (None) - e.g. any caller that hasn't been updated to
+    pass a per-tier key - falls back to the ORIGINAL shared-key-pool behavior:
+    tries settings.serpapi_api_keys in order, automatically advancing to the
+    next configured key if the current one turns out to be out of credits
+    (see _QuotaExhaustedError/_active_key_index above). With only one key
+    configured this is a no-op single call, same as before that pool existed.
+
+    location used to bias results toward a geographic area (SerpApi's
+    `location` param) - REMOVED (2026-09): for Karachi specifically there
+    simply aren't enough real online local listings, so biasing by city was
+    never actually surfacing local results anyway - real searches came back
+    from global sites (eBay etc.) regardless of the location bias. This
+    parameter is kept (always None from every current caller) only so an
+    old positional/keyword call site doesn't immediately break; it's not
+    forwarded to SerpApi's request at all any more - see _search_with_key.
     """
     global _active_key_index
+
+    if api_key:
+        try:
+            return _search_with_key(query, api_key, location)
+        except _QuotaExhaustedError as exc:
+            last_exc: Exception = exc
+            fallback_keys = [k for k in settings.serpapi_api_keys if k != api_key]
+            for fallback_key in fallback_keys:
+                logger.warning(
+                    "dedicated SerpApi key ran out of credits - falling back to another configured key"
+                )
+                try:
+                    return _search_with_key(query, fallback_key, location)
+                except _QuotaExhaustedError as inner_exc:
+                    last_exc = inner_exc
+                    continue
+            raise last_exc
 
     keys = settings.serpapi_api_keys
     if not keys:

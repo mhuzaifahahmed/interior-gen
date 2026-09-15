@@ -42,22 +42,42 @@ class Settings(BaseSettings):
     # Gemini key/project tried here (even brand-new ones), and Google's own
     # developer forum has multiple reports of billing NOT fixing this (a platform
     # bug, not user error) - see app/providers/gemini.py's generate_materials()
-    # module docstring. One shared key is enough (unlike the Gemini materials
-    # keys above) - SerpApi's rate limit isn't per-tier, there's no reason to
-    # split it three ways. Free plan: 250 searches/month, no card required.
+    # module docstring.
+    #
+    # 2026-09: these 3 keys (SERPAPI_API_KEY/_2/_3 in .env) are now used as
+    # DEDICATED per-tier keys (see serpapi_materials_api_keys below), the exact
+    # same reasoning as gemini_materials_api_keys above - the 3 tiers' materials
+    # lookups run CONCURRENTLY (app/pipeline/generate.py's ThreadPoolExecutor),
+    # so sharing one SerpApi key/quota across all 3 meant they contended for the
+    # same 250-searches/month budget. serpapi_api_keys (the list property just
+    # below) still matters in two ways: (1) the original shared-pool fallback
+    # chain for any caller with no per-tier key resolved at all, and (2) as of
+    # 2026-09, the per-tier path ALSO borrows from this same pool if a tier's
+    # own dedicated key specifically runs out of quota mid-generation (see
+    # serpapi.py's search() docstring) - so a single exhausted key degrades to
+    # "borrow another key" instead of "this tier gets zero real search
+    # coverage for the rest of the month."
     serpapi_api_key: str = ""
-
-    # Optional second SerpApi key/account - app/providers/serpapi.py
-    # automatically switches to this one the moment the first key's monthly
-    # quota runs out mid-generation (detected from SerpApi's own "run out of
-    # searches"/401/429 response), instead of that and every subsequent
-    # item's search failing for the rest of the month. Blank means no
-    # fallback key - behavior is unchanged (single-key, same as before).
     serpapi_api_key_2: str = ""
+    serpapi_api_key_3: str = ""
 
     @property
     def serpapi_api_keys(self) -> list[str]:
-        return [k for k in (self.serpapi_api_key, self.serpapi_api_key_2) if k]
+        return [k for k in (self.serpapi_api_key, self.serpapi_api_key_2, self.serpapi_api_key_3) if k]
+
+    @property
+    def serpapi_materials_api_keys(self) -> dict[str, str]:
+        """One dedicated key per tier: economical->serpapi_api_key,
+        mid->serpapi_api_key_2, premium->serpapi_api_key_3. A tier whose own
+        key is blank falls back to serpapi_api_key (same graceful-degradation
+        shape as gemini_materials_api_keys) - with only one key configured,
+        all 3 tiers share it exactly like before this feature existed.
+        """
+        return {
+            "economical": self.serpapi_api_key,
+            "mid": self.serpapi_api_key_2 or self.serpapi_api_key,
+            "premium": self.serpapi_api_key_3 or self.serpapi_api_key,
+        }
 
     # Image generation: OpenAI's official Images API (app/providers/openai.py) -
     # the sole image backend. Google discontinued free-tier Gemini image generation
