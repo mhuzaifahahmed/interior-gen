@@ -124,6 +124,18 @@ async function currentUserDisplayName() {
   return user.fullName || user.username || user.primaryEmailAddress?.emailAddress || "";
 }
 
+// Same idea as currentUserDisplayName() above, but the real email
+// specifically - sent alongside display_name so the backend can label a
+// user's UserPlan row for the admin panel (app/plans.py's
+// capture_identity()). The backend has no other way to learn a user's
+// email at all (Clerk's session JWT carries only the user id).
+async function currentUserEmail() {
+  const Clerk = await clerkReady;
+  const user = Clerk.user;
+  if (!user) return "";
+  return user.primaryEmailAddress?.emailAddress || "";
+}
+
 // Attaches a fresh Clerk session token as `Authorization: Bearer <token>` to
 // an authenticated API call - this is the entire auth mechanism now (see
 // app/auth.py's require_user), no cookies/credentials involved at all, which
@@ -306,10 +318,12 @@ clerkReady
     applyAuthUI(Clerk.user);
     applyRoomPlanUI();
     applyPricingUI();
+    applyPlanMenuQuota();
     Clerk.addListener(({ user }) => {
       applyAuthUI(user);
       applyRoomPlanUI();
       applyPricingUI();
+      applyPlanMenuQuota();
     });
   })
   .catch((err) => {
@@ -344,7 +358,16 @@ async function fetchPlanStatus() {
     return null;
   }
   try {
-    const res = await authFetch(apiUrl("/api/plan"));
+    // email/name are sent so the backend can label this user's row for the
+    // admin panel (see app/plans.py's capture_identity()) - harmless to send
+    // on every call, the backend only writes when a value actually changed.
+    const email = await currentUserEmail();
+    const name = await currentUserDisplayName();
+    const params = new URLSearchParams();
+    if (email) params.set("email", email);
+    if (name) params.set("name", name);
+    const qs = params.toString();
+    const res = await authFetch(apiUrl(`/api/plan${qs ? `?${qs}` : ""}`));
     if (!res.ok) throw new Error(await res.text());
     cachedPlanStatus = await res.json();
   } catch (err) {
@@ -360,6 +383,93 @@ function formatRemaining(remaining, quota) {
 }
 
 const PLAN_DISPLAY_LABELS = { free: "Free", pro: "Pro", studio: "Studio" };
+
+const navPlanUsageEl = document.getElementById("nav-plan-usage");
+const mobilePlanUsageEl = document.getElementById("mobile-plan-usage");
+
+// One progress-bar row for one feature ("Room Redesigns"/"Build a House"),
+// reading the "*_kaggle" bucket - the one every plan (including Free) has a
+// real numeric limit on. A null quota (Studio's Kaggle fair-use) renders as
+// "Unlimited" text instead of a bar - there's nothing meaningful to fill.
+function planUsageRow(label, used, quota, remaining, openaiRemaining, openaiQuota) {
+  if (quota === null || quota === undefined) {
+    return `
+      <div class="mb-2 last:mb-0">
+        <p class="font-body-md text-xs text-on-night-variant flex items-center justify-between">
+          <span>${label}</span><span>Unlimited</span>
+        </p>
+      </div>`;
+  }
+  const pct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 100;
+  const openaiNote =
+    openaiQuota === null || openaiQuota === undefined
+      ? ` &middot; OpenAI unlimited`
+      : openaiQuota > 0
+        ? ` &middot; ${openaiRemaining} OpenAI left`
+        : "";
+  return `
+    <div class="mb-2 last:mb-0">
+      <p class="font-body-md text-xs text-on-night-variant flex items-center justify-between mb-1">
+        <span>${label}</span><span>${used}/${quota}${openaiNote}</span>
+      </p>
+      <div class="plan-usage-bar-track">
+        <div class="plan-usage-bar-fill" style="width:${pct}%"></div>
+      </div>
+    </div>`;
+}
+
+// Renders the plan-name + two usage bars (Room, House) into a container -
+// called for both the desktop nav dropdown and the mobile sidebar, same
+// GET /api/plan data (app/plans.py's plan_status()) either way.
+function renderPlanUsage(el, status) {
+  const planLabel = PLAN_DISPLAY_LABELS[status.plan] || status.plan;
+  const upgradeLink =
+    status.plan === "free"
+      ? `<a href="#" class="text-primary underline" id="${el.id}-upgrade-link">Upgrade</a>`
+      : "";
+  el.innerHTML = `
+    <p class="font-label-caps text-label-caps text-on-night-variant mb-2 flex items-center justify-between">
+      <span>${planLabel} plan</span>${upgradeLink}
+    </p>
+    ${planUsageRow(
+      "Room Redesigns",
+      status.used.room_kaggle,
+      status.quotas.room_kaggle,
+      status.remaining.room_kaggle,
+      status.remaining.room_openai,
+      status.quotas.room_openai
+    )}
+    ${planUsageRow(
+      "Build a House",
+      status.used.house_kaggle,
+      status.quotas.house_kaggle,
+      status.remaining.house_kaggle,
+      status.remaining.house_openai,
+      status.quotas.house_openai
+    )}`;
+  document.getElementById(`${el.id}-upgrade-link`)?.addEventListener("click", (e) => {
+    e.preventDefault();
+    closeNavUserMenu?.();
+    closeMobileSidebar?.();
+    switchTab("pricing");
+  });
+}
+
+// Fills both the desktop dropdown and mobile sidebar usage sections from the
+// SAME fetchPlanStatus() call every other plan-aware UI already uses - no
+// new endpoint. Hidden entirely for anonymous/failed lookups, same
+// fail-closed treatment as applyRoomPlanUI().
+async function applyPlanMenuQuota() {
+  const status = await fetchPlanStatus();
+  [navPlanUsageEl, mobilePlanUsageEl].forEach((el) => {
+    if (!el) return;
+    if (!status) {
+      el.innerHTML = "";
+      return;
+    }
+    renderPlanUsage(el, status);
+  });
+}
 
 // Shows which subscription plan the user is currently on, right next to the
 // generated output (not just pre-generation, where roomQuotaNote already
@@ -1410,6 +1520,7 @@ form.addEventListener("submit", async (e) => {
   formData.append("color_palette", colorPaletteSelect.value);
   formData.append("additional_instructions", additionalInstructionsInput.value.trim());
   formData.append("display_name", await currentUserDisplayName());
+  formData.append("email", await currentUserEmail());
   // Optional room measurements - improves material-cost accuracy when given;
   // left blank, the backend falls back to its existing Gemini-vision area
   // estimate (see app/main.py's _compute_room_dimensions()).
@@ -1976,6 +2087,7 @@ function renderResults(data) {
     imageModelNoteEl.hidden = true;
   }
   applyPlanStatusNote(planStatusNoteEl);
+  applyPlanMenuQuota();
   resultsGrid.innerHTML = "";
 
   for (const tier of TIERS) {
@@ -2303,6 +2415,7 @@ houseForm.addEventListener("submit", async (e) => {
   if (houseFacingInput.value) formData.append("facing", houseFacingInput.value);
   formData.append("extras", houseExtrasInput.value.trim());
   formData.append("display_name", await currentUserDisplayName());
+  formData.append("email", await currentUserEmail());
 
   let houseProjectId;
   try {
@@ -2602,6 +2715,7 @@ function renderHouseResults(data) {
     houseImageModelNoteEl.hidden = true;
   }
   applyPlanStatusNote(housePlanStatusNoteEl);
+  applyPlanMenuQuota();
   renderHouseFeasibilityBanner(data.feasibility);
   houseResultsGrid.innerHTML = "";
 

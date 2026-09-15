@@ -821,3 +821,108 @@ def test_unknown_api_route_still_returns_json_404():
         res = client.get("/api/this-does-not-exist")
         assert res.status_code == 404
         assert res.headers["content-type"].startswith("application/json")
+
+
+def test_admin_page_serves():
+    with TestClient(app) as client:
+        res = client.get("/admin")
+        assert res.status_code == 200
+        assert "Admin" in res.text
+
+
+def test_get_plan_captures_email_and_name_from_query_params(monkeypatch):
+    with TestClient(app) as client:
+        user_id = login_as(client)
+        res = client.get("/api/plan", params={"email": "jane@example.com", "name": "Jane Doe"})
+        assert res.status_code == 200
+
+    from app.db import engine as db_engine
+    from app.models import UserPlan
+
+    with Session(db_engine) as session:
+        row = session.get(UserPlan, user_id)
+        assert row.email == "jane@example.com"
+        assert row.display_name == "Jane Doe"
+
+
+def test_admin_endpoints_reject_a_non_admin_user():
+    with TestClient(app) as client:
+        login_as(client)
+        res = client.get("/api/admin/users")
+        assert res.status_code == 403
+
+
+def test_admin_endpoints_reject_an_unauthenticated_caller():
+    with TestClient(app) as client:
+        res = client.get("/api/admin/users")
+        assert res.status_code == 401
+
+
+def test_admin_list_users_includes_an_allowlisted_admin(monkeypatch):
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+    with TestClient(app) as client:
+        admin_id = login_as(client)
+        monkeypatch.setattr(main_module.settings, "admin_user_ids", admin_id)
+        # Give this admin a real, findable row first (mirrors a normal page
+        # load hitting GET /api/plan before ever reaching /admin).
+        client.get("/api/plan", params={"email": "admin@example.com"})
+
+        res = client.get("/api/admin/users")
+        assert res.status_code == 200
+        emails = [u["email"] for u in res.json()["users"]]
+        assert "admin@example.com" in emails
+
+
+def test_admin_set_plan_actually_changes_the_users_plan(monkeypatch):
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+    with TestClient(app) as client:
+        admin_id = login_as(client)
+        monkeypatch.setattr(main_module.settings, "admin_user_ids", admin_id)
+        client.get("/api/plan")  # ensure the admin's own row exists
+
+        target_user = f"user_{uuid.uuid4().hex[:24]}"
+        res = client.post(f"/api/admin/users/{target_user}/plan", json={"plan": "pro"})
+        assert res.status_code == 200
+        assert res.json()["plan"] == "pro"
+
+    # Confirm it actually persisted, not just echoed back.
+    from app.db import engine as db_engine
+    from app.models import UserPlan
+
+    with Session(db_engine) as session:
+        row = session.get(UserPlan, target_user)
+        assert row.plan == "pro"
+
+
+def test_admin_set_plan_rejects_an_invalid_plan_string(monkeypatch):
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+    with TestClient(app) as client:
+        admin_id = login_as(client)
+        monkeypatch.setattr(main_module.settings, "admin_user_ids", admin_id)
+        client.get("/api/plan")
+
+        res = client.post(f"/api/admin/users/{admin_id}/plan", json={"plan": "enterprise"})
+        assert res.status_code == 400
+
+
+def test_admin_reset_usage_zeroes_a_users_counters(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+    with TestClient(app) as client:
+        user_id = login_as(client)
+        image_bytes = _sample_image_bytes()
+        client.post(
+            "/api/projects",
+            files={"file": ("room.png", image_bytes, "image/png")},
+            data=_REQUIRED_STYLE_FIELDS,
+        )
+
+        admin_id = login_as(client, f"admin_{uuid.uuid4().hex[:24]}")
+        monkeypatch.setattr(main_module.settings, "admin_user_ids", admin_id)
+
+        res = client.post(f"/api/admin/users/{user_id}/reset-usage")
+        assert res.status_code == 200
+        assert res.json()["used"]["room_kaggle"] == 0
+        # lifetime_generations is never zeroed by a reset.
+        assert res.json()["lifetime_generations"] == 1

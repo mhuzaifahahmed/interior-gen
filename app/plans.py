@@ -231,10 +231,85 @@ def consume_quota(session: Session, user_id: str, kind: str, backend: str) -> Us
         raise QuotaExceededError(plan_row.plan, quota_key, limit)
 
     setattr(plan_row, f"{quota_key}_used", used + 1)
+    plan_row.lifetime_generations += 1
     session.add(plan_row)
     session.commit()
     session.refresh(plan_row)
     return plan_row
+
+
+def set_plan(session: Session, user_id: str, plan: str) -> UserPlan:
+    """The admin panel's plan-change action (POST /api/admin/users/{id}/plan)
+    - the real, human-operated replacement for a payment webhook until a
+    processor is chosen (see future-plans/subscription-and-access-roadmap.md).
+    Does NOT touch usage counters or the quota window - only the plan label
+    and its timestamp, so upgrading mid-window doesn't reset/grant a fresh
+    allowance (a deliberate simplification; revisit if that's ever surprising
+    in practice)."""
+    if plan not in VALID_PLANS:
+        raise ValueError(f"invalid plan {plan!r} - must be one of {VALID_PLANS}")
+    plan_row = get_or_create_user_plan(session, user_id)
+    plan_row.plan = plan
+    plan_row.plan_updated_at = _now()
+    session.add(plan_row)
+    session.commit()
+    session.refresh(plan_row)
+    return plan_row
+
+
+def reset_usage(session: Session, user_id: str) -> UserPlan:
+    """Zeroes the four rolling *_used counters and restarts the quota window
+    from now - an admin convenience (e.g. for a demo, or a goodwill reset).
+    Deliberately does NOT touch lifetime_generations, which is meant to be a
+    true all-time total regardless of any window reset."""
+    plan_row = get_or_create_user_plan(session, user_id)
+    plan_row.quota_window_start = _now()
+    plan_row.room_kaggle_used = 0
+    plan_row.room_openai_used = 0
+    plan_row.house_kaggle_used = 0
+    plan_row.house_openai_used = 0
+    session.add(plan_row)
+    session.commit()
+    session.refresh(plan_row)
+    return plan_row
+
+
+def capture_identity(session: Session, user_id: str, email: str = "", display_name: str = "") -> UserPlan:
+    """Best-effort upsert of a user's email/display name onto their
+    UserPlan row, so the admin panel can find/label people - the backend
+    otherwise never sees either (Clerk's session JWT carries only the user
+    id, see app/auth.py's AuthUser docstring). Client-supplied, same trust
+    posture already used for display_name in S3 keys
+    (app/main.py::_storage_namespace) - fine for an admin *label*, never used
+    for auth/ownership decisions. Only writes when a value is given AND
+    actually changed, so a plain page load doesn't churn a write every time."""
+    email = (email or "").strip()
+    display_name = (display_name or "").strip()
+    if not email and not display_name:
+        return get_or_create_user_plan(session, user_id)
+
+    plan_row = get_or_create_user_plan(session, user_id)
+    changed = False
+    if email and plan_row.email != email:
+        plan_row.email = email
+        changed = True
+    if display_name and plan_row.display_name != display_name:
+        plan_row.display_name = display_name
+        changed = True
+    if changed:
+        session.add(plan_row)
+        session.commit()
+        session.refresh(plan_row)
+    return plan_row
+
+
+def list_all_user_plans(session: Session) -> list[UserPlan]:
+    """Every known user, for the admin panel's user table. Small dataset by
+    construction (one row per person who has ever logged in) - no pagination
+    needed at this scale."""
+    from sqlmodel import select
+
+    return list(session.exec(select(UserPlan).order_by(UserPlan.created_at)))
 
 
 def plan_status(session: Session, user_id: str) -> dict:

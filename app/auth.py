@@ -54,3 +54,15 @@ def require_user(user: AuthUser | None = Depends(get_current_user)) -> AuthUser:
     if user is None:
         raise HTTPException(401, "login required")
     return user
+
+
+def require_admin(user: AuthUser = Depends(require_user)) -> AuthUser:
+    """Gates /admin and /api/admin/* - the user must already be a real,
+    logged-in Clerk account (require_user, 401 otherwise) AND that account's
+    id must be on the settings.admin_user_id_set allowlist (403 otherwise -
+    they ARE who they say they are, they just aren't an admin). See
+    app/config.py's admin_user_ids docstring for why this is an id allowlist,
+    not a shared password."""
+    if user.id not in settings.admin_user_id_set:
+        raise HTTPException(403, "admin access required")
+    return user

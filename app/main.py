@@ -14,7 +14,7 @@ from sqlmodel import Session, select
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
-from app.auth import AuthUser, get_current_user, require_user
+from app.auth import AuthUser, get_current_user, require_admin, require_user
 from app.config import settings
 from app.db import get_session, init_db
 from app.models import HouseProject, Project
@@ -25,13 +25,21 @@ from app.pipeline.prompts import ADDITIONAL_INSTRUCTIONS_MAX_CHARS, COLOR_PALETT
 from app.plans import (
     QuotaExceededError,
     backend_bucket,
+    capture_identity,
     consume_quota,
     get_or_create_user_plan,
+    list_all_user_plans,
     plan_status,
+    reset_usage,
     resolve_preferred_backend,
+    set_plan,
 )
+from app.plans import VALID_PLANS
 from app.providers import get_provider
 from app.schemas import (
+    AdminSetPlanRequest,
+    AdminUserRow,
+    AdminUsersResponse,
     HouseProjectCreateResponse,
     HouseProjectStatusResponse,
     PlanStatusResponse,
@@ -117,6 +125,15 @@ def privacy():
     return FileResponse("static/privacy.html")
 
 
+@app.get("/admin")
+def admin_page():
+    # Serves the page unauthenticated, same as /login /signup /terms /privacy
+    # above - the real gate is require_admin() on every /api/admin/* call the
+    # page makes; this route just returns markup that will show "access
+    # denied" client-side for anyone not on settings.admin_user_id_set.
+    return FileResponse("static/admin.html")
+
+
 CITY_MAX_CHARS = 80
 DISPLAY_NAME_MAX_CHARS = 40
 _DISPLAY_NAME_UNSAFE_CHARS = re.compile(r"[^a-z0-9]+")
@@ -157,6 +174,43 @@ def _storage_namespace(user_id: str, display_name: str) -> str:
     label = _DISPLAY_NAME_UNSAFE_CHARS.sub("_", display_name.strip().lower()).strip("_")
     label = label[:DISPLAY_NAME_MAX_CHARS]
     return f"{user_id}_{label}" if label else user_id
+
+
+def _write_account_json(storage, storage_namespace: str, plan_row) -> None:
+    """Best-effort, additive S3 write: a small identity+plan summary at the
+    user's folder ROOT (users/{namespace}/account.json), sitting above the
+    roomRedesign/buildAHouse subfolders - so browsing a person's bucket
+    prefix immediately shows who they are and what plan/usage they're on,
+    next to everything they've generated. Called from both generator
+    endpoints (after a fresh generation) and the admin plan-change endpoint
+    (so an upgrade is reflected at rest too). Never blocks/fails the calling
+    request - same posture as the existing per-project metadata.json writes.
+    Deliberately does NOT rename/move any existing keys - every
+    Project/HouseProject row already stores its own exact keys at creation
+    time, so this is purely additive.
+    """
+    account = {
+        "user_id": plan_row.user_id,
+        "email": plan_row.email,
+        "display_name": plan_row.display_name,
+        "plan": plan_row.plan,
+        "plan_updated_at": _utc_isoformat(plan_row.plan_updated_at),
+        "lifetime_generations": plan_row.lifetime_generations,
+        "room_kaggle_used_this_window": plan_row.room_kaggle_used,
+        "room_openai_used_this_window": plan_row.room_openai_used,
+        "house_kaggle_used_this_window": plan_row.house_kaggle_used,
+        "house_openai_used_this_window": plan_row.house_openai_used,
+        "first_seen": _utc_isoformat(plan_row.created_at),
+        "last_updated": _utc_isoformat(datetime.now(timezone.utc)),
+    }
+    try:
+        storage.put(
+            f"users/{storage_namespace}/account.json",
+            json.dumps(account).encode("utf-8"),
+            content_type="application/json",
+        )
+    except Exception:
+        logger.exception("failed to write account.json for user %s - continuing", plan_row.user_id)
 
 
 # Shared S3 prefix for every anonymous (pre-login) generation - see
@@ -218,11 +272,85 @@ def _consume_anonymous_trial(request: Request, response: Response, kind: str) ->
 
 
 @app.get("/api/plan", response_model=PlanStatusResponse)
-def get_plan(session: Session = Depends(get_session), user: AuthUser = Depends(require_user)):
+def get_plan(
+    email: str = "",
+    name: str = "",
+    session: Session = Depends(get_session),
+    user: AuthUser = Depends(require_user),
+):
     """Current user's subscription plan + rolling quota usage - see
-    app/plans.py. No plan-change logic here (that's the payment
-    integration/admin-stopgap chunks); this is read-only status."""
+    app/plans.py. Plan changes now happen via the admin panel
+    (/api/admin/users/{id}/plan) - a real, human-operated stopgap until a
+    payment processor is chosen.
+
+    email/name are optional, client-supplied (from Clerk.user - the backend
+    has no other way to learn either, see AuthUser's docstring) - captured
+    best-effort onto the user's UserPlan row so the admin panel can find them
+    by email. This runs on every authenticated page load
+    (static/app.js's fetchPlanStatus()), so most logged-in users' rows fill
+    in quickly even if they never generate anything."""
+    capture_identity(session, user.id, email=email, display_name=name)
     return PlanStatusResponse(**plan_status(session, user.id))
+
+
+def _admin_row(session: Session, plan_row) -> AdminUserRow:
+    status = plan_status(session, plan_row.user_id)
+    return AdminUserRow(
+        user_id=plan_row.user_id,
+        email=plan_row.email,
+        display_name=plan_row.display_name,
+        plan=status["plan"],
+        plan_updated_at=plan_row.plan_updated_at,
+        created_at=plan_row.created_at,
+        lifetime_generations=plan_row.lifetime_generations,
+        quotas=status["quotas"],
+        used=status["used"],
+        remaining=status["remaining"],
+        quota_window_start=status["quota_window_start"],
+        quota_window_reset_at=status["quota_window_reset_at"],
+    )
+
+
+@app.get("/api/admin/users", response_model=AdminUsersResponse)
+def admin_list_users(session: Session = Depends(get_session), _admin: AuthUser = Depends(require_admin)):
+    """Every known user + their real plan/usage, for the admin panel's user
+    table (static/admin.html). See app/auth.py's require_admin() for the
+    access gate."""
+    rows = list_all_user_plans(session)
+    return AdminUsersResponse(users=[_admin_row(session, row) for row in rows])
+
+
+@app.post("/api/admin/users/{user_id}/plan", response_model=AdminUserRow)
+def admin_set_plan(
+    user_id: str,
+    body: AdminSetPlanRequest,
+    session: Session = Depends(get_session),
+    _admin: AuthUser = Depends(require_admin),
+):
+    if body.plan not in VALID_PLANS:
+        raise HTTPException(400, f"invalid plan {body.plan!r} - must be one of {VALID_PLANS}")
+    plan_row = set_plan(session, user_id, body.plan)
+    # Best-effort - reflect the new plan in the user's S3 account.json too,
+    # so the bucket never shows a stale plan after an admin upgrade. Uses
+    # whatever display_name is already on file (may be "" for a user who
+    # never supplied one) - same _storage_namespace() convention as the
+    # generator endpoints, so this always resolves to the SAME prefix their
+    # uploads already live under.
+    try:
+        storage = get_storage()
+        storage_namespace = _storage_namespace(plan_row.user_id, plan_row.display_name)
+        _write_account_json(storage, storage_namespace, plan_row)
+    except Exception:
+        logger.exception("failed to refresh account.json after plan change for user %s", user_id)
+    return _admin_row(session, plan_row)
+
+
+@app.post("/api/admin/users/{user_id}/reset-usage", response_model=AdminUserRow)
+def admin_reset_usage(
+    user_id: str, session: Session = Depends(get_session), _admin: AuthUser = Depends(require_admin)
+):
+    plan_row = reset_usage(session, user_id)
+    return _admin_row(session, plan_row)
 
 
 @app.post("/api/projects", response_model=ProjectCreateResponse)
@@ -236,6 +364,7 @@ async def create_project(
     additional_instructions: str = Form(""),
     city: str = Form(""),
     display_name: str = Form(""),
+    email: str = Form(""),
     room_length: float | None = Form(None),
     room_width: float | None = Form(None),
     room_height: float | None = Form(None),
@@ -302,15 +431,17 @@ async def create_project(
     # "correct nonsense rather than error the whole request" convention this
     # endpoint already uses elsewhere.
     requested_backend = preferred_model if preferred_model in ("kaggle", "openai") else None
+    plan_row = None
     if user is None:
         _consume_anonymous_trial(request, response, "room")
         backend_override = resolve_preferred_backend(None, requested_backend)
     else:
         plan_row = get_or_create_user_plan(session, user.id)
+        capture_identity(session, user.id, email=email, display_name=display_name)
         backend_override = resolve_preferred_backend(plan_row.plan, requested_backend)
         quota_backend = backend_override or backend_bucket(settings.image_provider)
         try:
-            consume_quota(session, user.id, "room", quota_backend)
+            plan_row = consume_quota(session, user.id, "room", quota_backend)
         except QuotaExceededError as exc:
             raise HTTPException(403, exc.user_message())
 
@@ -336,6 +467,8 @@ async def create_project(
     # section. Anonymous (pre-login trial) uploads share one fixed namespace
     # instead - see ANONYMOUS_STORAGE_NAMESPACE's comment.
     storage_namespace = _storage_namespace(user.id, display_name) if user else ANONYMOUS_STORAGE_NAMESPACE
+    if plan_row is not None:
+        _write_account_json(storage, storage_namespace, plan_row)
     original_key = f"users/{storage_namespace}/roomRedesign/input/{project.id}/original.png"
     storage.put(original_key, data, content_type=file.content_type)
     project.original_key = original_key
@@ -533,6 +666,7 @@ async def create_house_project(
     unit: str = Form("m"),
     prompt: str = Form(""),
     display_name: str = Form(""),
+    email: str = Form(""),
     floor_count: int | None = Form(None),
     bedrooms: int | None = Form(None),
     bathrooms: int | None = Form(None),
@@ -647,11 +781,13 @@ async def create_house_project(
     # only configured backend), but it stops a Free user from making that
     # exposure WORSE by actively picking the paid option on purpose.
     requested_backend = preferred_model if preferred_model in ("kaggle", "openai") else None
+    plan_row = None
     if user is None:
         _consume_anonymous_trial(request, response, "house")
         backend_override = resolve_preferred_backend(None, requested_backend)
     else:
         plan_row = get_or_create_user_plan(session, user.id)
+        capture_identity(session, user.id, email=email, display_name=display_name)
         backend_override = resolve_preferred_backend(plan_row.plan, requested_backend)
 
     storage = get_storage()
@@ -672,6 +808,12 @@ async def create_house_project(
     # regardless of whether a photo was uploaded - only plot_image_key itself
     # is conditional on data being present.
     storage_namespace = _storage_namespace(user.id, display_name) if user else ANONYMOUS_STORAGE_NAMESPACE
+    if plan_row is not None:
+        # NOTE: house generations aren't currently counted by consume_quota()
+        # at all (see the "House quota gap" comment above) - the
+        # house_kaggle_used/house_openai_used numbers written here reflect
+        # that same, already-documented gap, not a new omission.
+        _write_account_json(storage, storage_namespace, plan_row)
     if data is not None:
         plot_image_key = f"users/{storage_namespace}/buildAHouse/input/{house_project.id}/plot.png"
         storage.put(plot_image_key, data, content_type=file.content_type)

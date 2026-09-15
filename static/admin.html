@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<link href="/static/logo.png" rel="icon" type="image/png"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Admin — Interior-Gen</title>
+<style>
+  @layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}}
+  ::-webkit-scrollbar{display:none;}
+  .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;}
+  table { border-collapse: collapse; }
+  .admin-bar-track { width: 72px; height: 6px; border-radius: 999px; background: #e2d9c3; overflow: hidden; display: inline-block; vertical-align: middle; }
+  .admin-bar-fill { height: 100%; border-radius: 999px; background: #7A4712; }
+</style>
+<script src="https://cdn.tailwindcss.com"></script>
+<script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"primary-fixed-dim":"#C08A4E","on-background":"#33362e","on-primary-container":"#4A2F10","on-secondary-fixed-variant":"#6b6248","secondary":"#b7a88c","on-error-container":"#5c2119","on-primary-fixed-variant":"#5C3A12","inverse-surface":"#33362e","outline-variant":"#e2d9c3","on-tertiary-fixed-variant":"#3d5a4c","surface-container-lowest":"#ffffff","inverse-on-surface":"#f5efe2","tertiary-fixed":"#dceae2","surface-bright":"#ffffff","on-tertiary-container":"#1f3a31","error-container":"#f7deda","outline":"#c9bfa6","on-secondary":"#ffffff","surface-container-low":"#f5efe2","tertiary-container":"#dceae2","on-primary-fixed":"#2B1904","surface-tint":"#7A4712","secondary-container":"#efe4ce","on-primary":"#ffffff","on-secondary-fixed":"#2a2515","night":"#1c1815","night-container":"#242019","on-night":"#f5efe2","on-night-variant":"#c9bfa6","night-border":"rgba(245,239,226,0.14)","primary-fixed":"#F3E4CD","inverse-primary":"#C08A4E","secondary-fixed":"#efe4ce","on-surface":"#33362e","on-tertiary-fixed":"#12271f","on-surface-variant":"#6e6c5c","surface-dim":"#f1eadc","on-secondary-container":"#4a4230","on-tertiary":"#17352b","tertiary-fixed-dim":"#b7d2c4","surface-container":"#efe7d6","background":"#faf6ee","on-error":"#ffffff","primary-container":"#F3E4CD","error":"#b3544a","surface":"#ffffff","secondary-fixed-dim":"#d8c9a6","tertiary":"#8faf9e","surface-variant":"#efe7d6","primary":"#7A4712","surface-container-highest":"#dccfb0","surface-container-high":"#e6dcc5"},"borderRadius":{"DEFAULT":"14px","lg":"18px","xl":"22px","full":"9999px"},"spacing":{"unit":"8px","margin-mobile":"24px","container-max":"1440px","section-gap":"128px","margin-desktop":"64px","gutter":"32px"},"fontFamily":{"headline-md":["Fraunces"],"label-caps":["Poppins"],"body-md":["Poppins"],"display-lg-mobile":["Fraunces"],"body-lg":["Poppins"],"technical-data":["Poppins"],"headline-sm":["Fraunces"],"display-lg":["Fraunces"]},"fontSize":{"headline-md":["32px",{"lineHeight":"1.3","fontWeight":"600"}],"label-caps":["12px",{"lineHeight":"1.2","letterSpacing":"0.1em","fontWeight":"600"}],"body-md":["16px",{"lineHeight":"1.6","fontWeight":"400"}],"display-lg-mobile":["38px",{"lineHeight":"1.2","letterSpacing":"-0.01em","fontWeight":"700"}],"body-lg":["18px",{"lineHeight":"1.6","fontWeight":"400"}],"technical-data":["14px",{"lineHeight":"1.4","fontWeight":"500"}],"headline-sm":["24px",{"lineHeight":"1.4","fontWeight":"600"}],"display-lg":["60px",{"lineHeight":"1.12","letterSpacing":"-0.01em","fontWeight":"700"}]}}}}</script>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<script src="/static/clerk-init.js"></script>
+</head>
+<body class="bg-background font-body-md text-on-surface">
+
+<header class="border-b border-outline-variant/70 bg-surface">
+<div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop h-20 flex items-center justify-between gap-4">
+<a href="/" class="flex items-center gap-2.5 shrink-0">
+<img src="/static/logo.png" alt="Interior-Gen" class="w-8 h-8 object-contain shrink-0"/>
+<span class="font-headline-sm text-headline-sm tracking-tight text-on-surface">Interior&#8209;Gen</span>
+</a>
+<p class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-[0.25em]">Admin</p>
+</div>
+</header>
+
+<main class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop py-12">
+
+<div id="admin-loading" class="text-center py-24">
+  <p class="font-body-md text-on-surface-variant">Loading…</p>
+</div>
+
+<div id="admin-denied" class="text-center py-24 hidden">
+  <p class="font-headline-sm text-headline-sm text-on-surface mb-3">You don't have admin access.</p>
+  <p class="font-body-md text-on-surface-variant">
+    <a href="/static/login.html" class="text-primary underline">Log in</a> with an admin account, or ask for
+    your Clerk user id to be added to <code class="text-sm">ADMIN_USER_IDS</code>.
+  </p>
+</div>
+
+<div id="admin-content" class="hidden">
+  <div class="flex items-center justify-between gap-4 mb-6 flex-wrap">
+    <div>
+      <h1 class="font-headline-md text-headline-md text-on-surface">Users &amp; Plans</h1>
+      <p class="font-body-md text-on-surface-variant text-sm mt-1" id="admin-user-count"></p>
+    </div>
+    <input
+      type="text"
+      id="admin-search"
+      placeholder="Search by email or name…"
+      class="w-full sm:w-72 px-4 py-2.5 rounded-full border border-outline-variant bg-surface font-body-md text-sm focus:outline-none focus:border-primary"
+    />
+  </div>
+
+  <div class="overflow-x-auto rounded-xl border border-outline-variant/70">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="bg-surface-container text-left font-label-caps text-label-caps text-on-surface-variant">
+          <th class="px-4 py-3">Email</th>
+          <th class="px-4 py-3">Name</th>
+          <th class="px-4 py-3">Plan</th>
+          <th class="px-4 py-3">Room (our model)</th>
+          <th class="px-4 py-3">House (our model)</th>
+          <th class="px-4 py-3">Lifetime</th>
+          <th class="px-4 py-3">Window resets</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody id="admin-table-body"></tbody>
+    </table>
+  </div>
+</div>
+
+</main>
+
+<script>
+  const PLAN_LABELS = { free: "Free", pro: "Pro", studio: "Studio" };
+  let ADMIN_TOKEN_GETTER = null;
+  let allUsers = [];
+
+  const loadingEl = document.getElementById("admin-loading");
+  const deniedEl = document.getElementById("admin-denied");
+  const contentEl = document.getElementById("admin-content");
+  const tbody = document.getElementById("admin-table-body");
+  const searchEl = document.getElementById("admin-search");
+  const countEl = document.getElementById("admin-user-count");
+
+  async function adminFetch(path, options = {}) {
+    const token = await ADMIN_TOKEN_GETTER();
+    const headers = { ...(options.headers || {}) };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    return fetch(path, { ...options, headers });
+  }
+
+  function usageCell(used, quota, remaining) {
+    if (quota === null || quota === undefined) {
+      return `<span class="text-on-surface-variant">${used} used &middot; unlimited</span>`;
+    }
+    const pct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 100;
+    return `
+      <div class="flex items-center gap-2">
+        <span class="font-technical-data text-technical-data whitespace-nowrap">${used}/${quota}</span>
+        <span class="admin-bar-track"><span class="admin-bar-fill" style="width:${pct}%"></span></span>
+      </div>`;
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str || "";
+    return div.innerHTML;
+  }
+
+  function renderRow(u) {
+    const resetDate = new Date(u.quota_window_reset_at);
+    const resetLabel = resetDate.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    return `
+      <tr class="border-t border-outline-variant/50" data-user-id="${escapeHtml(u.user_id)}">
+        <td class="px-4 py-3">${escapeHtml(u.email) || `<span class="text-on-surface-variant">—</span>`}</td>
+        <td class="px-4 py-3">${escapeHtml(u.display_name) || `<span class="text-on-surface-variant">—</span>`}</td>
+        <td class="px-4 py-3">
+          <select class="admin-plan-select rounded-full border border-outline-variant px-3 py-1.5 font-label-caps text-label-caps bg-surface">
+            <option value="free" ${u.plan === "free" ? "selected" : ""}>Free</option>
+            <option value="pro" ${u.plan === "pro" ? "selected" : ""}>Pro</option>
+            <option value="studio" ${u.plan === "studio" ? "selected" : ""}>Studio</option>
+          </select>
+        </td>
+        <td class="px-4 py-3">${usageCell(u.used.room_kaggle, u.quotas.room_kaggle, u.remaining.room_kaggle)}</td>
+        <td class="px-4 py-3">${usageCell(u.used.house_kaggle, u.quotas.house_kaggle, u.remaining.house_kaggle)}</td>
+        <td class="px-4 py-3 font-technical-data text-technical-data">${u.lifetime_generations}</td>
+        <td class="px-4 py-3 text-on-surface-variant text-xs">${resetLabel}</td>
+        <td class="px-4 py-3 whitespace-nowrap">
+          <button class="admin-save-btn font-label-caps text-label-caps text-primary underline mr-3">Save</button>
+          <button class="admin-reset-btn font-label-caps text-label-caps text-on-surface-variant underline">Reset usage</button>
+        </td>
+      </tr>`;
+  }
+
+  function renderTable(users) {
+    tbody.innerHTML = users.map(renderRow).join("");
+    countEl.textContent = `${users.length} user${users.length === 1 ? "" : "s"}`;
+  }
+
+  function findUser(userId) {
+    return allUsers.find((u) => u.user_id === userId);
+  }
+
+  tbody.addEventListener("click", async (e) => {
+    const row = e.target.closest("tr[data-user-id]");
+    if (!row) return;
+    const userId = row.dataset.userId;
+
+    if (e.target.classList.contains("admin-save-btn")) {
+      const plan = row.querySelector(".admin-plan-select").value;
+      e.target.disabled = true;
+      e.target.textContent = "Saving…";
+      try {
+        const res = await adminFetch(`/api/admin/users/${encodeURIComponent(userId)}/plan`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plan }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const updated = await res.json();
+        allUsers = allUsers.map((u) => (u.user_id === userId ? updated : u));
+        applyFilter();
+      } catch (err) {
+        console.error(err);
+        alert("Failed to change plan - see console for details.");
+      } finally {
+        e.target.disabled = false;
+        e.target.textContent = "Save";
+      }
+    }
+
+    if (e.target.classList.contains("admin-reset-btn")) {
+      if (!confirm("Reset this user's usage counters back to zero?")) return;
+      e.target.disabled = true;
+      try {
+        const res = await adminFetch(`/api/admin/users/${encodeURIComponent(userId)}/reset-usage`, {
+          method: "POST",
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const updated = await res.json();
+        allUsers = allUsers.map((u) => (u.user_id === userId ? updated : u));
+        applyFilter();
+      } catch (err) {
+        console.error(err);
+        alert("Failed to reset usage - see console for details.");
+      } finally {
+        e.target.disabled = false;
+      }
+    }
+  });
+
+  function applyFilter() {
+    const q = searchEl.value.trim().toLowerCase();
+    const filtered = !q
+      ? allUsers
+      : allUsers.filter(
+          (u) => u.email.toLowerCase().includes(q) || u.display_name.toLowerCase().includes(q)
+        );
+    renderTable(filtered);
+  }
+
+  searchEl.addEventListener("input", applyFilter);
+
+  clerkReady
+    .then(async (Clerk) => {
+      if (!Clerk.user) {
+        loadingEl.classList.add("hidden");
+        deniedEl.classList.remove("hidden");
+        deniedEl.querySelector("p:last-child").innerHTML =
+          `<a href="/static/login.html" class="text-primary underline">Log in</a> to continue.`;
+        return;
+      }
+      ADMIN_TOKEN_GETTER = () => Clerk.session.getToken();
+      const res = await adminFetch("/api/admin/users");
+      loadingEl.classList.add("hidden");
+      if (res.status === 403) {
+        deniedEl.classList.remove("hidden");
+        return;
+      }
+      if (!res.ok) {
+        deniedEl.classList.remove("hidden");
+        deniedEl.querySelector("p:last-child").textContent = "Something went wrong loading the admin panel.";
+        return;
+      }
+      const data = await res.json();
+      allUsers = data.users;
+      contentEl.classList.remove("hidden");
+      applyFilter();
+    })
+    .catch((err) => {
+      console.error(err);
+      loadingEl.classList.add("hidden");
+      deniedEl.classList.remove("hidden");
+    });
+</script>
+</body>
+</html>

@@ -80,6 +80,11 @@ _NEW_COLUMNS_BY_TABLE = {
         # plan" feature) was added and removed within the same uncommitted
         # working session, so it never reached any real database at all.
     ],
+    "userplan": [
+        ("lifetime_generations", "INTEGER NOT NULL DEFAULT 0"),
+        ("email", "TEXT NOT NULL DEFAULT ''"),
+        ("display_name", "TEXT NOT NULL DEFAULT ''"),
+    ],
 }
 
 

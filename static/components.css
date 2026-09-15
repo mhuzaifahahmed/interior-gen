@@ -179,6 +179,24 @@ html, body {
   box-shadow: 0 0 0 2px var(--accent) inset;
 }
 
+/* Per-user quota usage bars (nav account dropdown + mobile sidebar) -
+   renderPlanUsage()/planUsageRow() in app.js build these fragments. Sage
+   fill on a faint track, matching the site's accent color everywhere else. */
+.plan-usage-bar-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.plan-usage-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
 /* ---- Scroll reveal ---- */
 
 [data-reveal] {

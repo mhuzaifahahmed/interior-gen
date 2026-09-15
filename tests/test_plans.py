@@ -10,13 +10,18 @@ from app.plans import (
     PRO,
     QUOTA_WINDOW_DAYS,
     STUDIO,
+    VALID_PLANS,
     QuotaExceededError,
     backend_bucket,
+    capture_identity,
     consume_quota,
     get_or_create_user_plan,
+    list_all_user_plans,
     plan_status,
+    reset_usage,
     resolve_preferred_backend,
     roll_quota_window_if_needed,
+    set_plan,
 )
 
 
@@ -206,6 +211,111 @@ def test_resolve_preferred_backend_ignores_an_invalid_or_missing_request():
     assert resolve_preferred_backend(PRO, "modal") is None
     assert resolve_preferred_backend(PRO, "") is None
     assert resolve_preferred_backend(None, "modal") is None
+
+
+def test_consume_quota_increments_lifetime_generations():
+    engine = make_test_engine()
+    with Session(engine) as session:
+        consume_quota(session, "user_1", "room", "kaggle")
+        consume_quota(session, "user_1", "house", "kaggle")
+        plan_row = get_or_create_user_plan(session, "user_1")
+
+    assert plan_row.lifetime_generations == 2
+
+
+def test_consume_quota_lifetime_generations_survives_a_window_roll():
+    engine = make_test_engine()
+    with Session(engine) as session:
+        plan_row = get_or_create_user_plan(session, "user_1")
+        plan_row.lifetime_generations = 10
+        plan_row.quota_window_start = plan_row.quota_window_start - timedelta(days=QUOTA_WINDOW_DAYS + 1)
+        session.add(plan_row)
+        session.commit()
+
+        consume_quota(session, "user_1", "room", "kaggle")
+        final = get_or_create_user_plan(session, "user_1")
+
+    # The window rolled (room_kaggle_used reset to 0 then incremented to 1),
+    # but lifetime_generations must never be zeroed by a window roll.
+    assert final.room_kaggle_used == 1
+    assert final.lifetime_generations == 11
+
+
+def test_set_plan_changes_the_plan_and_timestamp():
+    engine = make_test_engine()
+    with Session(engine) as session:
+        before = get_or_create_user_plan(session, "user_1")
+        updated = set_plan(session, "user_1", PRO)
+
+    assert updated.plan == PRO
+    assert updated.plan_updated_at >= before.plan_updated_at
+
+
+def test_set_plan_rejects_an_invalid_plan_string():
+    engine = make_test_engine()
+    with Session(engine) as session:
+        with pytest.raises(ValueError):
+            set_plan(session, "user_1", "enterprise")
+
+
+def test_set_plan_creates_the_row_if_it_does_not_exist_yet():
+    engine = make_test_engine()
+    with Session(engine) as session:
+        updated = set_plan(session, "brand_new_user", STUDIO)
+
+    assert updated.plan == STUDIO
+    assert updated.plan in VALID_PLANS
+
+
+def test_reset_usage_zeroes_used_counters_but_keeps_lifetime_total():
+    engine = make_test_engine()
+    with Session(engine) as session:
+        consume_quota(session, "user_1", "room", "kaggle")
+        consume_quota(session, "user_1", "house", "kaggle")
+
+        reset = reset_usage(session, "user_1")
+
+    assert reset.room_kaggle_used == 0
+    assert reset.house_kaggle_used == 0
+    assert reset.lifetime_generations == 2
+
+
+def test_capture_identity_writes_email_and_display_name():
+    engine = make_test_engine()
+    with Session(engine) as session:
+        row = capture_identity(session, "user_1", email="jane@example.com", display_name="Jane Doe")
+
+    assert row.email == "jane@example.com"
+    assert row.display_name == "Jane Doe"
+
+
+def test_capture_identity_does_not_overwrite_with_blank_values():
+    engine = make_test_engine()
+    with Session(engine) as session:
+        capture_identity(session, "user_1", email="jane@example.com", display_name="Jane Doe")
+        row = capture_identity(session, "user_1", email="", display_name="")
+
+    assert row.email == "jane@example.com"
+    assert row.display_name == "Jane Doe"
+
+
+def test_capture_identity_updates_on_a_changed_value():
+    engine = make_test_engine()
+    with Session(engine) as session:
+        capture_identity(session, "user_1", email="old@example.com")
+        row = capture_identity(session, "user_1", email="new@example.com")
+
+    assert row.email == "new@example.com"
+
+
+def test_list_all_user_plans_returns_every_known_user():
+    engine = make_test_engine()
+    with Session(engine) as session:
+        get_or_create_user_plan(session, "user_1")
+        get_or_create_user_plan(session, "user_2")
+        rows = list_all_user_plans(session)
+
+    assert {row.user_id for row in rows} == {"user_1", "user_2"}
 
 
 def test_plan_status_handles_a_naive_stored_quota_window_start():

@@ -21,6 +21,34 @@ class PlanStatusResponse(BaseModel):
     quota_window_reset_at: datetime
 
 
+class AdminUserRow(BaseModel):
+    """One row in GET /api/admin/users - a merge of UserPlan's identity
+    fields (user_id/email/display_name/lifetime_generations) with
+    app/plans.py's plan_status() usage snapshot, so the admin panel's numbers
+    always agree with what GET /api/plan itself would show that user."""
+
+    user_id: str
+    email: str
+    display_name: str
+    plan: str
+    plan_updated_at: datetime
+    created_at: datetime
+    lifetime_generations: int
+    quotas: dict[str, Optional[int]]
+    used: dict[str, int]
+    remaining: dict[str, Optional[int]]
+    quota_window_start: datetime
+    quota_window_reset_at: datetime
+
+
+class AdminUsersResponse(BaseModel):
+    users: list[AdminUserRow]
+
+
+class AdminSetPlanRequest(BaseModel):
+    plan: str  # "free" | "pro" | "studio" - validated against app.plans.VALID_PLANS
+
+
 class ProjectCreateResponse(BaseModel):
     project_id: str
 

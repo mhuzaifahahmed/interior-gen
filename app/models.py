@@ -105,6 +105,23 @@ class UserPlan(SQLModel, table=True):
     house_kaggle_used: int = Field(default=0)
     house_openai_used: int = Field(default=0)
 
+    # All-time counter, NEVER reset by roll_quota_window_if_needed() (unlike
+    # the four *_used columns above) - lets the admin panel show a real
+    # lifetime total distinct from the resettable rolling-window usage.
+    lifetime_generations: int = Field(default=0)
+
+    # Identity label fields for the admin panel (app/main.py's /api/admin/users)
+    # - this backend never sees a user's email/name otherwise, since Clerk's
+    # session JWT only carries the user id (see app/auth.py's AuthUser
+    # docstring). Populated best-effort/client-supplied (from Clerk.user on
+    # the frontend, same trust posture already used for display_name in S3
+    # keys - see app/main.py's _storage_namespace) via
+    # app/plans.py's capture_identity(), called from GET /api/plan and the
+    # generation endpoints. Empty string default, not None, so an admin-list
+    # query never needs a null check.
+    email: str = Field(default="")
+    display_name: str = Field(default="")
+
     plan_updated_at: datetime = Field(default_factory=_now)
     created_at: datetime = Field(default_factory=_now)
 

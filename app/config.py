@@ -340,5 +340,18 @@ class Settings(BaseSettings):
     def unlimited_test_user_id_set(self) -> set[str]:
         return {uid.strip() for uid in self.unlimited_test_user_ids.split(",") if uid.strip()}
 
+    # Comma-separated Clerk user ids allowed to use the admin panel
+    # (/admin, /api/admin/*) - see app/auth.py's require_admin(). Same
+    # allowlist-in-.env shape as unlimited_test_user_ids above, deliberately
+    # NOT a shared password: only a real, already-logged-in Clerk account on
+    # this list gets in, so there's no separate secret to leak. Empty by
+    # default; set via ADMIN_USER_IDS in .env (real ids belong in .env only,
+    # never .env.example).
+    admin_user_ids: str = ""
+
+    @property
+    def admin_user_id_set(self) -> set[str]:
+        return {uid.strip() for uid in self.admin_user_ids.split(",") if uid.strip()}
+
 
 settings = Settings()
