@@ -182,10 +182,6 @@ const errorCard = document.getElementById("error-card");
 const errorDetail = document.getElementById("error-detail");
 const retryBtn = document.getElementById("retry-btn");
 
-const quotaCard = document.getElementById("quota-card");
-const quotaDetail = document.getElementById("quota-detail");
-const quotaBackBtn = document.getElementById("quota-back-btn");
-
 const resultsSection = document.getElementById("results");
 const roomDescriptionEl = document.getElementById("room-description");
 const imageModelNoteEl = document.getElementById("image-model-note");
@@ -345,7 +341,6 @@ const roomModelToggleWrap = document.getElementById("room-model-toggle-wrap");
 const roomModelToggle = document.getElementById("room-model-toggle");
 const roomModelSelect = document.getElementById("room-model-select");
 const roomQuotaNote = document.getElementById("room-quota-note");
-const quotaViewPricingBtn = document.getElementById("quota-view-pricing-btn");
 
 const houseModelToggleWrap = document.getElementById("house-model-toggle-wrap");
 const houseModelToggle = document.getElementById("house-model-toggle");
@@ -637,11 +632,6 @@ async function applyPricingUI() {
     freeUpgradeNudge.hidden = currentPlan === "pro" || currentPlan === "studio";
   }
 }
-
-quotaViewPricingBtn?.addEventListener("click", () => {
-  resetToUpload();
-  switchTab("pricing");
-});
 
 /* ---------- Mobile nav sidebar open/close (GSAP) ---------- */
 /* Slide-in-from-the-right panel + backdrop fade, not the small anchored
@@ -2333,12 +2323,114 @@ jazzcashCopyBtn.addEventListener("click", async () => {
   }
 });
 
+/* ---------- Quota-exceeded popup (real quota hit, not a generic error) ----------
+   Same GSAP "morph" open/close recipe as the JazzCash modal above (see
+   CLAUDE.md's Motion/GSAP section - every dropdown/modal in this project
+   reuses this exact easing/duration/stagger so the motion feels uniform
+   site-wide), triggered from showQuotaExceeded() when a generation request
+   comes back 403. */
+
+const quotaModalOverlay = document.getElementById("quota-modal-overlay");
+const quotaModalCard = document.getElementById("quota-modal-card");
+const quotaModalClose = document.getElementById("quota-modal-close");
+const quotaModalDetailEl = document.getElementById("quota-modal-detail");
+const quotaModalResetWrapEl = document.getElementById("quota-modal-reset-wrap");
+const quotaModalResetDateEl = document.getElementById("quota-modal-reset-date");
+const quotaModalUpgradeBtn = document.getElementById("quota-modal-upgrade-btn");
+const quotaModalWaitBtn = document.getElementById("quota-modal-wait-btn");
+
+let quotaModalTl = null;
+
+function formatQuotaResetDate(isoString) {
+  try {
+    return new Date(isoString).toLocaleDateString(undefined, {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    });
+  } catch {
+    return null;
+  }
+}
+
+// The reset date isn't in the 403's own error body (app/plans.py's
+// QuotaExceededError.user_message() is plain text, no structured date) -
+// GET /api/plan already carries quota_window_reset_at, and applyRoomPlanUI()
+// has almost always already populated cachedPlanStatus by the time a
+// generation is even submitted (it runs on every room-tab visit), so this
+// only falls back to a fresh fetch on the rare cold-cache case.
+async function openQuotaModal(message) {
+  quotaModalDetailEl.textContent = message;
+  quotaModalResetDateEl.textContent = "—";
+  quotaModalOverlay.hidden = false;
+
+  const status = cachedPlanStatus || (await fetchPlanStatus());
+  const formatted = status ? formatQuotaResetDate(status.quota_window_reset_at) : null;
+  if (formatted) {
+    quotaModalResetDateEl.textContent = formatted;
+    quotaModalResetWrapEl.hidden = false;
+  } else {
+    // No plan status available at all (e.g. the fetch itself failed) -
+    // hide the reset-date box entirely rather than show a broken "—".
+    quotaModalResetWrapEl.hidden = true;
+  }
+
+  if (typeof gsap === "undefined" || prefersReducedMotion) return;
+
+  if (quotaModalTl) quotaModalTl.kill();
+  gsap.set(quotaModalOverlay, { opacity: 0 });
+  gsap.set(quotaModalCard, { transformOrigin: "center", scale: 0.85, opacity: 0, y: -8 });
+  // Close button excluded from the stagger for the same reason documented
+  // on the JazzCash modal above - an inline GSAP transform left on it would
+  // permanently outrank its Tailwind hover:scale-110 utility in the cascade.
+  const items = Array.from(quotaModalCard.children).filter((el) => el !== quotaModalClose);
+  gsap.set(items, { opacity: 0, y: -6 });
+
+  quotaModalTl = gsap.timeline();
+  quotaModalTl
+    .to(quotaModalOverlay, { opacity: 1, duration: 0.2, ease: "power1.out" }, 0)
+    .to(quotaModalCard, { scale: 1, opacity: 1, y: 0, duration: 0.32, ease: "back.out(1.7)" }, 0)
+    .to(items, { opacity: 1, y: 0, duration: 0.22, ease: "power2.out", stagger: 0.05 }, "-=0.18");
+}
+
+function closeQuotaModal() {
+  if (quotaModalOverlay.hidden) return;
+
+  if (typeof gsap === "undefined" || prefersReducedMotion) {
+    quotaModalOverlay.hidden = true;
+    return;
+  }
+
+  if (quotaModalTl) quotaModalTl.kill();
+  quotaModalTl = gsap.timeline({
+    onComplete: () => {
+      quotaModalOverlay.hidden = true;
+      gsap.set(quotaModalCard, { clearProps: "all" });
+      gsap.set(quotaModalOverlay, { clearProps: "all" });
+    },
+  });
+  quotaModalTl
+    .to(quotaModalCard, { scale: 0.9, opacity: 0, y: -6, duration: 0.16, ease: "power1.in" }, 0)
+    .to(quotaModalOverlay, { opacity: 0, duration: 0.16, ease: "power1.in" }, 0);
+}
+
+quotaModalClose.addEventListener("click", closeQuotaModal);
+quotaModalOverlay.addEventListener("click", (e) => {
+  if (e.target === quotaModalOverlay) closeQuotaModal();
+});
+quotaModalWaitBtn.addEventListener("click", closeQuotaModal);
+quotaModalUpgradeBtn.addEventListener("click", () => {
+  closeQuotaModal();
+  switchTab("pricing");
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   lightbox.hidden = true;
   closeMaterialsModal();
   closeHistoryModal();
   closeJazzCashModal();
+  closeQuotaModal();
 });
 
 /* ---------- Error / retry ---------- */
@@ -2352,15 +2444,16 @@ function showError(message) {
 // Shown instead of showError() specifically for a 403 quota-exceeded
 // response from POST /api/projects (see app/plans.py's QuotaExceededError -
 // the backend already composes a clear, specific message naming the plan
-// and limit, so this just displays it verbatim alongside the pricing cards
-// rather than a generic "something went wrong").
+// and limit). Opens the quota popup (openQuotaModal below) ON TOP of the
+// upload state, rather than a separate full-page "quota" state - the
+// user's already-filled-in form (photo, style, notes) stays intact
+// underneath instead of being wiped, so they can just close the popup and
+// keep going once their quota resets or they upgrade.
 function showQuotaExceeded(message) {
   stopProgressMessages();
-  quotaDetail.textContent = message;
-  showState("quota");
+  showState("upload");
+  openQuotaModal(message);
 }
-
-quotaBackBtn.addEventListener("click", resetToUpload);
 
 function resetToUpload() {
   stopProgressMessages();
@@ -2383,7 +2476,6 @@ function showState(state) {
   uploadView.hidden = state !== "upload";
   progressCard.hidden = state !== "progress";
   errorCard.hidden = state !== "error";
-  quotaCard.hidden = state !== "quota";
   resultsSection.hidden = state !== "results";
 }
 

@@ -593,50 +593,6 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <button type="button" id="retry-btn" class="border border-error/50 text-error px-6 py-2 font-label-caps text-label-caps hover:bg-error/10 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">Try another photo</button>
 </section>
 
-<!-- Shown instead of the generic error card when a generation is blocked by
-     the subscription quota system (app/plans.py) - a 403 from POST
-     /api/projects, not a generic failure. Room Redesign only for now (Build
-     a House isn't quota-gated yet - see future-plans/subscription-and-
-     access-roadmap.md's "House quota gap" note). -->
-<section class="quota-card max-w-3xl mx-auto mt-8 px-6 py-10 text-center" id="quota-card" hidden>
-<span class="material-symbols-outlined text-primary text-4xl mb-3">workspace_premium</span>
-<p class="font-headline-sm text-headline-sm text-on-surface mb-2">You've reached your plan's limit</p>
-<p class="font-body-md text-on-surface-variant text-sm max-w-lg mx-auto mb-8" id="quota-detail"></p>
-<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-left mb-8">
-<div class="border border-outline-variant rounded-xl p-5">
-<p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Free</p>
-<p class="font-headline-sm text-headline-sm text-on-surface mb-3">PKR 0</p>
-<ul class="font-body-md text-sm text-on-surface-variant space-y-1.5">
-<li>5 Room generations/mo</li>
-<li>3 House generations/mo</li>
-<li>Our model only</li>
-</ul>
-</div>
-<div class="border-2 border-primary rounded-xl p-5 relative bg-primary-container/20">
-<span class="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-on-primary font-label-caps text-[10px] px-3 py-1 rounded-full">MOST POPULAR</span>
-<p class="font-label-caps text-label-caps text-primary mb-1">Pro</p>
-<p class="font-headline-sm text-headline-sm text-on-surface mb-3">PKR 2,499/mo</p>
-<ul class="font-body-md text-sm text-on-surface-variant space-y-1.5">
-<li>150 Room (our model) + 30 Room (OpenAI)/mo</li>
-<li>60 House (our model) + 10 House (OpenAI)/mo</li>
-<li>Choice of our model or OpenAI</li>
-</ul>
-</div>
-<div class="border border-outline-variant rounded-xl p-5">
-<p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Studio</p>
-<p class="font-headline-sm text-headline-sm text-on-surface mb-3">PKR 6,999/mo</p>
-<ul class="font-body-md text-sm text-on-surface-variant space-y-1.5">
-<li>Unlimited Room (our model) + 100 (OpenAI)/mo</li>
-<li>Unlimited House (our model) + 40 (OpenAI)/mo</li>
-<li>Commercial-use license, priority support</li>
-</ul>
-</div>
-</div>
-<div class="flex items-center justify-center gap-3 mt-2">
-<button type="button" id="quota-back-btn" class="border border-outline-variant text-on-surface px-6 py-2 font-label-caps text-label-caps hover:border-primary hover:text-primary hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">Back</button>
-<button type="button" id="quota-view-pricing-btn" class="border border-primary text-primary px-6 py-2 font-label-caps text-label-caps hover:bg-primary/10 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">View full pricing</button>
-</div>
-</section>
 
 <section class="results max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop mt-14 mb-section-gap" id="results" hidden>
 <p class="room-description text-center font-body-md text-on-surface-variant italic max-w-2xl mx-auto mb-10" id="room-description"></p>
@@ -1000,6 +956,33 @@ Interior&#8209;Gen
 </div>
 </div>
 <p class="font-body-md text-on-surface-variant/70 text-xs mt-3" id="jazzcash-copy-confirm" style="visibility:hidden;">Copied to clipboard.</p>
+</div>
+</div>
+
+<!-- Shown instead of the generic error card when a generation is blocked by
+     the subscription quota system (app/plans.py) - a 403 from POST
+     /api/projects. Room Redesign only for now (Build a House isn't
+     quota-gated yet - see future-plans/subscription-and-access-
+     roadmap.md's "House quota gap" note). A real popup (not a full inline
+     page state, matching the JazzCash modal's exact GSAP "morph" recipe -
+     see CLAUDE.md's Motion/GSAP section) so the user's already-filled-in
+     form stays intact underneath instead of being wiped. -->
+<div class="materials-modal-overlay fixed inset-0 z-[62] bg-black/70 flex items-center justify-center p-6" id="quota-modal-overlay" hidden>
+<div class="materials-modal relative w-full max-w-md bg-surface-container p-8 border border-outline-variant shadow-2xl text-center" id="quota-modal-card">
+<button type="button" class="absolute top-4 right-4 z-10 bg-surface-container-high hover:bg-primary hover:text-on-primary hover:scale-110 hover:shadow-md text-on-surface w-9 h-9 rounded-full flex items-center justify-center text-xl transition-all duration-200" id="quota-modal-close" aria-label="Close">&times;</button>
+<div class="flex justify-center mb-4">
+<span class="material-symbols-outlined text-primary text-5xl">workspace_premium</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-2">Your generation limit is full</h3>
+<p class="font-body-md text-on-surface-variant text-sm mb-5" id="quota-modal-detail"></p>
+<div class="bg-surface-container-low border border-outline-variant rounded-xl p-4 mb-6" id="quota-modal-reset-wrap">
+<p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Your quota resets</p>
+<p class="font-body-md text-on-surface font-semibold" id="quota-modal-reset-date">&mdash;</p>
+</div>
+<div class="flex flex-col gap-3">
+<button type="button" id="quota-modal-upgrade-btn" class="bg-primary text-on-primary px-6 py-3 font-label-caps text-label-caps hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 rounded-full">Upgrade Now</button>
+<button type="button" id="quota-modal-wait-btn" class="border border-outline-variant text-on-surface-variant px-6 py-3 font-label-caps text-label-caps hover:border-primary hover:text-primary transition-all duration-200 rounded-full">OK, I'll wait</button>
+</div>
 </div>
 </div>
 
