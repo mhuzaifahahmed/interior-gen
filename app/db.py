@@ -90,13 +90,23 @@ _NEW_COLUMNS_BY_TABLE = {
 
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
-    # The PRAGMA-based column migration below is SQLite-only syntax - a fresh
-    # Postgres database already gets the full current schema straight from
-    # create_all() above (nothing to migrate), and an existing Postgres DB
-    # would need a real migration tool (e.g. Alembic), out of scope here.
-    if _is_sqlite:
-        _migrate_missing_columns()
-    else:
+    # Real bug hit in production (2026-09): the comment that used to be here
+    # claimed "a fresh Postgres database already gets the full current schema
+    # straight from create_all(), nothing to migrate" - true only the FIRST
+    # time the Postgres DB was ever created. Every column added to a
+    # SQLModel class AFTER that (like UserPlan.email/display_name/
+    # lifetime_generations) never reaches the real, already-existing Postgres
+    # table, because create_all() only creates missing TABLES, never adds
+    # columns to one that already exists - identical to the SQLite gap this
+    # migration was originally written for. Real symptom: GET /api/plan
+    # started 500ing in production the moment capture_identity() tried to
+    # write plan_row.email on a table with no "email" column - the ADMIN
+    # panel + nav quota bar shipped, but silently broke on the live Postgres
+    # DB since this only ran for SQLite. Fixed by making
+    # _migrate_missing_columns() work against BOTH engines (see its own
+    # docstring) - it now runs unconditionally, same DDL strings for either.
+    _migrate_missing_columns()
+    if not _is_sqlite:
         _drop_legacy_user_table()
 
 
@@ -122,10 +132,34 @@ def _drop_legacy_user_table() -> None:
             conn.rollback()
 
 
+def _existing_columns(conn, table_name: str) -> set[str]:
+    """Real column names currently on `table_name`, engine-appropriate:
+    SQLite has no information_schema, hence the PRAGMA branch; Postgres (and
+    every other real SQL engine) supports information_schema.columns
+    directly. Returns an empty set if the table doesn't exist yet (a fresh
+    DB - create_all() already gave it the full current schema, nothing to
+    migrate)."""
+    if _is_sqlite:
+        return {row[1] for row in conn.execute(text(f"PRAGMA table_info({table_name})"))}
+    return {
+        row[0]
+        for row in conn.execute(
+            text("SELECT column_name FROM information_schema.columns WHERE table_name = :table_name"),
+            {"table_name": table_name},
+        )
+    }
+
+
 def _migrate_missing_columns() -> None:
+    """Runs against EITHER engine - see init_db()'s comment for the real
+    production bug this generalization fixes. The ALTER TABLE ... ADD COLUMN
+    DDL strings in _NEW_COLUMNS_BY_TABLE are plain ANSI-ish SQL (TEXT/INTEGER,
+    NOT NULL DEFAULT ...) that Postgres accepts identically to SQLite - only
+    the "what columns already exist" introspection differs, see
+    _existing_columns()."""
     with engine.connect() as conn:
         for table_name, new_columns in _NEW_COLUMNS_BY_TABLE.items():
-            existing = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table_name})"))}
+            existing = _existing_columns(conn, table_name)
             if not existing:
                 continue  # table doesn't exist yet (fresh DB) - create_all() will give it full schema
             for name, ddl_type in new_columns:
