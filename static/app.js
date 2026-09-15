@@ -3076,6 +3076,22 @@ if (typeof gsap !== "undefined" && !prefersReducedMotion) {
 // Both target functions are async - a plain try/catch around the call
 // wouldn't catch a rejection surfacing after their first internal await, so
 // .catch() on the returned promise is the correct safety net here.
+// Deep-link support, e.g. "/?tab=pricing" - added so login.html/signup.html
+// (and any other external link) can land directly on a specific tab. Real
+// bug this fixes: those pages' nav links previously all pointed at bare "/"
+// regardless of label (HOME/ROOM REDESIGN/BUILD A HOUSE all identical hrefs,
+// and PRICING was missing entirely) - clicking any of them just landed on
+// Home. Placed at the very end of the file for the same hoisting-safety
+// reason as the resume/restore dispatch right below - switchTab() touches
+// several consts (tabSwitchTl, GSAP timelines, TAB_PANELS) that must already
+// be initialized. Applied BEFORE the resume/restore check below so a real
+// in-flight generation can still override it (switchTab() is idempotent -
+// calling it twice just switches twice, harmlessly).
+const requestedTab = new URLSearchParams(window.location.search).get("tab");
+if (requestedTab && TAB_ORDER.includes(requestedTab) && requestedTab !== currentTab) {
+  switchTab(requestedTab);
+}
+
 if (localStorage.getItem(ACTIVE_GENERATION_KEY)) {
   resumeActiveGeneration().catch((err) => {
     console.error("Failed to resume active generation:", err);
