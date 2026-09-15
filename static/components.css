@@ -353,6 +353,37 @@ html, body {
   transform: scale(1);
 }
 
+/* ---- Generic skeleton loading blocks ----
+   Same shimmer technique as .concept-skeleton above, generalized so it can
+   be dropped anywhere content is still loading (history modal, admin user
+   table, nav account-menu usage bars) - combine with Tailwind sizing
+   utilities (h-*, w-*, rounded-*) for the actual shape, this class only
+   supplies the animated gradient. Two variants: the light-surface one for
+   modals/cards sitting on the cream "paper" background, and the dark one
+   for the nav's permanently-dark glass pill/dropdown + mobile sidebar. */
+.skeleton-shimmer {
+  /* Deliberately NOT var(--paper-high)/var(--paper-raised) - those are
+     nearly identical to the surface-container background these skeletons
+     usually sit on (both resolve to ~#efe7d6), which made the very first
+     version of this almost invisible against the history modal. #ddd0b0 is
+     close to the theme's own surface-container-highest token, giving real
+     contrast against white, linen, AND surface-container backgrounds alike. */
+  background: linear-gradient(100deg, #ddd0b0 25%, var(--paper-raised) 50%, #ddd0b0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+.skeleton-shimmer-dark {
+  background: linear-gradient(
+    100deg,
+    rgba(245, 239, 226, 0.08) 25%,
+    rgba(245, 239, 226, 0.22) 50%,
+    rgba(245, 239, 226, 0.08) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
 .concept-label {
   position: absolute;
   bottom: 0.4rem;

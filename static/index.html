@@ -83,7 +83,11 @@
 <p class="font-label-caps text-label-caps text-on-night truncate" id="nav-menu-name"></p>
 <p class="font-body-md text-xs text-on-night-variant truncate mt-0.5" id="nav-menu-email"></p>
 </div>
-<div class="px-4 py-3 border-b border-night-border" id="nav-plan-usage"></div>
+<div class="px-4 py-3 border-b border-night-border" id="nav-plan-usage">
+<div class="skeleton-shimmer-dark h-3 w-20 rounded mb-3"></div>
+<div class="skeleton-shimmer-dark h-2 w-full rounded-full mb-2"></div>
+<div class="skeleton-shimmer-dark h-2 w-full rounded-full"></div>
+</div>
 <button type="button" class="w-full text-left px-4 py-3 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors flex items-center gap-2" id="nav-history-btn">
 <span class="material-symbols-outlined text-[18px]">history</span>
 HISTORY
@@ -142,7 +146,11 @@ LOG OUT
 <p class="font-technical-data text-technical-data text-on-night-variant truncate" id="mobile-sidebar-email"></p>
 </div>
 </div>
-<div class="px-5 py-3" id="mobile-plan-usage"></div>
+<div class="px-5 py-3" id="mobile-plan-usage">
+<div class="skeleton-shimmer-dark h-3 w-20 rounded mb-3"></div>
+<div class="skeleton-shimmer-dark h-2 w-full rounded-full mb-2"></div>
+<div class="skeleton-shimmer-dark h-2 w-full rounded-full"></div>
+</div>
 <button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" id="mobile-sidebar-history-btn">HISTORY</button>
 <button type="button" class="mobile-sidebar-link w-full text-left px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors" id="mobile-sidebar-logout-btn">LOG OUT</button>
 </div>
@@ -792,14 +800,27 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <label for="house-extras" class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Anything else? (optional)</label>
 <input type="text" id="house-extras" name="extras" maxlength="200" placeholder="e.g. garage, kitchen on every floor, modern style" class="w-full bg-transparent border-b border-outline-variant py-3 font-body-md text-on-surface focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200"/>
 </div>
-<!-- No Our-Model/OpenAI toggle here yet, unlike Room Redesign - there's no
-     trained self-hosted house-render model in production, so both choices
-     would silently hit the same OpenAI backend today (see CLAUDE.md's "Build
-     a House feature" / future-plans/subscription-and-access-roadmap.md's
-     "House quota gap"). Showing a toggle that doesn't actually change
-     anything would be misleading, so this stays a plain, honest note until a
-     real self-hosted option exists. -->
-<p class="font-body-md text-on-surface-variant/70 text-xs">Build a House renders currently use OpenAI &mdash; our self-hosted house model isn't live yet.</p>
+<!-- Kaggle-vs-OpenAI model choice, mirroring Room Redesign's toggle - our
+     self-hosted elevation model is the real, working default now
+     (HOUSE_IMAGE_PROVIDER=kaggle), so unlike before, "Our Model" is a real
+     choice here. OpenAI stays visibly present but disabled/"Coming soon" -
+     it isn't wired as a real per-request choice for house yet. Visibility +
+     the note under it are driven live by applyHousePlanUI() in app.js. -->
+<div id="house-model-toggle-wrap" hidden>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Generation model</label>
+<div class="flex gap-2" id="house-model-toggle" role="radiogroup">
+<button type="button" class="model-toggle-btn flex-1 border border-outline-variant rounded-lg px-4 py-3 text-left transition-all duration-200" data-value="kaggle">
+<span class="font-label-caps text-label-caps block">Our Model</span>
+<span class="font-body-md text-xs text-on-surface-variant block mt-0.5">Free, fast</span>
+</button>
+<button type="button" class="model-toggle-btn is-disabled flex-1 border border-outline-variant rounded-lg px-4 py-3 text-left transition-all duration-200 opacity-50 cursor-not-allowed" data-value="openai" disabled>
+<span class="font-label-caps text-label-caps block">OpenAI</span>
+<span class="font-body-md text-xs text-on-surface-variant block mt-0.5">Coming soon &mdash; we're working on it</span>
+</button>
+</div>
+<input type="hidden" id="house-model-select" value="kaggle"/>
+</div>
+<p class="font-body-md text-on-surface-variant/70 text-xs" id="house-quota-note" hidden></p>
 <div class="pt-2">
 <button type="submit" id="house-generate-btn" disabled class="group relative w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 overflow-hidden disabled:opacity-35 disabled:cursor-not-allowed enabled:hover:-translate-y-0.5 enabled:hover:shadow-[0_8px_28px_rgba(122,71,18,0.35)] transition-all duration-300 shadow-md">
 <span class="relative z-10 font-label-caps text-label-caps font-bold uppercase btn-label">Generate Concept</span>
@@ -941,7 +962,15 @@ Interior&#8209;Gen
 <button type="button" class="history-tab-btn font-label-caps text-label-caps px-4 py-2 rounded-full border border-outline-variant" data-history-tab="house">BUILD A HOUSE</button>
 </div>
 <div id="history-modal-body">
-<p class="font-body-md text-on-surface-variant text-sm" id="history-modal-loading">Loading…</p>
+<div class="flex flex-col gap-3 py-5 border-b border-outline-variant/70">
+<div class="skeleton-shimmer h-3 w-32 rounded"></div>
+<div class="skeleton-shimmer h-3 w-2/3 rounded"></div>
+<div class="flex gap-2 flex-wrap">
+<div class="skeleton-shimmer w-20 h-20 rounded-lg"></div>
+<div class="skeleton-shimmer w-20 h-20 rounded-lg"></div>
+<div class="skeleton-shimmer w-20 h-20 rounded-lg"></div>
+</div>
+</div>
 </div>
 </div>
 </div>

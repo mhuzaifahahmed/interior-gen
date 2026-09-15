@@ -317,11 +317,13 @@ clerkReady
   .then((Clerk) => {
     applyAuthUI(Clerk.user);
     applyRoomPlanUI();
+    applyHousePlanUI();
     applyPricingUI();
     applyPlanMenuQuota();
     Clerk.addListener(({ user }) => {
       applyAuthUI(user);
       applyRoomPlanUI();
+      applyHousePlanUI();
       applyPricingUI();
       applyPlanMenuQuota();
     });
@@ -344,6 +346,11 @@ const roomModelToggle = document.getElementById("room-model-toggle");
 const roomModelSelect = document.getElementById("room-model-select");
 const roomQuotaNote = document.getElementById("room-quota-note");
 const quotaViewPricingBtn = document.getElementById("quota-view-pricing-btn");
+
+const houseModelToggleWrap = document.getElementById("house-model-toggle-wrap");
+const houseModelToggle = document.getElementById("house-model-toggle");
+const houseModelSelect = document.getElementById("house-model-select");
+const houseQuotaNote = document.getElementById("house-quota-note");
 
 // Cached across calls within one page load - re-fetched (not invalidated)
 // whenever plan-dependent UI needs a fresh number, since GET /api/plan is
@@ -497,11 +504,17 @@ function setModelToggleValue(groupEl, selectEl, value) {
 
 function wireModelToggle(groupEl, selectEl) {
   groupEl.querySelectorAll(".model-toggle-btn").forEach((btn) => {
+    // Build a House's OpenAI option is present but disabled ("Coming soon") -
+    // a real <button disabled> already blocks the click at the browser level,
+    // this is just defense-in-depth so it can never become selectable.
+    if (btn.disabled) return;
     btn.addEventListener("click", () => setModelToggleValue(groupEl, selectEl, btn.dataset.value));
   });
 }
 wireModelToggle(roomModelToggle, roomModelSelect);
 setModelToggleValue(roomModelToggle, roomModelSelect, "kaggle");
+wireModelToggle(houseModelToggle, houseModelSelect);
+setModelToggleValue(houseModelToggle, houseModelSelect, "kaggle");
 
 // Decides whether Room Redesign's Kaggle/OpenAI toggle is shown at all, and
 // what the quota note under it says. Only anonymous (pre-login trial) and
@@ -551,6 +564,53 @@ async function applyRoomPlanUI() {
   const kaggleLeft = formatRemaining(status.remaining.room_kaggle, status.quotas.room_kaggle);
   const openaiLeft = formatRemaining(status.remaining.room_openai, status.quotas.room_openai);
   roomQuotaNote.textContent = `${planLabel} plan — Our Model: ${kaggleLeft} · OpenAI: ${openaiLeft} this month.`;
+}
+
+// Build a House's equivalent of applyRoomPlanUI() above - same shown-to/
+// hidden-from rules (anonymous + Pro/Studio get the toggle, Free doesn't),
+// but OpenAI is always disabled in the markup itself (see index.html's
+// house-model-toggle-wrap - it's a real <button disabled>, "Coming soon")
+// since it isn't wired as a genuine per-request choice for house yet -
+// HOUSE_IMAGE_PROVIDER=kaggle (our elevation model) is the real, working
+// default today, unlike when this toggle didn't exist at all.
+async function applyHousePlanUI() {
+  const Clerk = await clerkReady;
+  if (!Clerk.user) {
+    houseModelToggleWrap.hidden = false;
+    houseQuotaNote.hidden = true;
+    return;
+  }
+
+  const status = await fetchPlanStatus();
+  if (!status) {
+    houseModelToggleWrap.hidden = true;
+    houseQuotaNote.hidden = true;
+    return;
+  }
+
+  if (status.plan === "free") {
+    houseModelToggleWrap.hidden = true;
+    setModelToggleValue(houseModelToggle, houseModelSelect, "kaggle");
+    houseQuotaNote.hidden = false;
+    houseQuotaNote.innerHTML =
+      `Free plan &mdash; ${formatRemaining(status.remaining.house_kaggle, status.quotas.house_kaggle)} ` +
+      `House generations this month. <a href="#" class="text-primary underline" id="house-upgrade-link">` +
+      `Upgrade for higher limits</a>.`;
+    document.getElementById("house-upgrade-link")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      switchTab("pricing");
+    });
+    return;
+  }
+
+  // Pro/Studio - "Our Model" is the real, selectable choice; OpenAI stays
+  // disabled in the markup, so only one remaining-count is meaningful here.
+  houseModelToggleWrap.hidden = false;
+  houseQuotaNote.hidden = false;
+  const planLabel = status.plan === "studio" ? "Studio" : "Pro";
+  const kaggleLeft = formatRemaining(status.remaining.house_kaggle, status.quotas.house_kaggle);
+  houseQuotaNote.textContent =
+    `${planLabel} plan — Our Model: ${kaggleLeft} this month. OpenAI for Build a House isn't available yet — we're working on it.`;
 }
 
 // Pricing tab: marks whichever plan the logged-in user is actually on as
@@ -1007,6 +1067,7 @@ function switchTab(tab) {
   // on every poll/render, since GET /api/plan is a real (if cheap) network
   // call and these are the only two places its result is actually displayed.
   if (tab === "room") applyRoomPlanUI();
+  if (tab === "house") applyHousePlanUI();
   if (tab === "pricing") applyPricingUI();
 
   const oldTab = currentTab;
@@ -1224,6 +1285,7 @@ async function restorePendingGeneration() {
     // above already calls its own equivalent (updateGenerateButtonState())
     // - this was the missing counterpart for the house tab.
     updateHouseGenerateBtnState();
+    applyHousePlanUI();
   }
 
   if (!pending.fileDataUrl) return;
@@ -2006,6 +2068,25 @@ function renderHistoryHouseCard(project) {
   `;
 }
 
+// Skeleton placeholder shown while GET /api/projects + /api/house-projects
+// are in flight - mirrors the real card shape renderHistoryRoomCard()/
+// renderHistoryHouseCard() produce (a date line, a description line, a row
+// of thumbnail chips) so the loading state doesn't jump/reflow once the
+// real data lands.
+function historySkeletonHTML() {
+  const row = `
+    <div class="flex flex-col gap-3 py-5 border-b border-outline-variant/70">
+      <div class="skeleton-shimmer h-3 w-32 rounded"></div>
+      <div class="skeleton-shimmer h-3 w-2/3 rounded"></div>
+      <div class="flex gap-2 flex-wrap">
+        <div class="skeleton-shimmer w-20 h-20 rounded-lg"></div>
+        <div class="skeleton-shimmer w-20 h-20 rounded-lg"></div>
+        <div class="skeleton-shimmer w-20 h-20 rounded-lg"></div>
+      </div>
+    </div>`;
+  return row + row + row;
+}
+
 function renderHistoryTabContent() {
   if (historyActiveTab === "room") {
     historyModalBody.innerHTML = historyRoomProjects.length
@@ -2030,7 +2111,7 @@ function renderHistoryTabContent() {
 
 async function openHistoryModal() {
   historyModalOverlay.hidden = false;
-  historyModalBody.innerHTML = '<p class="font-body-md text-on-surface-variant text-sm">Loading…</p>';
+  historyModalBody.innerHTML = historySkeletonHTML();
 
   try {
     const [roomRes, houseRes] = await Promise.all([
@@ -2416,6 +2497,10 @@ houseForm.addEventListener("submit", async (e) => {
   formData.append("extras", houseExtrasInput.value.trim());
   formData.append("display_name", await currentUserDisplayName());
   formData.append("email", await currentUserEmail());
+  // Only sent when the toggle is actually visible/meaningful (anonymous
+  // trial or Pro/Studio - see applyHousePlanUI()) - a logged-in Free-plan
+  // user's request omits it entirely, same as Room Redesign's toggle above.
+  if (!houseModelToggleWrap.hidden) formData.append("preferred_model", houseModelSelect.value);
 
   let houseProjectId;
   try {
@@ -2446,6 +2531,8 @@ houseForm.addEventListener("submit", async (e) => {
     showHouseError(err.message);
     return;
   }
+
+  applyHousePlanUI();
 
   activeHouseProjectId = houseProjectId;
   housePollCancelled = false;
@@ -2908,6 +2995,7 @@ function resetToHouseUpload() {
   houseWidthInput.value = "";
   houseExtrasInput.value = "";
   showHouseState("upload");
+  applyHousePlanUI();
 }
 
 houseRetryBtn.addEventListener("click", resetToHouseUpload);
