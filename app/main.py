@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
+from svix.webhooks import Webhook, WebhookVerificationError
 
 from app.auth import AuthUser, get_current_user, require_admin, require_user
 from app.config import settings
@@ -351,6 +352,69 @@ def admin_reset_usage(
 ):
     plan_row = reset_usage(session, user_id)
     return _admin_row(session, plan_row)
+
+
+@app.post("/api/webhooks/clerk")
+async def clerk_webhook(request: Request, session: Session = Depends(get_session)):
+    """Real-time counterpart to the lazy row-creation GET /api/plan already
+    does - without this, a UserPlan row (and so a row in the admin panel)
+    only appears the first time someone actually LOGS IN and the page loads
+    while authenticated, never at signup itself (Clerk and this backend are
+    two separate systems with no sync otherwise - a real, reported gap:
+    someone signed up and was visible in Clerk's own dashboard but invisible
+    here until they logged in). Subscribes to Clerk's "user.created" event
+    so the row exists the moment someone signs up, before their first login.
+
+    Deliberately NOT gated by require_user/require_admin - Clerk calls this
+    endpoint directly, with no Authorization: Bearer header at all. Security
+    comes entirely from the Svix signature (settings.clerk_webhook_secret,
+    from the Clerk Dashboard's Webhooks page), verified against the RAW
+    request body - not the re-serialized JSON, which would produce a
+    different byte sequence and always fail verification.
+    """
+    body = await request.body()
+    if not settings.clerk_webhook_secret:
+        # Not configured yet - same "silently inert" treatment as this
+        # project's other optional vendor slots (e.g. idealhouse.py) rather
+        # than 500ing on every delivery Clerk retries.
+        raise HTTPException(400, "Clerk webhook not configured")
+
+    try:
+        Webhook(settings.clerk_webhook_secret).verify(
+            body,
+            {
+                "svix-id": request.headers.get("svix-id", ""),
+                "svix-timestamp": request.headers.get("svix-timestamp", ""),
+                "svix-signature": request.headers.get("svix-signature", ""),
+            },
+        )
+    except WebhookVerificationError:
+        raise HTTPException(400, "invalid webhook signature")
+
+    payload = json.loads(body)
+    if payload.get("type") != "user.created":
+        # Only user.created is handled - any other subscribed/future event
+        # type is a harmless no-op ack, not an error (Clerk retries on
+        # non-2xx, which would otherwise hammer this endpoint pointlessly).
+        return {"status": "ignored"}
+
+    data = payload.get("data", {})
+    user_id = data.get("id")
+    if not user_id:
+        return {"status": "ignored"}
+
+    email_addresses = data.get("email_addresses") or []
+    primary_id = data.get("primary_email_address_id")
+    primary_email = next(
+        (e.get("email_address") for e in email_addresses if e.get("id") == primary_id),
+        email_addresses[0].get("email_address") if email_addresses else "",
+    )
+    display_name = " ".join(filter(None, [data.get("first_name"), data.get("last_name")])) or (
+        data.get("username") or ""
+    )
+
+    capture_identity(session, user_id, email=primary_email or "", display_name=display_name)
+    return {"status": "ok"}
 
 
 @app.post("/api/projects", response_model=ProjectCreateResponse)

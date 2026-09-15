@@ -1,11 +1,12 @@
 import io
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlmodel import Session
+from svix.webhooks import Webhook
 
 import app.main as main_module
 from app.db import engine
@@ -926,3 +927,104 @@ def test_admin_reset_usage_zeroes_a_users_counters(monkeypatch):
         assert res.json()["used"]["room_kaggle"] == 0
         # lifetime_generations is never zeroed by a reset.
         assert res.json()["lifetime_generations"] == 1
+
+
+def _sign_clerk_webhook(secret: str, body: bytes) -> dict:
+    """Builds real, valid Svix headers for a test webhook delivery - Clerk
+    webhooks are signed via Svix, and there's no way to construct a
+    passing signature without the library itself. Mirrors exactly what
+    app/main.py's clerk_webhook() expects to receive."""
+    wh = Webhook(secret)
+    msg_id = f"msg_{uuid.uuid4().hex[:16]}"
+    ts = datetime.now(timezone.utc)
+    signature = wh.sign(msg_id, ts, body.decode())
+    return {
+        "svix-id": msg_id,
+        "svix-timestamp": str(int(ts.timestamp())),
+        "svix-signature": signature,
+    }
+
+
+_TEST_WEBHOOK_SECRET = "whsec_dGVzdHNlY3JldGtleWZvcnRlc3Rpbmc="
+
+
+def _clerk_user_created_payload(user_id: str, email: str, first_name: str, last_name: str) -> bytes:
+    return json.dumps(
+        {
+            "type": "user.created",
+            "data": {
+                "id": user_id,
+                "primary_email_address_id": "idn_primary",
+                "email_addresses": [{"id": "idn_primary", "email_address": email}],
+                "first_name": first_name,
+                "last_name": last_name,
+            },
+        }
+    ).encode()
+
+
+def test_clerk_webhook_creates_userplan_row_on_user_created(monkeypatch):
+    monkeypatch.setattr(main_module.settings, "clerk_webhook_secret", _TEST_WEBHOOK_SECRET)
+    user_id = f"user_{uuid.uuid4().hex[:24]}"
+    body = _clerk_user_created_payload(user_id, "newsignup@example.com", "New", "Signup")
+    headers = _sign_clerk_webhook(_TEST_WEBHOOK_SECRET, body)
+
+    with TestClient(app) as client:
+        res = client.post("/api/webhooks/clerk", content=body, headers=headers)
+        assert res.status_code == 200
+        assert res.json()["status"] == "ok"
+
+    from app.db import engine as db_engine
+    from app.models import UserPlan
+
+    with Session(db_engine) as session:
+        row = session.get(UserPlan, user_id)
+        assert row is not None
+        assert row.email == "newsignup@example.com"
+        assert row.display_name == "New Signup"
+        assert row.plan == "free"
+
+
+def test_clerk_webhook_rejects_an_invalid_signature(monkeypatch):
+    monkeypatch.setattr(main_module.settings, "clerk_webhook_secret", _TEST_WEBHOOK_SECRET)
+    user_id = f"user_{uuid.uuid4().hex[:24]}"
+    body = _clerk_user_created_payload(user_id, "forged@example.com", "Forged", "User")
+    # Sign with the WRONG secret - simulates a forged/tampered delivery.
+    headers = _sign_clerk_webhook("whsec_d29ybGRzIGFwYXJ0LXNlY3JldA==", body)
+
+    with TestClient(app) as client:
+        res = client.post("/api/webhooks/clerk", content=body, headers=headers)
+        assert res.status_code == 400
+
+    from app.db import engine as db_engine
+    from app.models import UserPlan
+
+    with Session(db_engine) as session:
+        assert session.get(UserPlan, user_id) is None
+
+
+def test_clerk_webhook_ignores_non_user_created_events(monkeypatch):
+    monkeypatch.setattr(main_module.settings, "clerk_webhook_secret", _TEST_WEBHOOK_SECRET)
+    user_id = f"user_{uuid.uuid4().hex[:24]}"
+    body = json.dumps({"type": "session.created", "data": {"id": user_id}}).encode()
+    headers = _sign_clerk_webhook(_TEST_WEBHOOK_SECRET, body)
+
+    with TestClient(app) as client:
+        res = client.post("/api/webhooks/clerk", content=body, headers=headers)
+        assert res.status_code == 200
+        assert res.json()["status"] == "ignored"
+
+    from app.db import engine as db_engine
+    from app.models import UserPlan
+
+    with Session(db_engine) as session:
+        assert session.get(UserPlan, user_id) is None
+
+
+def test_clerk_webhook_400_when_not_configured(monkeypatch):
+    monkeypatch.setattr(main_module.settings, "clerk_webhook_secret", "")
+    body = _clerk_user_created_payload(f"user_{uuid.uuid4().hex[:24]}", "x@example.com", "X", "Y")
+
+    with TestClient(app) as client:
+        res = client.post("/api/webhooks/clerk", content=body, headers={})
+        assert res.status_code == 400

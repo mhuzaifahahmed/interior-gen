@@ -325,6 +325,19 @@ class Settings(BaseSettings):
     clerk_publishable_key: str = ""
     clerk_secret_key: str = ""
 
+    # Signing secret (starts with "whsec_...") for the Clerk webhook -
+    # POST /api/webhooks/clerk, app/main.py. Lets a UserPlan row (and so a
+    # row in the admin panel) get created the moment someone SIGNS UP, not
+    # only the first time they log in and GET /api/plan happens to fire -
+    # see app/plans.py's capture_identity(). Obtained from the Clerk
+    # Dashboard -> Webhooks -> Add Endpoint (subscribe to "user.created"),
+    # pointing at this backend's real public URL (Clerk can't reach
+    # localhost directly - a tunnel like ngrok is needed to test this
+    # locally). Blank by default - the webhook endpoint just 400s every
+    # delivery until this is set, same "silently inert until configured"
+    # treatment as this project's other optional vendor slots.
+    clerk_webhook_secret: str = ""
+
     # Comma-separated Clerk user ids (e.g. "user_abc,user_def") that bypass
     # ALL subscription quota enforcement entirely (app/plans.py's
     # consume_quota() checks this first) - a dev/testing-only escape hatch so

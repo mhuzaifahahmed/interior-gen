@@ -3,6 +3,16 @@
 Living checklist - update/remove items as they're done, don't let this go stale. Distinct from the other
 future-plans files (which are point-in-time design docs) - this one is a working list.
 
+## Pending: real UI bugs to fix, not yet started
+
+- [ ] **Signup button not visible enough on mobile (phone) viewport** - user-reported 2026-09-16, on the
+  real deployed site. The nav's "SIGN UP" pill (and equivalent on login/signup pages' merged header, see
+  `static/auth-header.js`) needs a real mobile-width check - likely hidden/cramped/low-contrast at phone
+  widths (the desktop nav is `hidden md:flex`, so mobile relies on the hamburger sidebar instead - probably
+  the sidebar's own guest-state Sign Up link is the one that's not visible enough, not the desktop pill).
+  Needs an actual phone-width screenshot (Playwright at e.g. 390x844) to see the real problem before
+  guessing at a fix.
+
 ## Pending: waiting on the user to report back
 
 - [ ] **Build a House generation time** - user will run a real generation, measure actual wall-clock time
