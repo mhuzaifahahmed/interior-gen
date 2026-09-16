@@ -250,6 +250,7 @@ const navLogoutBtn = document.getElementById("nav-logout-btn");
    directly - the desktop nav-user-menu is a small anchored dropdown,
    fundamentally a different shape than a full-height sidebar list. */
 const mobileMenuBtn = document.getElementById("mobile-menu-btn");
+const mobileMenuIcon = document.getElementById("mobile-menu-icon");
 const mobileSidebarOverlay = document.getElementById("mobile-sidebar-overlay");
 const mobileSidebarBackdrop = document.getElementById("mobile-sidebar-backdrop");
 const mobileSidebarPanel = document.getElementById("mobile-sidebar-panel");
@@ -646,9 +647,36 @@ async function applyPricingUI() {
    project to silently freeze at its start values (see the gsap-transitions
    skill for the full incident writeup). */
 let mobileSidebarTl = null;
+let mobileMenuIconTl = null;
 
 function isMobileSidebarOpen() {
   return !mobileSidebarOverlay.classList.contains("hidden");
+}
+
+// Morphs the hamburger glyph into a close ("X") glyph and back - a quick
+// rotate+scale+fade "out", swap the glyph text at the midpoint, then
+// rotate+scale+fade "in" from the opposite direction, which reads as one
+// continuous morph rather than two separate icons cross-fading. Material
+// Symbols is a font glyph, not a path, so a literal SVG morph isn't
+// available - this is the closest equivalent. Same house rules as every
+// other GSAP bit in this file: reduced-motion/missing-gsap just swaps the
+// glyph instantly, and any in-flight timeline is killed before a new one
+// starts so rapid clicking can't stack conflicting tweens.
+function morphMenuIcon(toClose) {
+  const nextGlyph = toClose ? "close" : "menu";
+  if (typeof gsap === "undefined" || prefersReducedMotion || !mobileMenuIcon) {
+    mobileMenuIcon.textContent = nextGlyph;
+    return;
+  }
+  if (mobileMenuIconTl) mobileMenuIconTl.kill();
+  mobileMenuIconTl = gsap.timeline();
+  mobileMenuIconTl
+    .to(mobileMenuIcon, { rotation: 90, scale: 0.4, opacity: 0, duration: 0.14, ease: "power1.in" })
+    .call(() => {
+      mobileMenuIcon.textContent = nextGlyph;
+      gsap.set(mobileMenuIcon, { rotation: -90, scale: 0.4, opacity: 0 });
+    })
+    .to(mobileMenuIcon, { rotation: 0, scale: 1, opacity: 1, duration: 0.22, ease: "back.out(1.8)" });
 }
 
 function openMobileSidebar() {
@@ -656,6 +684,7 @@ function openMobileSidebar() {
   mobileMenuBtn.setAttribute("aria-expanded", "true");
   mobileSidebarOverlay.classList.remove("hidden");
   document.body.style.overflow = "hidden"; // lock background scroll while open
+  morphMenuIcon(true);
 
   if (typeof gsap === "undefined" || prefersReducedMotion) return;
 
@@ -676,6 +705,7 @@ function closeMobileSidebar() {
   if (!isMobileSidebarOpen()) return;
   mobileMenuBtn.setAttribute("aria-expanded", "false");
   document.body.style.overflow = "";
+  morphMenuIcon(false);
 
   if (typeof gsap === "undefined" || prefersReducedMotion) {
     mobileSidebarOverlay.classList.add("hidden");

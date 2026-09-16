@@ -42,7 +42,7 @@
   const headerHtml = `
     <header class="fixed top-4 inset-x-0 z-50 px-margin-mobile pointer-events-none">
       <div class="max-w-4xl mx-auto flex items-center justify-center">
-        <div class="bg-night/50 backdrop-blur-2xl rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.3)] border border-white/10 pointer-events-auto">
+        <div class="bg-night/50 backdrop-blur-2xl rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.3)] border border-white/10 pointer-events-auto" id="auth-header-pill">
           <div class="h-16 px-3 md:px-4 lg:px-6 flex items-center gap-2 md:gap-4 lg:gap-6">
             <a href="/?tab=home" class="flex items-center gap-2 md:gap-2.5 shrink-0 min-w-0">
               <img src="/static/logo.png" alt="Interior-Gen" class="w-8 h-8 object-contain shrink-0"/>
@@ -60,4 +60,27 @@
     </header>`;
 
   document.getElementById("auth-page-header").outerHTML = headerHtml;
+
+  // "Cut to full" entrance: the pill starts visually clipped down to a
+  // narrow center sliver (clip-path inset) and expands out to its full
+  // width - literal "cut" -> "full" motion, not just a fade. clip-path is
+  // used instead of scaleX so the inner content (logo/nav/button) never
+  // gets horizontally stretched/distorted mid-animation. Same house rules
+  // as every other GSAP interaction in this codebase (see the
+  // gsap-transitions skill): guard for prefers-reduced-motion/missing GSAP,
+  // and gsap.set() start state + .to() end state - never .from(), which was
+  // observed elsewhere in this project to silently freeze at its start
+  // values.
+  const pillEl = document.getElementById("auth-header-pill");
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (typeof gsap === "undefined" || prefersReducedMotion || !pillEl) return;
+
+  gsap.set(pillEl, { clipPath: "inset(0% 38% 0% 38% round 999px)", opacity: 0 });
+  gsap.to(pillEl, {
+    clipPath: "inset(0% 0% 0% 0% round 999px)",
+    opacity: 1,
+    duration: 0.65,
+    ease: "power3.out",
+    delay: 0.05,
+  });
 })();
