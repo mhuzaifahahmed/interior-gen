@@ -22,8 +22,8 @@
   // two hand-copied ones.
   const ctaFilled = scriptEl.dataset.ctaFilled === "true";
   const ctaClass = ctaFilled
-    ? "font-label-caps text-label-caps bg-white text-night rounded-full px-4 py-2 hover:bg-white/85 hover:shadow-md transition-all duration-200"
-    : "font-label-caps text-label-caps text-on-night-variant hover:text-on-night transition-colors";
+    ? "font-label-caps text-label-caps bg-white text-night rounded-full px-3 py-1.5 md:px-4 md:py-2 whitespace-nowrap shrink-0 hover:bg-white/85 hover:shadow-md transition-all duration-200"
+    : "font-label-caps text-label-caps text-on-night-variant whitespace-nowrap shrink-0 hover:text-on-night transition-colors";
 
   const NAV_LINKS = [
     { label: "HOME", tab: "home" },
@@ -43,15 +43,15 @@
     <header class="fixed top-4 inset-x-0 z-50 px-margin-mobile pointer-events-none">
       <div class="max-w-4xl mx-auto flex items-center justify-center">
         <div class="bg-night/50 backdrop-blur-2xl rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.3)] border border-white/10 pointer-events-auto">
-          <div class="h-16 px-4 lg:px-6 flex items-center gap-4 lg:gap-6">
-            <a href="/?tab=home" class="flex items-center gap-2.5 shrink-0">
+          <div class="h-16 px-3 md:px-4 lg:px-6 flex items-center gap-2 md:gap-4 lg:gap-6">
+            <a href="/?tab=home" class="flex items-center gap-2 md:gap-2.5 shrink-0 min-w-0">
               <img src="/static/logo.png" alt="Interior-Gen" class="w-8 h-8 object-contain shrink-0"/>
-              <span class="font-headline-sm text-headline-sm tracking-tight text-on-night">Interior&#8209;Gen</span>
+              <span class="hidden sm:inline font-headline-sm text-headline-sm tracking-tight text-on-night whitespace-nowrap">Interior&#8209;Gen</span>
             </a>
             ${divider}
             <nav class="hidden md:flex items-center gap-1">${navLinksHtml}</nav>
             ${divider}
-            <div class="flex items-center gap-4 shrink-0">
+            <div class="flex items-center gap-4 shrink-0 ml-auto">
               <a href="${ctaHref}" class="${ctaClass}">${ctaLabel}</a>
             </div>
           </div>
