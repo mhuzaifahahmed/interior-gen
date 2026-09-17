@@ -2431,14 +2431,23 @@ const safepayCheckoutBtnLabel = document.getElementById("safepay-checkout-btn-la
 
 safepayCheckoutBtn.addEventListener("click", async () => {
   safepayCheckoutBtn.disabled = true;
-  safepayCheckoutBtnLabel.textContent = "Redirecting to checkout…";
+  safepayCheckoutBtnLabel.textContent = "Opening checkout…";
   try {
     const body = new FormData();
     body.append("plan", jazzcashModalPlan);
     const res = await authFetch(apiUrl("/api/payments/safepay/checkout"), { method: "POST", body });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
-    window.location.href = data.checkout_url;
+    // Opened in a NEW tab, not a same-tab redirect - Safepay's checkout page
+    // uses a light theme, the opposite of this site's dark theme, so
+    // navigating away entirely made it awkward to get back. A new tab keeps
+    // this page exactly where the user left it (still on the Plans tab,
+    // modal still open underneath) - see awaitSafepayCompletion() below for
+    // how this tab notices when the OTHER tab finishes.
+    window.open(data.checkout_url, "_blank", "noopener,noreferrer");
+    safepayCheckoutBtnLabel.textContent = "Pay with card";
+    safepayCheckoutBtn.disabled = false;
+    awaitSafepayCompletion();
   } catch (err) {
     console.error("Safepay checkout failed", err);
     safepayCheckoutBtn.disabled = false;
@@ -2446,6 +2455,31 @@ safepayCheckoutBtn.addEventListener("click", async () => {
     alert("Couldn't start checkout right now - please try again, or use the JazzCash option below.");
   }
 });
+
+// The Safepay checkout tab is a SEPARATE browsing context (window.open above) -
+// its own redirect back to "/?payment=..." (GET /api/payments/safepay/callback)
+// happens in THAT tab, not this one, so this tab's own UI (nav quota bar,
+// pricing cards) would otherwise stay stale until manually refreshed even
+// after a real upgrade succeeded. Simplest fix: whenever this tab regains
+// focus/visibility (the natural "I'm done in the other tab, back to this
+// one" moment) after a checkout was started, re-fetch plan status - cheap
+// (GET /api/plan) and harmless to call speculatively even if nothing
+// actually changed yet. Not a perfect real-time sync (Safepay's own 3D
+// Secure step can take longer than a quick tab-switch), but the same
+// listener fires on every future focus too, so returning again later still
+// catches it.
+let safepayCompletionListenerActive = false;
+function awaitSafepayCompletion() {
+  if (safepayCompletionListenerActive) return;
+  safepayCompletionListenerActive = true;
+  const refresh = () => {
+    if (document.visibilityState !== "visible") return;
+    applyPlanMenuQuota();
+    applyPricingUI();
+  };
+  document.addEventListener("visibilitychange", refresh);
+  window.addEventListener("focus", refresh);
+}
 
 /* ---------- Quota-exceeded popup (real quota hit, not a generic error) ----------
    Same GSAP "morph" open/close recipe as the JazzCash modal above (see
