@@ -395,21 +395,21 @@ const mobilePlanUsageEl = document.getElementById("mobile-plan-usage");
 // real numeric limit on. A null quota (Studio's Kaggle fair-use) renders as
 // "Unlimited" text instead of a bar - there's nothing meaningful to fill.
 function planUsageRow(label, used, quota, remaining, openaiRemaining, openaiQuota) {
-  if (quota === null || quota === undefined) {
-    return `
-      <div class="mb-2 last:mb-0">
-        <p class="font-body-md text-xs text-on-night-variant flex items-center justify-between">
-          <span>${label}</span><span>Unlimited</span>
-        </p>
-      </div>`;
-  }
-  const pct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 100;
   const openaiNote =
     openaiQuota === null || openaiQuota === undefined
       ? ` &middot; OpenAI unlimited`
       : openaiQuota > 0
         ? ` &middot; ${openaiRemaining} OpenAI left`
         : "";
+  if (quota === null || quota === undefined) {
+    return `
+      <div class="mb-2 last:mb-0">
+        <p class="font-body-md text-xs text-on-night-variant flex items-center justify-between">
+          <span>${label}</span><span>Unlimited${openaiNote}</span>
+        </p>
+      </div>`;
+  }
+  const pct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 100;
   return `
     <div class="mb-2 last:mb-0">
       <p class="font-body-md text-xs text-on-night-variant flex items-center justify-between mb-1">
@@ -1946,9 +1946,79 @@ function buildMaterialsModalBodyHTML(tierMaterials) {
   `;
 }
 
-function openMaterialsModal(tierLabel, tierMaterials) {
+// Retry-pricing button (2026-09-17): lets a user re-run JUST the materials/
+// pricing lookup for a tier that came back mostly/entirely as estimates
+// (e.g. a Gemini key hiccup mid-generation) without regenerating the (paid)
+// images. Gated per-project, per-plan (app/plans.py's MATERIALS_RETRY_LIMITS)
+// - the backend is the real source of truth (POST
+// /api/projects/{id}/materials/retry 403s once the limit is hit), this is
+// just showing the count so the button doesn't need to be clicked to find
+// out. materialsModalContext holds the state for whichever modal instance is
+// currently open - re-set on every openMaterialsModal() call.
+let materialsModalContext = null;
+
+function materialsNeedsRetry(tierMaterials) {
+  return (
+    tierMaterials.total === "Not available - see search links above" ||
+    tierMaterials.items.some((item) => item.is_estimate)
+  );
+}
+
+function buildRetrySectionHTML(retryUsed, retryLimit) {
+  if (retryLimit <= 0) {
+    return '<p class="materials-note materials-retry-note">Some prices above are estimates. Upgrade to Pro or Studio to unlock pricing retries.</p>';
+  }
+  const remaining = Math.max(0, retryLimit - retryUsed);
+  if (remaining <= 0) {
+    return '<p class="materials-note materials-retry-note">You\'ve used all your pricing retries for this generation.</p>';
+  }
+  return `<button type="button" class="materials-open-btn" id="materials-retry-btn">Retry pricing (${remaining} retr${remaining === 1 ? "y" : "ies"} left)</button>`;
+}
+
+function renderMaterialsModalBody(tierLabel, tierMaterials) {
+  let html = buildMaterialsModalBodyHTML(tierMaterials);
+  const ctx = materialsModalContext;
+  if (ctx && ctx.projectId && materialsNeedsRetry(tierMaterials)) {
+    html += buildRetrySectionHTML(ctx.retryUsed, ctx.retryLimit);
+  }
+  materialsModalBody.innerHTML = html;
+
+  const retryBtn = materialsModalBody.querySelector("#materials-retry-btn");
+  if (retryBtn) {
+    retryBtn.addEventListener("click", async () => {
+      retryBtn.disabled = true;
+      retryBtn.textContent = "Retrying…";
+      try {
+        const body = new FormData();
+        body.append("tier", ctx.tierKey);
+        const res = await authFetch(apiUrl(`/api/projects/${ctx.projectId}/materials/retry`), {
+          method: "POST",
+          body,
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const updated = await res.json();
+        ctx.retryUsed = updated.materials_retry_used;
+        ctx.retryLimit = updated.materials_retry_limit;
+        renderMaterialsModalBody(tierLabel, updated.materials[ctx.tierKey]);
+      } catch (err) {
+        console.error("materials retry failed", err);
+        alert(err.message || "Couldn't retry pricing right now - please try again shortly.");
+        retryBtn.disabled = false;
+        retryBtn.textContent = "Retry pricing";
+      }
+    });
+  }
+}
+
+function openMaterialsModal(tierLabel, tierMaterials, projectId, tierKey, retryUsed, retryLimit) {
+  materialsModalContext = {
+    projectId: projectId || null,
+    tierKey: tierKey || null,
+    retryUsed: retryUsed || 0,
+    retryLimit: retryLimit || 0,
+  };
   materialsModalTitle.textContent = `${tierLabel} — Materials & Cost`;
-  materialsModalBody.innerHTML = buildMaterialsModalBodyHTML(tierMaterials);
+  renderMaterialsModalBody(tierLabel, tierMaterials);
   materialsModalOverlay.hidden = false;
 }
 
@@ -2097,7 +2167,14 @@ function renderHistoryTabContent() {
   historyModalBody.querySelectorAll(".history-materials-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const project = historyRoomProjects[Number(btn.dataset.projectIndex)];
-      openMaterialsModal(btn.dataset.tierLabel, project.materials[btn.dataset.tierKey]);
+      openMaterialsModal(
+        btn.dataset.tierLabel,
+        project.materials[btn.dataset.tierKey],
+        project.project_id,
+        btn.dataset.tierKey,
+        project.materials_retry_used,
+        project.materials_retry_limit
+      );
     });
   });
 }
@@ -2193,7 +2270,14 @@ function renderResults(data) {
       materialsEl.addEventListener("click", (e) => {
         e.stopPropagation();
         if (materialsEl.classList.contains("materials-open-btn")) {
-          openMaterialsModal(tier.label, data.materials[tier.key]);
+          openMaterialsModal(
+            tier.label,
+            data.materials[tier.key],
+            data.project_id,
+            tier.key,
+            data.materials_retry_used,
+            data.materials_retry_limit
+          );
         }
       });
     }
@@ -2248,8 +2332,13 @@ const JAZZCASH_PLAN_LABELS = { pro: "Pro", studio: "Studio" };
 const JAZZCASH_PLAN_PRICES = { pro: "PKR 2,499/mo", studio: "PKR 6,999/mo" };
 
 let jazzcashModalTl = null;
+// Tracks which plan the JazzCash modal is currently showing, so the Safepay
+// "Pay with card" button (same modal) knows which plan to check out for
+// without needing its own separate plan-selection UI.
+let jazzcashModalPlan = "pro";
 
 function openJazzCashModal(plan) {
+  jazzcashModalPlan = plan === "studio" ? "studio" : "pro";
   jazzcashPlanNameEl.textContent = JAZZCASH_PLAN_LABELS[plan] || "Pro";
   jazzcashPlanPriceEl.textContent = JAZZCASH_PLAN_PRICES[plan] || JAZZCASH_PLAN_PRICES.pro;
   jazzcashModalOverlay.hidden = false;
@@ -2323,6 +2412,38 @@ jazzcashCopyBtn.addEventListener("click", async () => {
   } catch {
     // Clipboard API unavailable (e.g. insecure context/older browser) - not
     // fatal, the number is already shown in plain text for manual copy.
+  }
+});
+
+/* ---------- Safepay checkout (real card payment, auto-upgrades on success) ----------
+   POST /api/payments/safepay/checkout creates a real Safepay sandbox checkout
+   session and returns a checkout_url - the browser is sent there directly
+   (window.location.href, not a fetch-and-render, since Safepay's hosted
+   checkout page is the whole point of using their processor instead of
+   building a card form ourselves). Safepay eventually redirects back to
+   GET /api/payments/safepay/callback (backend-side signature + payment
+   verification, then app/plans.py's set_plan()), which itself redirects to
+   "/?payment=success|failed|cancelled|invalid|error" - see
+   showPaymentStatusToast() near the end of this file for how that's shown. */
+
+const safepayCheckoutBtn = document.getElementById("safepay-checkout-btn");
+const safepayCheckoutBtnLabel = document.getElementById("safepay-checkout-btn-label");
+
+safepayCheckoutBtn.addEventListener("click", async () => {
+  safepayCheckoutBtn.disabled = true;
+  safepayCheckoutBtnLabel.textContent = "Redirecting to checkout…";
+  try {
+    const body = new FormData();
+    body.append("plan", jazzcashModalPlan);
+    const res = await authFetch(apiUrl("/api/payments/safepay/checkout"), { method: "POST", body });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    window.location.href = data.checkout_url;
+  } catch (err) {
+    console.error("Safepay checkout failed", err);
+    safepayCheckoutBtn.disabled = false;
+    safepayCheckoutBtnLabel.textContent = "Pay with card";
+    alert("Couldn't start checkout right now - please try again, or use the JazzCash option below.");
   }
 });
 
@@ -3273,6 +3394,47 @@ if (typeof gsap !== "undefined" && !prefersReducedMotion) {
 const requestedTab = new URLSearchParams(window.location.search).get("tab");
 if (requestedTab && TAB_ORDER.includes(requestedTab) && requestedTab !== currentTab) {
   switchTab(requestedTab);
+}
+
+// Safepay checkout landing (see the "Safepay checkout" section above) -
+// GET /api/payments/safepay/callback redirects the browser back here with a
+// real ?payment= query param once it's done verifying. Placed at the same
+// end-of-file spot as the other deep-link/resume handling for the same
+// hoisting-safety reason (touches consts/functions defined throughout the
+// file). Strips the query param via history.replaceState so a page refresh
+// doesn't re-show the same toast.
+const paymentStatusToast = document.getElementById("payment-status-toast");
+const paymentStatusToastIcon = document.getElementById("payment-status-toast-icon");
+const paymentStatusToastText = document.getElementById("payment-status-toast-text");
+
+const PAYMENT_STATUS_MESSAGES = {
+  success: { icon: "check_circle", text: "Payment successful - your plan has been upgraded!" },
+  failed: { icon: "error", text: "Payment wasn't completed - your plan hasn't changed. Please try again." },
+  cancelled: { icon: "info", text: "Checkout cancelled - your plan hasn't changed." },
+  invalid: { icon: "error", text: "Couldn't verify that payment - please contact support if you were charged." },
+  error: { icon: "error", text: "Something went wrong confirming your payment - please contact support." },
+};
+
+function showPaymentStatusToast(status) {
+  const info = PAYMENT_STATUS_MESSAGES[status];
+  if (!info || !paymentStatusToast) return;
+  paymentStatusToastIcon.textContent = info.icon;
+  paymentStatusToastText.textContent = info.text;
+  paymentStatusToast.classList.remove("hidden");
+  setTimeout(() => paymentStatusToast.classList.add("hidden"), 6000);
+}
+
+const paymentStatus = new URLSearchParams(window.location.search).get("payment");
+if (paymentStatus) {
+  showPaymentStatusToast(paymentStatus);
+  const url = new URL(window.location.href);
+  url.searchParams.delete("payment");
+  window.history.replaceState({}, "", url.toString());
+  if (paymentStatus === "success") {
+    switchTab("pricing");
+    applyPlanMenuQuota();
+    applyPricingUI();
+  }
 }
 
 if (localStorage.getItem(ACTIVE_GENERATION_KEY)) {

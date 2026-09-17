@@ -373,6 +373,15 @@ def run_pipeline(
                     "color_palette": color_palette,
                     "additional_instructions": additional_instructions,
                     "image_model": image_model,
+                    # Persisted so a later materials-only retry (POST
+                    # /api/projects/{id}/materials/retry) reuses the EXACT
+                    # same pricing-quantity basis this run used, instead of
+                    # either re-calling provider.estimate_room_area() (an
+                    # extra Gemini vision call) or silently retrying with no
+                    # area at all (a materially different, unquantified
+                    # result) - see app/main.py's retry_materials().
+                    "room_area_sqft": room_area_sqft,
+                    "wall_area_sqft": user_wall_area_sqft,
                 }
             )
             session.add(project)

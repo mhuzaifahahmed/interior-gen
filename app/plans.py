@@ -61,6 +61,29 @@ PLAN_QUOTAS: dict[str, dict[str, float]] = {
 }
 
 
+# Real monthly PKR prices - the same numbers documented in CLAUDE.md's
+# approved pricing table, now a real value app/payments.py's Safepay checkout
+# reads (previously these only existed as hardcoded strings in
+# static/index.html's pricing cards and the JazzCash modal's JS constants -
+# this is the single source of truth a real checkout call now uses too).
+PLAN_PRICES_PKR: dict[str, int] = {PRO: 2499, STUDIO: 6999}
+
+# Materials-only retry (app/main.py's POST /api/projects/{id}/materials/retry) -
+# how many times a single project's materials/pricing lookup may be manually
+# re-run per plan, WITHOUT consuming a new generation credit. Same numbers as
+# CLAUDE.md's "Free retries/generation" pricing-table row (previously
+# documented as "planned, not built") - this materials-only retry is the
+# first real instantiation of that row, deliberately scoped narrower than the
+# full "regenerate this exact project" concept the roadmap doc originally
+# described (which needs re-running the paid image generation too, and stays
+# deferred - see future-plans/subscription-and-access-roadmap.md).
+MATERIALS_RETRY_LIMITS: dict[str, int] = {FREE: 0, PRO: 2, STUDIO: 5}
+
+
+def materials_retry_limit(plan: str) -> int:
+    return MATERIALS_RETRY_LIMITS.get(plan, 0)
+
+
 _LABELS = {
     ROOM_KAGGLE: "our model Room Redesign",
     ROOM_OPENAI: "OpenAI Room Redesign",

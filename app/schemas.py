@@ -76,6 +76,12 @@ class ProjectStatusResponse(BaseModel):
     # actually produced the generated images. None until at least one tier
     # completes. See app/providers/hybrid.py's get_image_model_label().
     image_model: Optional[str] = None
+    # Materials-only retry (see app/main.py's retry_materials()) - how many
+    # times this project's materials/pricing has been manually re-run, and
+    # the plan-based cap (app/plans.py's MATERIALS_RETRY_LIMITS). 0/0 for an
+    # anonymous (no-login) project, since retries require an account.
+    materials_retry_used: int = 0
+    materials_retry_limit: int = 0
 
 
 class HouseProjectCreateResponse(BaseModel):

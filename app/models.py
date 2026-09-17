@@ -70,6 +70,17 @@ class Project(SQLModel, table=True):
 
     meta_json: Optional[str] = None
 
+    # Materials-only retry (2026-09-17): how many times generate_materials()
+    # has been manually re-run for THIS project via POST
+    # /api/projects/{id}/materials/retry, capped per-project by
+    # app/plans.py's MATERIALS_RETRY_LIMITS (plan-based) - see that module
+    # for why a retry doesn't consume a full generation credit. Real
+    # motivation: a live demo where a Gemini key hiccup left only the Mid
+    # tier's materials priced (Economical/Premium fell back to
+    # "Estimate unavailable") - this lets a user re-run just the pricing
+    # lookup for the affected tier(s) without regenerating the (paid) images.
+    materials_retry_count: int = Field(default=0)
+
 
 class UserPlan(SQLModel, table=True):
     """One row per Clerk user id, tracking their subscription plan and rolling
@@ -124,6 +135,28 @@ class UserPlan(SQLModel, table=True):
 
     plan_updated_at: datetime = Field(default_factory=_now)
     created_at: datetime = Field(default_factory=_now)
+
+
+class PaymentIntent(SQLModel, table=True):
+    """One row per Safepay checkout attempt (app/payments.py) - created the
+    moment a user clicks "Pay with card" (POST /api/payments/safepay/checkout),
+    BEFORE they ever reach Safepay's hosted checkout page. Necessary because
+    Safepay's redirect callback only carries its own `tracker`/order id, not
+    our user id/plan - this row is the lookup that maps "this tracker paid"
+    back to "flip THIS user to THIS plan" (see app/main.py's
+    safepay_callback()). Deliberately its own table, not columns on UserPlan -
+    a user can have multiple attempts (retried/abandoned checkouts) over
+    time, UserPlan only ever holds their CURRENT plan.
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    tracker: str = Field(index=True)  # Safepay's own order/v1/init token (e.g. "track_...")
+    user_id: str
+    plan: str  # "pro" | "studio" - the plan this checkout is FOR, not the user's current plan
+    amount_pkr: int
+    status: str = Field(default="pending")  # pending | completed | failed
+    created_at: datetime = Field(default_factory=_now)
+    completed_at: Optional[datetime] = None
 
 
 class HouseProject(SQLModel, table=True):

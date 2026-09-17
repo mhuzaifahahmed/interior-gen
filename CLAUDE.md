@@ -1939,41 +1939,162 @@ caller, not a logged-in user.
   animation conventions" below), close button excluded from the child stagger for the same stacking-
   context reason documented on the JazzCash modal.
 
-### Payments — the honest current state
+### Payments — Safepay sandbox checkout is now REAL and LIVE (2026-09-17)
 
-**No real payment processor is integrated. This is not an oversight — it's a deliberate, communicated
-stopgap.** Clicking "Upgrade to Pro/Studio" on the Pricing tab opens a modal (`#jazzcash-modal-overlay`,
-`openJazzCashModal("pro"|"studio")`) with **manual JazzCash mobile-wallet transfer instructions** — a
-fixed account name ("Muddassir Ahmed") and number (`0321-8249255`, `#jazzcash-number`), a Copy button
-(`navigator.clipboard.writeText()`, best-effort). The user then reaches out and gets manually upgraded
-via the admin panel's plan `<select>` above — there is currently no automated link between "money
-received" and "plan changed."
+**Superseded the "no real processor" state below.** A real Safepay **sandbox** checkout is wired end to
+end: clicking "Pay with card" on the JazzCash modal (`#safepay-checkout-btn`, sits ABOVE the manual
+JazzCash instructions, which stay as a permanent secondary option per explicit user request) calls
+`POST /api/payments/safepay/checkout`, redirects the browser to Safepay's real hosted checkout page, and
+a completed payment auto-upgrades the user's plan via a callback endpoint — **no admin panel click
+needed**, closing the exact gap the user asked to close ("when the payment is gotten and everything is
+verified the user automatically gets upgraded... without me having to access the admin panel"). This is
+**sandbox only** — flipping `SAFEPAY_ENVIRONMENT=production` with real production keys (after the
+NTN/CNIC Merchant Onboarding Form review) is the only step left for real money; nothing else changes.
 
-- **Real processor research already done** (kept for the next session, not re-derivable from code):
-  Stripe is ruled out entirely — no Pakistan support (SBP requires local PSO/PSP licensing Stripe
-  hasn't obtained). Compared **Safepay** (SBP-regulated, developer-friendly REST API, real tokenized
-  recurring card billing, no-redirect checkout — **the recommended choice**), **PayFast Pakistan**
-  (broadest payment-method coverage including Raast, but documentation-heavy onboarding, slower
-  time-to-market for a small team), **JazzCash** (a mobile-wallet API at heart, weak as a standalone
-  subscription-billing backbone), and **PayPro** (an explicit PKR recurring-subscription specialist —
-  the one gap-filler among local providers for this exact use case, but "interface isn't as polished"
-  and integration takes more patience — worth a second look only if Safepay's recurring billing proves
-  thinner in practice than it sounds).
-- **Business-registration reality check (2026-09)**: a full SECP company is NOT required for Safepay.
-  Safepay's own legal-person definition includes "validly registered sole-proprietors" — in Pakistan
-  that just means an NTN (National Tax Number, **free**, same-day via FBR's IRIS portal, tied directly
-  to your CNIC for an individual) + a bank account + CNIC scan (front/back) of the account owner. A
-  **sandbox account needs none of this** — it can be created immediately with zero documents, and is the
-  right place to start (test the real recurring-charge flow before committing to a processor). Only
-  flipping to **production** (real money) requires the NTN/CNIC/bank-account docs via the Merchant
-  Onboarding Form (Safepay targets ~48hr review).
-- **Planned integration shape once a processor IS chosen**: the quota/plan system is already
-  processor-agnostic by design — `UserPlan.plan` is just a string. Integration should only ever mean one
-  new webhook endpoint that calls `plans.set_plan(session, user_id, plan)` on a successful/renewed/
-  cancelled payment — no redesign of `app/plans.py` needed. The manual JazzCash modal should stay
-  available as a permanent secondary option even after a real processor exists (per explicit user
-  request) — shown alongside an automated "Pay with card" path, not replaced by it, since some users may
-  prefer or need the manual route.
+- **Real processor research (kept from before, unchanged)**: Stripe ruled out entirely (no Pakistan
+  support). Compared Safepay (chosen), PayFast Pakistan, JazzCash (weak as a subscription backbone), and
+  PayPro — see the original comparison further below in git history/this file's prior revisions if ever
+  revisiting that choice. **Business-registration reality check**: a sandbox account needs ZERO
+  documents; only production requires an NTN (free, same-day via FBR's IRIS portal) + CNIC + bank
+  account via the Merchant Onboarding Form (~48hr review).
+- **Integration shape — REAL, LIVE-VERIFIED against this project's actual sandbox keys on 2026-09-17,
+  not just docs.** Safepay's own public integration examples (a GitHub gist, an older docs site) describe
+  an `order/v1/init` + hosted-checkout-redirect flow, but their **exact hosted-checkout URL had silently
+  changed** — the documented `{base}/components?...&beacon=...` path now 301-redirects to Safepay's
+  marketing homepage (`getsafepay.pk`), a dead/retired path. The real, current one was found by fetching
+  the checkout SPA's own JS bundle directly (`sandbox.api.getsafepay.com/checkout/static/js/main.*.chunk.js`)
+  and reading its actual React Router route table + query-param parsing code — confirmed live (200,
+  real "Safepay Checkout" page, no redirect):
+  `{base}/checkout/pay?env=sandbox&beacon=<tracker>&order_id=<id>&redirect_url=<url>&cancel_url=<url>`.
+  `POST {base}/order/v1/init` (`{"client","amount","currency","environment"}` → `{"data":{"token",
+  "state":"TRACKER_STARTED",...}}`) and `GET {base}/order/v1/{tracker}` (same shape back, used as a
+  server-to-server "did this really get paid" double-check) were both hit live and confirmed to work
+  exactly as documented. **Still NOT live-verified**: the exact `state` string a genuinely COMPLETED
+  payment ends up in (needs a real browser test-card payment, not just HTTP calls) —
+  `payments.is_completed_state()` checks for COMPLETE/SUCCESS/PAID as a case-insensitive substring match
+  as an educated guess from the state machine's naming convention; update
+  `_ORDER_COMPLETED_STATE_MARKERS` in `app/payments.py` once a real completed payment's state is
+  observed, nothing else needs to change.
+- **`app/payments.py`** (new, isolated module — mirrors `app/plans.py`'s own "a processor only ever needs
+  to call `set_plan()`" isolation): `create_checkout_session()` (raises `SafepayError`, not best-effort —
+  a broken checkout call means the user literally cannot pay), `verify_callback_signature()`
+  (`HMAC-SHA256(tracker, secret_key)`, constant-time compare, exact scheme from Safepay's own public
+  examples), `fetch_order_state()` + `is_completed_state()`.
+- **`PaymentIntent` table** (`app/models.py`, brand-new — no migration entry needed, `create_all()`
+  handles new tables): one row per checkout attempt, created BEFORE the browser ever reaches Safepay
+  (`user_id`/`plan`/`amount_pkr`/`tracker`/`status`) — necessary because Safepay's redirect callback only
+  carries its own `tracker`/`order_id`, not our user id/plan; this is the lookup that maps "this tracker
+  paid" back to "flip THIS user to THIS plan."
+- **`POST /api/payments/safepay/checkout`** (`app/main.py`, `Form: plan`, requires login): creates a
+  `PaymentIntent`, calls `payments.create_checkout_session()`, returns `{"checkout_url"}` for the
+  frontend to `window.location.href` to. 400 on an invalid plan, 502 wrapping a `SafepayError`.
+- **`GET /api/payments/safepay/callback`** (public, no auth — Safepay redirects the real browser here):
+  verifies the HMAC signature, then does the server-to-server `fetch_order_state()` double-check BEFORE
+  ever calling `set_plan()` — the redirect signature alone only proves the tracker is genuinely Safepay's,
+  not that the customer actually finished paying. Idempotent (a replayed/already-non-pending intent
+  redirects to `?payment=error`, never double-upgrades). Always ends in a redirect to the frontend
+  (`?payment=success|failed|cancelled|invalid|error`), never raw JSON — a real browser lands here
+  mid-checkout-flow. Best-effort refreshes the user's S3 `account.json` on success, same convention as
+  the admin panel's own plan-change endpoint.
+- **`PLAN_PRICES_PKR`** (`app/plans.py`, `{PRO: 2499, STUDIO: 6999}`) — the single source of truth the
+  checkout endpoint reads, matching the numbers already hardcoded in the pricing cards/JazzCash modal.
+- **Frontend** (`static/app.js`/`index.html`): the Safepay button lives inside the existing JazzCash
+  modal, tracked via `jazzcashModalPlan` (which plan the modal is currently showing) so it needs no
+  separate plan-picker UI. A `#payment-status-toast` (same visual pattern as the existing cold-start
+  toast) shows the outcome when the browser lands back on `/` with a real `?payment=` query param
+  (`showPaymentStatusToast()`, end of `app.js` for the same hoisting-safety reason as the resume/restore
+  dispatch) — strips the query param via `history.replaceState` so a refresh doesn't re-show it, and on
+  success switches to the Pricing tab + refreshes the nav usage bars/pricing cards.
+- **Config** (`app/config.py`): `SAFEPAY_CLIENT_ID`/`SAFEPAY_SECRET_KEY`/`SAFEPAY_ENVIRONMENT` (real
+  sandbox keys already in this machine's `.env`, renamed from an earlier `SAFEPAY_SANDBOX_PUBLICKEY`/
+  `_SECRETKEY` naming to match) and `PUBLIC_BACKEND_URL` (this backend's own real public URL, needed to
+  build the `redirect_url` handed to Safepay — separate concern from `FRONTEND_ORIGIN`, which is about
+  where the BROWSER eventually lands, not where Safepay calls back to).
+- **Tests**: `tests/test_payments.py` (pure unit, httpx monkeypatched, no network — signature
+  verification, checkout-session creation, state-completion parsing) and `tests/test_payments_api.py`
+  (integration — checkout endpoint creates a pending intent and returns a URL, callback upgrades the plan
+  only on a genuinely completed + correctly-signed payment, rejects forged signatures without even
+  reaching the status check, is idempotent against a replayed callback; plus the webhook tests described
+  below). 604/604 passing (full suite).
+- **Manual JazzCash transfer stays a PERMANENT secondary option**, unchanged, per explicit user request —
+  shown right below the new "Pay with card" button, not replaced by it.
+- **Second confirmation path added same day: a real server-to-server webhook, independent of the
+  browser.** Real gap in the redirect-only design above: if the customer closes the tab right after
+  paying, the browser never reaches `GET /api/payments/safepay/callback`, and the plan would never
+  upgrade even though the payment succeeded. Confirmed live via a real screenshot of this account's own
+  Safepay dashboard that a genuine webhook system exists, separate from the checkout flow: **Dashboard →
+  Payments 2.0 → Developer → Endpoints**, with its own "Webhook Shared Secret" (distinct from
+  `SAFEPAY_SECRET_KEY`, which only verifies the redirect callback's tracker signature) —
+  `SAFEPAY_WEBHOOK_SECRET` in `.env`. The user registered `https://interior-gen.onrender.com` as the
+  endpoint before a receiver existed at any specific path there; the real receiver is now
+  `POST /api/payments/safepay/webhook` — **re-point the dashboard's endpoint URL at that exact path**
+  once this ships, the bare domain won't route anywhere real.
+  - **What's confirmed vs. not, stated plainly** (0 real webhook deliveries have landed on this account
+    yet, since no payment has gone through the full flow): the SIGNATURE scheme (HMAC-SHA256 of the raw
+    request body using the webhook secret) is confirmed from Safepay's own public docs, which reference
+    an `X_SFPY_SIGNATURE`-style header — `app/payments.py`'s `WEBHOOK_SIGNATURE_HEADER_CANDIDATES` tries
+    several real-world spellings of that header name since the exact one hasn't been observed live yet.
+    The PAYLOAD shape (which JSON fields carry the tracker/order state) is an educated guess -
+    `extract_tracker_and_state()` tries the shape already confirmed elsewhere in this codebase
+    (`{"data": {"token", "state"}}`, same as `order/v1/init`'s own response) plus the generic
+    `{"type", "data": {...}}` envelope convention this project's Clerk webhook already uses. The handler
+    always logs the full raw payload (`logger.info` in `safepay_webhook()`) specifically so the FIRST
+    real delivery's exact shape can be read from the logs (or the dashboard's own "Webhook Logs"/
+    "Webhook Logs v2" pages, also seen live in the same screenshot) and `extract_tracker_and_state()`
+    tightened to match — nothing else needs to change once that's known.
+  - **Shares its upgrade logic with the redirect callback via `_finalize_payment_intent()`** — whichever
+    of the two confirmation paths (browser redirect or server-to-server webhook) arrives first actually
+    upgrades the plan; the other finds the `PaymentIntent` already non-`"pending"` and safely no-ops
+    (`test_safepay_webhook_and_callback_are_mutually_idempotent` guards this explicitly — a plan must be
+    granted exactly once per successful payment, never twice just because two notification channels both
+    fired).
+  - **No event-type filter was offered when the endpoint was registered** (confirmed by the user directly)
+    — Safepay pushes every event type to this one URL, so the handler must tolerate/ignore event shapes
+    it doesn't recognize (returns 200 + `{"status":"ignored"}` for those) rather than erroring on them,
+    which would trigger pointless retries from Safepay's side.
+  - Returns a real 400 ONLY on a bad/missing signature (a genuine security boundary once the secret is
+    configured) — every other "couldn't use this payload" case (unparseable JSON, unknown tracker,
+    already-processed intent) returns 200 so Safepay doesn't keep retrying a delivery this handler
+    already knows it can't act on.
+
+### Materials-only pricing retry (2026-09-17)
+
+Real motivation, directly from the user: a live demo where a Gemini key hiccup left only the Mid tier's
+materials priced — Economical/Premium fell back to `"Estimate unavailable"` — and re-running the whole
+(paid) image generation just to retry a text/pricing lookup felt wasteful. This lets a user re-run **just**
+`generate_materials()` for one tier of an already-completed project, without touching images.
+
+- **`Project.materials_retry_count`** (new column, additive migration in `app/db.py`) — a single counter
+  shared across all 3 tiers on one project (not per-tier), so a user can't get 3x the retries by hitting
+  each tier once.
+- **`app/plans.py`'s `MATERIALS_RETRY_LIMITS`** (`{FREE: 0, PRO: 2, STUDIO: 5}`) — the first real
+  instantiation of CLAUDE.md's long-standing "Free retries/generation" pricing-table row (previously
+  documented as "planned, not built"), deliberately scoped narrower than the full "regenerate this exact
+  project" concept the roadmap doc originally described (which would also re-run the paid image
+  generation, and stays deferred — see `future-plans/subscription-and-access-roadmap.md`).
+- **`POST /api/projects/{id}/materials/retry`** (`app/main.py`, `Form: tier`, requires login): validates
+  the tier, checks `materials_retry_count` against the owner's plan limit (403 once exhausted, with a
+  distinct message when the limit is 0 vs. genuinely used up), re-runs `provider.generate_materials()`
+  for ONLY that tier using the **exact same pricing-quantity basis** the original run used —
+  `room_area_sqft`/`wall_area_sqft` are now persisted into `meta_json` at generation time specifically so
+  a retry never needs a fresh (extra-cost) `estimate_room_area()` Gemini vision call, and never silently
+  retries with a materially different, unquantified basis either. Falls back to `fallback_materials()` on
+  a second failure (same never-empty contract as the original pipeline), still counts as a used retry (an
+  attempt is an attempt, matching the quota system's own "every attempt counts" philosophy).
+- **`ProjectStatusResponse` gained `materials_retry_used`/`materials_retry_limit`** — 0/0 for an anonymous
+  (no-login) project, since retries require an account. `_project_to_response()` now takes a `session`
+  param to compute the owner's real plan-based limit (a small, indexed `UserPlan` lookup per call — this
+  app's own established "small dataset, no pagination needed" philosophy already accepts this cost
+  elsewhere, e.g. the admin panel).
+- **Frontend** (`static/app.js`): the materials modal (`openMaterialsModal()`/`renderMaterialsModalBody()`)
+  shows a "Retry pricing (N retries left)" button whenever a tier's materials look like they need one
+  (`materialsNeedsRetry()` — any item `is_estimate`, or the fallback's exact `"Not available - see search
+  links above"` total string) — an "Upgrade to unlock retries" note for Free-plan users (limit 0), a
+  "you've used them all" note once exhausted, nothing at all when the tier's pricing looks fine. Works
+  identically from both call sites (live results and the History modal) since both now pass through the
+  project id, tier key, and the plan-based retry counts.
+- **Tests**: 5 new cases in `tests/test_api.py` (retry updates only the requested tier, rejected on Free,
+  rejects an invalid tier, enforces the plan limit across repeated calls, 404s for someone else's project).
 
 ## Architecture (big picture)
 

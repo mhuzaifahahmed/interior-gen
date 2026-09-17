@@ -366,5 +366,69 @@ class Settings(BaseSettings):
     def admin_user_id_set(self) -> set[str]:
         return {uid.strip() for uid in self.admin_user_ids.split(",") if uid.strip()}
 
+    # Safepay (https://getsafepay.com) - the SBP-regulated Pakistan payment
+    # processor chosen for real recurring PKR billing on Pro/Studio, after
+    # comparing Stripe (no Pakistan support at all), PayFast Pakistan, and
+    # PayPro (see CLAUDE.md's "Payments" section for the full comparison).
+    # JazzCash's manual-transfer modal (static/index.html) stays a permanent
+    # secondary option per explicit user request, not replaced by this.
+    #
+    # A sandbox account needs ZERO business documents - only flipping
+    # safepay_environment to "production" (real money) requires an
+    # NTN/CNIC/bank-account Merchant Onboarding Form.
+    #
+    # INTEGRATION SHAPE: built against Safepay's older, PUBLICLY CONFIRMED
+    # `order/v1/init` + hosted-checkout-redirect flow (a real order/init
+    # request/response shape + an HMAC-SHA256 signed redirect callback -
+    # confirmed via Safepay's own public integration examples), NOT their
+    # newer "Advanced Checkout" embedded-session flow
+    # (/payments/session/setup + /client/passport/v1/token), whose exact
+    # field names could NOT be confirmed - Safepay's interactive API
+    # reference (apidocs.getsafepay.com) is a JS-rendered page that can't be
+    # scraped for its real request/response shapes, the same dead-end this
+    # project already hit once for NVIDIA NIM's build.nvidia.com page (see
+    # CLAUDE.md's Provider split section). Re-verify the exact field names
+    # against the real sandbox dashboard's own docs/example requests once
+    # real credentials are in hand, BEFORE the first live test transaction -
+    # see app/payments.py's module docstring for exactly what to check.
+    # Update only that module if the real shape differs; the rest of the
+    # plan system doesn't change either way (app/plans.py is deliberately
+    # processor-agnostic - a plan is just a string).
+    safepay_client_id: str = ""  # the "client" field in order/v1/init - the sec_... public key
+    safepay_secret_key: str = ""  # HMAC-SHA256 key for verifying the redirect callback signature
+    safepay_environment: str = "sandbox"  # "sandbox" | "production"
+
+    # A SEPARATE secret from safepay_secret_key above - Safepay's real
+    # server-to-server webhook system (Dashboard -> Payments 2.0 -> Developer
+    # -> Endpoints, confirmed live via a real screenshot of this account's
+    # own dashboard, 2026-09-17), independent of the browser-redirect
+    # callback GET /api/payments/safepay/callback already uses. Necessary
+    # because relying on the redirect ALONE is fragile - if the customer
+    # closes the tab right after paying, the redirect never reaches this
+    # backend and the plan would never upgrade even though the payment
+    # succeeded. The webhook fires server-to-server regardless of what the
+    # browser does. Verifies the raw request body against an
+    # X-SFPY-Signature-style header using this shared secret - see
+    # app/payments.py's verify_webhook_signature() docstring for exactly
+    # what's confirmed vs. still-being-verified about the real payload shape.
+    safepay_webhook_secret: str = ""
+
+    @property
+    def safepay_api_base(self) -> str:
+        return (
+            "https://api.getsafepay.com"
+            if self.safepay_environment == "production"
+            else "https://sandbox.api.getsafepay.com"
+        )
+
+    # Where the browser lands after a Safepay checkout redirect completes -
+    # this backend's own public URL (not the frontend's, when they differ -
+    # see frontend_origin above) since app/payments.py's callback route does
+    # server-side signature verification + plan upgrade before bouncing the
+    # browser onward to the actual frontend page. Blank default resolves to
+    # "" + the route path at request time (works for same-origin local dev);
+    # set explicitly in production (e.g. https://interior-gen.onrender.com).
+    public_backend_url: str = ""
+
 
 settings = Settings()

@@ -59,6 +59,7 @@ _NEW_COLUMNS_BY_TABLE = {
         ("additional_instructions", "TEXT"),
         ("room_dimensions_json", "TEXT"),
         ("image_model", "TEXT"),
+        ("materials_retry_count", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "houseproject": [
         ("room_layout_json", "TEXT"),

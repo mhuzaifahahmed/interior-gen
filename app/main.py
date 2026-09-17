@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Response, UploadFile, File
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -17,19 +17,22 @@ from svix.webhooks import Webhook, WebhookVerificationError
 
 from app.auth import AuthUser, get_current_user, require_admin, require_user
 from app.config import settings
+from app import payments
 from app.db import get_session, init_db
-from app.models import HouseProject, Project
+from app.models import HouseProject, PaymentIntent, Project
 from app.pipeline.generate import TIERS, run_pipeline
 from app.pipeline.generate_house import run_house_pipeline
 from app.pipeline.house_prompts import USER_PROMPT_MAX_CHARS
-from app.pipeline.prompts import ADDITIONAL_INSTRUCTIONS_MAX_CHARS, COLOR_PALETTES, STYLE_OPTIONS
+from app.pipeline.prompts import ADDITIONAL_INSTRUCTIONS_MAX_CHARS, COLOR_PALETTES, STYLE_OPTIONS, build_tier_spec
 from app.plans import (
+    PLAN_PRICES_PKR,
     QuotaExceededError,
     backend_bucket,
     capture_identity,
     consume_quota,
     get_or_create_user_plan,
     list_all_user_plans,
+    materials_retry_limit,
     plan_status,
     reset_usage,
     resolve_preferred_backend,
@@ -37,6 +40,7 @@ from app.plans import (
 )
 from app.plans import VALID_PLANS
 from app.providers import get_provider
+from app.providers.gemini import fallback_materials
 from app.schemas import (
     AdminSetPlanRequest,
     AdminUserRow,
@@ -354,6 +358,193 @@ def admin_reset_usage(
     return _admin_row(session, plan_row)
 
 
+def _frontend_redirect_base(request: Request) -> str:
+    """Where to bounce the browser back to AFTER the Safepay callback has
+    been processed - the configured frontend_origin when the frontend is on
+    a different domain (see settings.frontend_origin's docstring), otherwise
+    this same backend's own origin (this app serves static/index.html
+    itself in local/single-service deploys - see index())."""
+    return settings.frontend_origin.rstrip("/") if settings.frontend_origin else str(request.base_url).rstrip("/")
+
+
+def _backend_base_url(request: Request) -> str:
+    """This backend's OWN public base URL - used for the redirect_url we
+    hand Safepay, since /api/payments/safepay/callback always lives on this
+    backend regardless of where the frontend is hosted. Prefers the explicit
+    settings.public_backend_url (needed once this is deployed behind a
+    proxy/different public hostname than request.base_url would show),
+    falling back to the live request's own base_url for local dev."""
+    return settings.public_backend_url.rstrip("/") if settings.public_backend_url else str(request.base_url).rstrip("/")
+
+
+@app.post("/api/payments/safepay/checkout")
+def create_safepay_checkout(
+    request: Request,
+    plan: str = Form(...),
+    session: Session = Depends(get_session),
+    user: AuthUser = Depends(require_user),
+):
+    """Starts a real Safepay sandbox checkout for a Pro/Studio upgrade - see
+    app/payments.py for the integration shape and its live-verification
+    caveats. The JazzCash manual-transfer modal stays available alongside
+    this, per explicit user request - this endpoint doesn't replace it."""
+    if plan not in PLAN_PRICES_PKR:
+        raise HTTPException(400, "plan must be 'pro' or 'studio'")
+
+    amount_pkr = PLAN_PRICES_PKR[plan]
+
+    intent = PaymentIntent(user_id=user.id, plan=plan, amount_pkr=amount_pkr, tracker="")
+    session.add(intent)
+    session.commit()
+    session.refresh(intent)
+
+    redirect_url = f"{_backend_base_url(request)}/api/payments/safepay/callback?order_id={intent.id}"
+    cancel_url = f"{_frontend_redirect_base(request)}/?payment=cancelled"
+
+    try:
+        session_data = payments.create_checkout_session(amount_pkr, intent.id, redirect_url, cancel_url)
+    except payments.SafepayError as exc:
+        raise HTTPException(502, str(exc))
+
+    intent.tracker = session_data["tracker"]
+    session.add(intent)
+    session.commit()
+
+    return {"checkout_url": session_data["checkout_url"]}
+
+
+def _finalize_payment_intent(session: Session, intent: PaymentIntent, completed: bool) -> None:
+    """Shared by BOTH confirmation paths - the browser-redirect callback
+    below and the server-to-server webhook (safepay_webhook()) - so a
+    completed payment is upgraded identically no matter which one actually
+    fires first (in practice, whichever arrives first wins; the other finds
+    `intent.status != "pending"` and no-ops, since consume_quota-style
+    "every attempt counts" semantics don't apply here - a plan should be
+    granted exactly once per successful payment, not once per notification
+    channel)."""
+    if completed:
+        set_plan(session, intent.user_id, intent.plan)
+        intent.status = "completed"
+
+        # Best-effort - reflect the new plan in the user's S3 account.json,
+        # same convention as the admin panel's own plan-change endpoint.
+        try:
+            plan_row = get_or_create_user_plan(session, intent.user_id)
+            storage = get_storage()
+            storage_namespace = _storage_namespace(plan_row.user_id, plan_row.display_name)
+            _write_account_json(storage, storage_namespace, plan_row)
+        except Exception:
+            logger.exception("failed to refresh account.json after Safepay upgrade for user %s", intent.user_id)
+    else:
+        intent.status = "failed"
+
+    intent.completed_at = datetime.now(timezone.utc)
+    session.add(intent)
+    session.commit()
+
+
+@app.get("/api/payments/safepay/callback")
+def safepay_callback(request: Request, session: Session = Depends(get_session)):
+    """Where Safepay redirects the BROWSER after checkout completes/is
+    abandoned. Verifies the HMAC signature, then does a server-to-server
+    status check (payments.fetch_order_state) before ever flipping a plan -
+    the redirect signature alone only proves the tracker is genuinely
+    Safepay's, not that the customer actually finished paying. Always ends
+    in a redirect back to the frontend, never a raw JSON/error page, since a
+    real browser lands here mid-checkout-flow.
+
+    This is the FIRST of two independent confirmation paths - see
+    safepay_webhook() below for the server-to-server one, which exists
+    specifically because this one depends on the browser actually completing
+    the redirect (closing the tab right after paying would otherwise mean
+    the plan never upgrades, even though the payment succeeded)."""
+    frontend_base = _frontend_redirect_base(request)
+
+    query = request.query_params
+    order_id = query.get("order_id") or query.get("Order ID") or ""
+    tracker = query.get("tracker") or query.get("Tracker") or ""
+    signature = query.get("signature") or query.get("Signature") or ""
+
+    intent = session.get(PaymentIntent, order_id) if order_id else None
+    if intent is None or intent.status != "pending":
+        return RedirectResponse(f"{frontend_base}/?payment=error")
+
+    if not payments.verify_callback_signature(tracker, signature) or tracker != intent.tracker:
+        logger.warning("Safepay callback signature mismatch for payment intent %s", intent.id)
+        _finalize_payment_intent(session, intent, completed=False)
+        return RedirectResponse(f"{frontend_base}/?payment=invalid")
+
+    state = payments.fetch_order_state(tracker)
+    completed = payments.is_completed_state(state)
+    _finalize_payment_intent(session, intent, completed=completed)
+
+    return RedirectResponse(f"{frontend_base}/?payment={'success' if completed else 'failed'}")
+
+
+@app.post("/api/payments/safepay/webhook")
+async def safepay_webhook(request: Request, session: Session = Depends(get_session)):
+    """Server-to-server confirmation path, independent of the browser - see
+    safepay_callback()'s docstring for why this exists alongside it (a
+    closed tab shouldn't mean a paid upgrade never happens). Registered in
+    the real Safepay sandbox dashboard (Payments 2.0 -> Developer ->
+    Endpoints, confirmed live via a real screenshot of this account,
+    2026-09-17) - Safepay pushes EVERY event type to this one URL (no
+    per-event-type picker was offered when the endpoint was added), so this
+    handler must tolerate and ignore event types it doesn't recognize rather
+    than erroring on them.
+
+    NOT YET LIVE-VERIFIED (0 real deliveries observed on this account as of
+    writing - no payment has gone through the real webhook yet): the exact
+    JSON payload shape and the exact signature header name. Both are
+    handled defensively - payments.extract_tracker_and_state() tries several
+    plausible shapes, and the signature check tries every plausible header
+    name (payments.WEBHOOK_SIGNATURE_HEADER_CANDIDATES). The FULL raw
+    payload is always logged (at INFO on a parse success, WARNING on any
+    failure) specifically so the first real delivery's exact shape can be
+    read from the logs (or the dashboard's own "Webhook Logs"/"Webhook Logs
+    v2" pages) and this handler tightened to match - update only
+    extract_tracker_and_state()/the header-candidate list in
+    app/payments.py once that's known, nothing else needs to change.
+
+    Returns 200 for almost everything (including "couldn't parse this" or
+    "unknown tracker") rather than a 4xx/5xx - webhook senders typically
+    retry non-2xx responses, and retrying a payload this handler already
+    knows it can't use would just be noise. The one exception is a bad
+    signature, which safepay_webhook_secret being configured makes a real
+    security boundary, not just a parsing nicety.
+    """
+    raw_body = await request.body()
+
+    signature = ""
+    for header_name in payments.WEBHOOK_SIGNATURE_HEADER_CANDIDATES:
+        signature = request.headers.get(header_name, "")
+        if signature:
+            break
+
+    if not payments.verify_webhook_signature(raw_body, signature):
+        logger.warning("Safepay webhook signature verification failed")
+        raise HTTPException(400, "invalid webhook signature")
+
+    try:
+        payload = json.loads(raw_body)
+    except ValueError:
+        logger.warning("Safepay webhook delivered a non-JSON body: %r", raw_body[:500])
+        return {"status": "ignored"}
+
+    tracker, state = payments.extract_tracker_and_state(payload)
+    logger.info("Safepay webhook received - tracker=%r state=%r payload=%r", tracker, state, payload)
+
+    if not tracker:
+        return {"status": "ignored"}
+
+    intent = session.exec(select(PaymentIntent).where(PaymentIntent.tracker == tracker)).first()
+    if intent is None or intent.status != "pending":
+        return {"status": "ignored"}
+
+    _finalize_payment_intent(session, intent, completed=payments.is_completed_state(state))
+    return {"status": "ok"}
+
+
 @app.post("/api/webhooks/clerk")
 async def clerk_webhook(request: Request, session: Session = Depends(get_session)):
     """Real-time counterpart to the lazy row-creation GET /api/plan already
@@ -630,7 +821,7 @@ def _compute_room_dimensions(
     return result
 
 
-def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
+def _project_to_response(project: Project, storage, session: Session) -> ProjectStatusResponse:
     images: dict[str, str | None] = {
         "original": storage.url(project.original_key) if project.original_key else None
     }
@@ -640,6 +831,13 @@ def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
 
     materials = json.loads(project.materials_json) if project.materials_json else None
     room_dimensions = json.loads(project.room_dimensions_json) if project.room_dimensions_json else None
+
+    # Materials-only retry (see retry_materials() below) - an anonymous
+    # (no-login) project has no plan at all, so its limit is always 0.
+    retry_limit = 0
+    if project.user_id:
+        owner_plan = get_or_create_user_plan(session, project.user_id)
+        retry_limit = materials_retry_limit(owner_plan.plan)
 
     return ProjectStatusResponse(
         project_id=project.id,
@@ -656,6 +854,8 @@ def _project_to_response(project: Project, storage) -> ProjectStatusResponse:
         additional_instructions=project.additional_instructions,
         room_dimensions=room_dimensions,
         image_model=project.image_model,
+        materials_retry_used=project.materials_retry_count,
+        materials_retry_limit=retry_limit,
     )
 
 
@@ -671,7 +871,7 @@ def get_project(
     if project is None or not _owns_project(project.user_id, user):
         raise HTTPException(404, "project not found")
 
-    return _project_to_response(project, get_storage())
+    return _project_to_response(project, get_storage(), session)
 
 
 @app.post("/api/projects/{project_id}/cancel", response_model=ProjectStatusResponse)
@@ -698,7 +898,71 @@ def cancel_project(
         session.add(project)
         session.commit()
 
-    return _project_to_response(project, get_storage())
+    return _project_to_response(project, get_storage(), session)
+
+
+@app.post("/api/projects/{project_id}/materials/retry", response_model=ProjectStatusResponse)
+def retry_materials(
+    project_id: str,
+    tier: str = Form(...),
+    session: Session = Depends(get_session),
+    user: AuthUser = Depends(require_user),
+):
+    """Re-runs generate_materials() for ONE tier of an already-completed
+    project, WITHOUT touching its images - built specifically for the case
+    where the (paid) images came out fine but that tier's pricing lookup
+    failed (e.g. a Gemini key hiccup mid-demo left only the Mid tier priced,
+    Economical/Premium fell back to "Estimate unavailable"). Capped per plan
+    (app/plans.py's MATERIALS_RETRY_LIMITS) via project.materials_retry_count -
+    a shared counter across all 3 tiers on this project, not per-tier, so a
+    user can't get 3x the retries by hitting each tier once. Requires login
+    (an anonymous trial project has no plan, so its limit is always 0 anyway -
+    see _project_to_response's retry_limit computation)."""
+    project = session.get(Project, project_id)
+    if project is None or not _owns_project(project.user_id, user):
+        raise HTTPException(404, "project not found")
+    if tier not in TIERS:
+        raise HTTPException(400, f"tier must be one of {TIERS}")
+    if not project.materials_json:
+        raise HTTPException(400, "materials haven't been generated for this project yet")
+
+    plan_row = get_or_create_user_plan(session, user.id)
+    limit = materials_retry_limit(plan_row.plan)
+    if project.materials_retry_count >= limit:
+        if limit == 0:
+            raise HTTPException(403, "Materials retries aren't included in your plan. Upgrade to Pro or Studio to unlock them.")
+        raise HTTPException(
+            403,
+            f"You've used all {limit} materials retries included in your plan for this generation.",
+        )
+
+    meta = json.loads(project.meta_json) if project.meta_json else {}
+    tier_spec = build_tier_spec(tier, project.interior_style or "", project.color_palette or "")
+    materials_keys = settings.gemini_materials_api_keys
+
+    try:
+        result = get_provider().generate_materials(
+            tier,
+            tier_spec,
+            project.room_description,
+            project.city,
+            materials_keys.get(tier),
+            meta.get("room_area_sqft"),
+            meta.get("wall_area_sqft"),
+        )
+    except Exception:
+        logger.exception("materials retry failed for project %s tier %s", project_id, tier)
+        result = fallback_materials(tier_spec, project.city)
+
+    materials = json.loads(project.materials_json)
+    materials[tier] = result
+    project.materials_json = json.dumps(materials)
+    project.materials_retry_count += 1
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+
+    return _project_to_response(project, get_storage(), session)
 
 
 @app.get("/api/projects", response_model=list[ProjectStatusResponse])
@@ -716,7 +980,7 @@ def list_projects(session: Session = Depends(get_session), user: AuthUser = Depe
         .order_by(Project.created_at.desc())
     ).all()
     storage = get_storage()
-    return [_project_to_response(p, storage) for p in projects]
+    return [_project_to_response(p, storage, session) for p in projects]
 
 
 @app.post("/api/house-projects", response_model=HouseProjectCreateResponse)

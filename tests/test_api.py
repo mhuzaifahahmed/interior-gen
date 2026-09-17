@@ -525,6 +525,112 @@ def test_city_triggers_materials_for_every_tier(monkeypatch):
     assert all(city == "Karachi" for _, city, _, _ in provider.materials_calls)
 
 
+def _create_done_project(client, monkeypatch, provider=None) -> str:
+    provider = provider or FakeProvider()
+    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+    files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
+    create_res = client.post(
+        "/api/projects", files=files, data={**_REQUIRED_STYLE_FIELDS, "city": "Karachi"}
+    )
+    assert create_res.status_code == 200
+    return create_res.json()["project_id"]
+
+
+def test_materials_retry_updates_only_the_requested_tier(monkeypatch):
+    from sqlmodel import Session
+
+    from app.db import engine
+    from app.plans import set_plan
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        project_id = _create_done_project(client, monkeypatch)
+
+        with Session(engine) as session:
+            set_plan(session, user_id, "pro")
+
+        retry_provider = FakeProvider()
+
+        def different_materials(tier, tier_spec, room_description, city, api_key=None, room_area_sqft=None, wall_area_sqft=None):
+            return {
+                "items": [{"name": "Retried Item", "spec": "", "price": "$999", "currency": "USD",
+                           "source_url": None, "is_estimate": False}],
+                "total": "$999",
+                "currency": "USD",
+            }
+
+        retry_provider.generate_materials = different_materials
+        monkeypatch.setattr(main_module, "get_provider", lambda: retry_provider)
+
+        res = client.post(f"/api/projects/{project_id}/materials/retry", data={"tier": "mid"})
+        assert res.status_code == 200
+        body = res.json()
+        assert body["materials"]["mid"]["items"][0]["name"] == "Retried Item"
+        # Untouched tiers keep their original materials from generation.
+        assert body["materials"]["economical"]["items"][0]["name"] == "Flooring"
+        assert body["materials_retry_used"] == 1
+        assert body["materials_retry_limit"] == 2
+
+
+def test_materials_retry_rejected_on_free_plan(monkeypatch):
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        project_id = _create_done_project(client, monkeypatch)
+
+        res = client.post(f"/api/projects/{project_id}/materials/retry", data={"tier": "mid"})
+    assert res.status_code == 403
+
+
+def test_materials_retry_rejects_an_invalid_tier(monkeypatch):
+    from sqlmodel import Session
+
+    from app.db import engine
+    from app.plans import set_plan
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        project_id = _create_done_project(client, monkeypatch)
+        with Session(engine) as session:
+            set_plan(session, user_id, "pro")
+
+        res = client.post(f"/api/projects/{project_id}/materials/retry", data={"tier": "luxury"})
+    assert res.status_code == 400
+
+
+def test_materials_retry_enforces_the_plan_limit(monkeypatch):
+    from sqlmodel import Session
+
+    from app.db import engine
+    from app.plans import set_plan
+
+    with TestClient(app) as client:
+        user_id = _signup_and_login(client)
+        project_id = _create_done_project(client, monkeypatch)
+        with Session(engine) as session:
+            set_plan(session, user_id, "pro")  # 2 retries/generation
+
+        monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+
+        for _ in range(2):
+            res = client.post(f"/api/projects/{project_id}/materials/retry", data={"tier": "mid"})
+            assert res.status_code == 200
+
+        third = client.post(f"/api/projects/{project_id}/materials/retry", data={"tier": "mid"})
+    assert third.status_code == 403
+
+
+def test_materials_retry_404s_for_someone_elses_project(monkeypatch):
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        project_id = _create_done_project(client, monkeypatch)
+
+    with TestClient(app) as other_client:
+        _signup_and_login(other_client)
+        res = other_client.post(f"/api/projects/{project_id}/materials/retry", data={"tier": "mid"})
+    assert res.status_code == 404
+
+
 def test_rejects_unsupported_file_type():
     with TestClient(app) as client:
         _signup_and_login(client)

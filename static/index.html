@@ -38,6 +38,18 @@
 </div>
 </div>
 
+<!-- Same toast pattern as cold-start-toast above, reused for the message
+     shown after a Safepay checkout redirect lands back on this page (see
+     app.js's showPaymentStatusToast(), triggered by a real ?payment=
+     query param POST /api/payments/safepay/callback appends). Hidden by
+     default; text/icon are filled in dynamically per status. -->
+<div class="hidden fixed bottom-6 inset-x-0 z-[100] flex justify-center px-margin-mobile pointer-events-none" id="payment-status-toast">
+<div class="flex items-center gap-3 bg-night/90 backdrop-blur-xl text-on-night rounded-full shadow-[0_12px_32px_rgba(28,24,21,0.35)] border border-white/10 px-5 py-3 max-w-md">
+<span class="material-symbols-outlined text-[20px] shrink-0" id="payment-status-toast-icon">info</span>
+<span class="font-body-md text-body-md" id="payment-status-toast-text"></span>
+</div>
+</div>
+
 <header class="fixed top-3 md:top-4 inset-x-0 z-50 px-margin-mobile pointer-events-none">
 <div class="max-w-4xl mx-auto flex items-center justify-between gap-2 md:gap-3">
 <!-- Split into two independently-pilled containers (logo pill + everything-else
@@ -949,7 +961,18 @@ Interior&#8209;Gen
 <img src="/static/jazzcash-logo.png" alt="JazzCash" class="h-12 w-auto object-contain"/>
 </div>
 <h3 class="font-headline-sm text-headline-sm text-on-surface mb-1">Upgrade to <span id="jazzcash-plan-name">Pro</span></h3>
-<p class="font-body-md text-on-surface-variant text-sm mb-6">Send <span id="jazzcash-plan-price" class="font-semibold text-on-surface">PKR 2,499/mo</span> via JazzCash to the account below, then reach out to us with your transaction ID and we'll activate your plan.</p>
+
+<!-- Real Safepay sandbox checkout (app/payments.py) - clicking this hits
+     POST /api/payments/safepay/checkout and redirects the browser to
+     Safepay's hosted checkout page; a successful payment auto-upgrades the
+     plan via the callback endpoint, no admin panel action needed. Sits
+     ABOVE the manual JazzCash instructions, not replacing them - JazzCash
+     stays a permanent secondary option per explicit user request. -->
+<button type="button" class="w-full bg-primary text-on-primary px-6 py-3 font-label-caps text-label-caps rounded-full hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 mb-4 flex items-center justify-center gap-2" id="safepay-checkout-btn">
+<span class="material-symbols-outlined text-[18px]">credit_card</span>
+<span id="safepay-checkout-btn-label">Pay with card</span>
+</button>
+<p class="font-body-md text-on-surface-variant/70 text-xs mb-5">or send <span id="jazzcash-plan-price" class="font-semibold text-on-surface">PKR 2,499/mo</span> manually via JazzCash below</p>
 <div class="bg-surface-container-low border border-outline-variant rounded-xl p-5 text-left">
 <p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Account Title</p>
 <p class="font-body-md text-on-surface mb-4">Muddassir Ahmed</p>
