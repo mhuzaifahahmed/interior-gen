@@ -33,6 +33,51 @@ Originally built on **free tiers only**; that constraint was later dropped for i
 - Config/secrets: copy `.env.example` → `.env` and fill in real keys. **Never put real secrets in
   `.env.example`** — it is git-tracked; only `.env` is gitignored.
 
+## Deployment: Vercel (frontend) + Render (backend) — two separate deploys, wired by a rewrite
+
+The production site is **not one deploy** — it's two, stitched together at the HTTP level, and this has
+caused several real incidents (below) worth understanding before touching either side.
+
+- **Vercel** hosts the static frontend only (`static/`) — no Python runs there. `vercel.json` at the repo
+  root does two things:
+  ```json
+  { "rewrites": [
+      { "source": "/", "destination": "/static/index.html" },
+      { "source": "/api/:path*", "destination": "https://interior-gen.onrender.com/api/:path*" }
+  ]}
+  ```
+  `/` serves the real HTML/JS/CSS; any `/api/*` call from `app.js` is transparently forwarded to Render —
+  the browser only ever talks to the Vercel domain, the proxy is invisible client-side. **Nothing else is
+  rewritten** — routes like `/admin` are NOT proxied, so `/admin` on the Vercel domain just 404s (Vercel
+  has no idea that route exists; it's only real on Render itself).
+- **Render** (`https://interior-gen.onrender.com`) runs the actual FastAPI app (`app/main.py`), talks to
+  the real Postgres (Neon) database, and makes every paid/self-hosted call (OpenAI, Kaggle, Gemini,
+  SerpApi, S3). It also happens to serve `static/` and `/admin` itself — but when reached *through*
+  Vercel, only `/api/*` traffic actually lands there.
+- **`/admin` therefore only ever works at `interior-gen.onrender.com/admin` directly** — not on the
+  Vercel domain. This has caused real user confusion (mistaking the Vercel homepage's nav dropdown for
+  the actual admin panel) — always point at the Render URL for `/admin`.
+- **Two separate environment-variable stores, real incidents from this**: Render's env vars are
+  completely independent of local `.env` — this has caused at least three real production breakages
+  found only by reading Render's live logs together with the user: `CLERK_SECRET_KEY` was never set on
+  Render at all (`httpx.LocalProtocolError: Illegal header value b'Bearer '` on every authenticated call
+  — fixed by pasting the local value into Render's dashboard); `ADMIN_USER_IDS` was likewise never set on
+  Render (`/admin` returned "You don't have admin access" for the real admin's own account — same fix);
+  and Postgres never got a schema migration that only ran conditionally for SQLite (see
+  `_migrate_missing_columns()` in `app/db.py` — fixed by generalizing it to run on both engines). **Rule
+  of thumb: any new secret/setting added to `.env.example` must be separately added to Render's dashboard
+  before it does anything in production — adding it locally is not enough, and there is no automatic
+  sync.** Build-a-House's own `KAGGLE_HOUSE_API_URL`/`KAGGLE_AUTOCAD_API_URL` hit this exact same gap —
+  set locally, never mirrored to Render, silently leaving `floor_plan_status="not_configured"` (a
+  deliberately silent state — see "Build a House feature" below) with zero visible error.
+- **Auth survives the cross-domain split because it's Bearer-token-based, not cookie-based** — see
+  "Authentication (Clerk)" below for why that migration happened; the short version is that a Bearer
+  `Authorization` header isn't subject to `SameSite`/third-party-cookie rules, so it survives the
+  Vercel→Render hop with zero special handling, unlike the old session-cookie system.
+- **`FRONTEND_ORIGIN`** (an env var, set on **Render**, not Vercel) is the CORS complement to the rewrite
+  — it enables CORS for exactly the Vercel domain, for any request that doesn't go through the Vercel
+  proxy. Leave blank for local dev (same-origin, no CORS needed).
+
 ## Provider split (important — read before editing app/providers/)
 
 Originally planned as a single free Gemini provider for both image generation and text. **Google removed
@@ -1695,6 +1740,230 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     narrow room, still shown when it fits). 488/488 passing (7 new; one pre-existing, already-documented
     SQLite-lock-contention flake under full-suite load reconfirmed unrelated - passes in isolation and on
     a clean full-suite rerun).
+- **v22 (2026-09): structured `wants_garage` flag fixes a garage appearing in elevation renders that
+  never asked for one.** The friend-hosted Kaggle elevation notebook (`kaggle_notebooks/
+  elevation_server.py`, SDXL+ControlNet, the same one behind `HOUSE_IMAGE_PROVIDER=kaggle`/
+  `KAGGLE_HOUSE_API_URL`) was including a garage in the rendered exterior even for plots with none
+  requested — root cause: its prompt always included generic garage vocabulary with no way to suppress
+  it. Fixed the same way the "unrequested Gemini-invented garage" bug was fixed in the deterministic
+  layout engine (see the v16 entry above) — a real, deterministic signal instead of leaving it to the
+  model's own judgement. `ElevationRequest` gained a `garage: bool | None` field; `_build_prompt()`
+  includes `GARAGE_FEATURE` (positive prompt language) when `garage=True` or `NO_GARAGE_NEGATIVE`
+  (negative-prompt exclusion) when `garage=False`, `DEFAULT_FEATURES` made garage-neutral either way.
+  Threaded through the whole provider seam as `wants_garage: bool | None = None` on
+  `generate_house_render()` (`app/providers/base.py`/`hybrid.py`/`openai.py`/`modal_provider.py`/
+  `gemini.py` — only `kaggle.py`'s implementation actually uses it, sent as `payload["garage"]` when not
+  `None`; every other implementation accepts-and-ignores it for interface parity, same pattern as
+  `preferred_backend`/`facing` elsewhere in this seam). `app/pipeline/generate_house.py`'s render step
+  computes `wants_garage=mentions_garage(prompt or "")` (reusing `house_requirements.py`'s existing
+  garage-detection regex — the same deterministic parser that already drives the layout engine's own
+  garage injection) and passes it straight through.
+  **Two separate notebook-side bugs fixed alongside this, unrelated to the garage logic itself**: (1)
+  the tunnel URL wasn't reliably printing into the Kaggle cell's visible output — traced to the print
+  happening on a background thread, and Jupyter/ipykernel doesn't reliably route prints from non-main
+  threads into cell output; moved to the main thread with explicit `flush=True` and a loud banner. (2)
+  `uvicorn.run(app, host="0.0.0.0", port=8000)` conflicted with Kaggle's already-running event loop even
+  with `nest_asyncio` patched in — replaced with `uvicorn.Config` + `uvicorn.Server` +
+  `asyncio.get_event_loop().run_until_complete(server.serve())`, the user's own live-tested fix.
+
+## Subscription plans, quotas, admin panel, and payments
+
+Free/Pro/Studio plan gating is **built and live** (previously tracked as a roadmap-only plan in
+`future-plans/subscription-and-access-roadmap.md`, now real code — that file still holds the original
+research/decision trail, e.g. why Stripe was ruled out, but the plan/quota system itself is no longer
+aspirational). Real payment processing is **not** — see "Payments" below for the honest current state.
+
+### Plans & quotas (`app/plans.py`, `app/models.py::UserPlan`)
+
+- `UserPlan` — one row per Clerk user id, lazily created (`get_or_create_user_plan()`) the first time
+  their plan is looked up (there's no signup hook that creates it eagerly outside the webhook — see
+  below). Fields: `plan` (`"free"`/`"pro"`/`"studio"`), four rolling-window usage counters
+  (`room_kaggle_used`/`room_openai_used`/`house_kaggle_used`/`house_openai_used`), `quota_window_start`,
+  `lifetime_generations` (never reset by the window — a true all-time total for the admin panel),
+  `email`/`display_name` (client-supplied labels, see `capture_identity()` below).
+- **Rolling 30-day window per user** (`QUOTA_WINDOW_DAYS`), anchored to `quota_window_start` — not a
+  shared calendar-month cutover. `roll_quota_window_if_needed()` lazily advances it in whole
+  `QUOTA_WINDOW_DAYS` increments (not just `window_start = now`) so a long-inactive user doesn't land on
+  an artificially extended window.
+- **`PLAN_QUOTAS`** — the approved pricing table, `math.inf` for genuinely unlimited buckets:
+
+  | | Free | Pro | Studio |
+  |---|---|---|---|
+  | Room (our model/Kaggle) | 5 | 150 | **Unlimited** |
+  | Room (OpenAI) | 0 (no access) | 30 | 100 |
+  | House (our model/Kaggle) | 3 | 60 | **Unlimited** |
+  | House (OpenAI) | 0 (no access) | 10 | 40 |
+
+  **Studio is NOT unlimited on OpenAI** — only the self-hosted Kaggle bucket is `math.inf`; OpenAI stays
+  metered on every plan since it has a real per-image dollar cost regardless of plan (~$0.10/room
+  generation, ~$0.19/house render — see "Provider split" above for the input-fidelity cost trap this
+  pricing is based on).
+- **`consume_quota(session, user_id, kind, backend)`** — the single gate every generator endpoint calls
+  before accepting a request. Raises `QuotaExceededError` (carries `plan`/`quota_key`/`limit`, with a
+  `user_message()` the frontend shows verbatim) rather than a bare 403 — increments happen at REQUEST
+  time, not on pipeline completion (every attempt counts, matching the Free tier's "every retry counts"
+  spirit). `settings.unlimited_test_user_ids` (comma-separated Clerk ids, dev/testing-only, never set in
+  production) bypasses the limit check while still tracking real usage.
+- **`resolve_preferred_backend(plan, requested)`** — decides whether a generation request's
+  `preferred_model` Form field (`"kaggle"`/`"openai"`) actually overrides the app's configured default.
+  Anonymous (pre-login trial, `plan=None`) is always allowed to choose; Free is never honored (silently
+  falls back to the app default, verified end-to-end by a test that a Free user's explicit `"openai"`
+  request still succeeds against the Kaggle quota — if it had wrongly been honored, it would 403
+  immediately since Free's OpenAI allowance is 0); Pro/Studio are honored and quota-checked against
+  whichever bucket the chosen backend maps to. Threaded through `HybridProvider._resolve_room_provider()`/
+  `_resolve_house_provider()` and only included in pipeline calls when non-`None`
+  (`backend_kwargs = {"preferred_backend": ...} if preferred_backend else {}`) — a deliberate scope
+  decision so a call with no explicit preference is byte-for-byte identical to before this feature
+  existed, avoiding touching ~25+ duck-typed `FakeProvider` test doubles across the test suite.
+- **Anonymous pre-login trial**: `create_project`/`create_house_project` don't require login at all —
+  `get_current_user` (optional) instead of `require_user`. A plain `httponly` 1-year cookie
+  (`ig_anon_trial_room`/`ig_anon_trial_house`, `_consume_anonymous_trial()`) tracks whether this browser
+  already used its one free trial per generation type; a second attempt 401s with "Free trial already
+  used - please log in to continue" — the same status code the frontend already handles for the
+  post-login redirect flow, so no frontend change was needed for that path. Anonymous projects use a
+  fixed `ANONYMOUS_STORAGE_NAMESPACE = "anonymous"` S3 prefix (no per-visitor id exists to key by).
+- **7-day Pro trial: explicitly decided AGAINST, not just deferred.** An earlier draft of the roadmap
+  floated this; the user has since said no outright — don't build it, don't suggest it as a lever, it's
+  off the table.
+- **Retry-buffer feature (2/5 free retries before a retry counts as a new generation on Pro/Studio) is
+  deferred, not dropped** — needs a "regenerate this exact project" concept (a parent/retry link between
+  rows) that doesn't exist in the app at all yet.
+- **Build a House has a known, deliberate quota gap**: `create_house_project` is NOT gated on quota at
+  all yet. Reason: `settings.house_image_provider` defaults to `"openai"` (no trained Kaggle house model
+  exists in production), so gating against the pricing table's assumed Kaggle bucket would 403 every
+  Free user's first-ever house generation (their real OpenAI allowance is 0). Hardcoding the Kaggle
+  bucket regardless of real backend was considered and rejected — it would let Free users consume real
+  paid OpenAI calls at zero counted cost. Resolve once a real Kaggle house model exists, or the pricing
+  table is revisited for an OpenAI-only house reality.
+
+### Identity capture (`capture_identity()`) — how the backend ever learns a user's email
+
+Clerk's session JWT carries only the user id (`AuthUser.id`) — never email or name (see "Authentication
+(Clerk)" below). `plans.capture_identity(session, user_id, email, display_name)` is a best-effort upsert
+of those two fields onto `UserPlan`, called from three places whenever the frontend happens to have them
+client-side (from `Clerk.user`): `GET /api/plan`'s optional `email`/`name` query params (fires on every
+authenticated page load), and both generator endpoints' `email`/`display_name` Form fields. **Client-
+supplied, never re-verified server-side** — same trust posture already used for `display_name` in S3 key
+namespacing (`_storage_namespace()`) — fine for an admin *label*, never used for auth/ownership decisions
+(that's always the real Clerk id). Only writes when a value is given AND actually different from what's
+stored, so a plain page load doesn't churn a write every time.
+
+### Clerk webhook (`POST /api/webhooks/clerk`) — creates the row at signup, not just first login
+
+Without this, a `UserPlan` row (and therefore admin-panel visibility) only appears the moment a user
+makes their *first successful authenticated request* — not the instant they finish signing up. A user
+who signs up (including via Google) and never actually lands on a logged-in page afterward would never
+show up in `/admin` without this webhook. Verified via **Svix** (`svix` Python package,
+`Webhook(secret).verify(raw_body, headers)` — requires the exact raw request bytes, not re-serialized
+JSON, which is why the endpoint reads `await request.body()` before any parsing). On a valid
+`user.created` event, extracts the primary email + a `first_name + last_name` (falling back to
+`username`) display name and calls `capture_identity()`. Deliberately **not** gated by
+`require_user`/`require_admin` — security is the Svix signature check alone, since Clerk itself is the
+caller, not a logged-in user.
+
+**Setup is two manual steps, both outside this repo, and both must be done for this to do anything**:
+1. Clerk Dashboard → Webhooks → Add Endpoint → `https://interior-gen.onrender.com/api/webhooks/clerk`,
+   subscribed to `user.created`. Clerk shows a "Signing Secret" (`whsec_...`) on creation.
+2. Set `CLERK_WEBHOOK_SECRET=whsec_...` on **Render's** environment (not just local `.env` — see the
+   "Deployment" section above for why that distinction matters). Until both are done, the endpoint 400s
+   every delivery attempt (`clerk_webhook_secret` empty) — silently, with no user-visible symptom other
+   than "the new signup isn't in `/admin` yet."
+
+### Admin panel (`/admin`, `static/admin.html`)
+
+- **Auth: a Clerk-user-id allowlist, not a shared password.** `settings.admin_user_ids` (comma-separated
+  Clerk ids, `.env`'s `ADMIN_USER_IDS`) → `admin_user_id_set` property (exact copy of the existing
+  `unlimited_test_user_ids` pattern) → `require_admin()` (`app/auth.py`, `Depends(require_user)` first,
+  then 403 if not in the set). Log in normally with an allowlisted Clerk account and `/admin` just works
+  for that account — must be set separately on Render (see "Deployment" above; this has already caused
+  one real incident where the admin's own account was locked out because the var was only in local
+  `.env`).
+- **`GET /api/admin/users`** → one row per `UserPlan`: user id, email, display name, plan, real
+  window-rolled usage/remaining (via the same `plan_status()` every user's own `/api/plan` call uses —
+  one source of truth, not a separate admin-only calculation), lifetime total, window reset date.
+- **`POST /api/admin/users/{id}/plan`** (body `{plan}`) → `set_plan()` — the real, human-operated way a
+  paid plan gets applied today, since no payment webhook exists yet (see "Payments" below). Does NOT
+  touch usage counters or the quota window — upgrading mid-window doesn't grant/reset an allowance.
+- **`POST /api/admin/users/{id}/reset-usage`** → `reset_usage()` — zeroes the four rolling counters and
+  restarts the window from now; deliberately does NOT touch `lifetime_generations`.
+- `GET /admin` serves `static/admin.html` — a single self-contained page (same Tailwind CDN/theme tokens
+  as `index.html`, uses `clerk-init.js` so `authFetch` carries the Bearer token) with a searchable table,
+  per-row plan `<select>` + Save, and a Reset-usage button. Not linked from the public nav.
+- **Real bug fixed (2026-09-17)**: `renderPlanUsage()`'s `planUsageRow()` (`static/app.js`) had an early-
+  return path for the "Unlimited" case (Studio's Kaggle bucket) that never appended the OpenAI-remaining
+  note at all — so a Studio user's nav dropdown just said "Unlimited" with **zero mention** that OpenAI
+  is still capped at 100/40. Fixed by computing the OpenAI note once, before the branch, and including it
+  in both the "Unlimited" and normal-bar return paths.
+- **Recurring local-DB test pollution, same root cause each time**: `tests/test_api.py`/
+  `test_house_api.py`/`test_plans.py` intentionally hit the real configured `DATABASE_URL` (documented,
+  accepted — no DB isolation for these files), which is normally the dev `data/app.db` SQLite file. This
+  has repeatedly left dozens-to-hundreds of junk `UserPlan` rows (`jane@example.com`,
+  `admin@example.com`, blank-email random-UUID rows) in the local dev DB after running the suite — safe
+  to `DELETE FROM userplan WHERE user_id != '<your real Clerk id>'` when this happens again; it only ever
+  affects the local file, never production Postgres.
+
+### Frontend: Pricing tab, model toggle, quota display, quota-exceeded popup
+
+- **Standalone "PRICING" tab** (`TAB_ORDER`/`TAB_PANELS`/`TAB_BTNS` in `app.js`, same `switchTab()`
+  machinery as Home/Room/House) — the Free/Pro/Studio comparison, reachable any time, not just after
+  hitting a limit. Pro/Studio cards show "Current plan" (disabled) instead of "Upgrade" when `GET
+  /api/plan` confirms that's the real plan.
+- **Room Redesign has a Kaggle/OpenAI toggle** (`#room-model-toggle-wrap`), shown only when the choice is
+  real: anonymous trial and Pro/Studio. Hidden entirely for logged-in Free (showing a control that does
+  nothing would be its own bug, since `resolve_preferred_backend()` already silently ignores their
+  choice). **Build a House deliberately has no such toggle** — `HOUSE_IMAGE_PROVIDER` defaults to
+  `"openai"` and no trained self-hosted house model exists, so both toggle options would silently do the
+  same (paid) thing; a plain static note explains this instead ("Build a House renders currently use
+  OpenAI — our self-hosted house model isn't live yet").
+- **Nav account-menu usage bars** (`#nav-plan-usage`/`#mobile-plan-usage`, `renderPlanUsage()`) — plan
+  name + two progress bars (Room, House) reading the `*_kaggle` bucket, with an inline "+N OpenAI left"
+  note (or "OpenAI unlimited" if that bucket is ever raised to infinite, which it currently never is).
+  Refreshed on Clerk sign-in/out, on switching to Room/Pricing tabs, and right after a generation is
+  submitted.
+- **Quota-exceeded popup** (`#quota-modal-overlay`, `openQuotaModal()`/`closeQuotaModal()` in `app.js`) —
+  NOT a separate full-page state (an earlier design was; replaced). Opens ON TOP of the upload screen on
+  a 403, so the user's already-filled-in form (photo, style notes, etc.) survives underneath. Shows the
+  backend's exact `QuotaExceededError.user_message()`, a real "Your quota resets on {date}" box (from
+  `GET /api/plan`'s `quota_window_reset_at`), an "Upgrade Now" button (jumps to Pricing) and an "OK, I'll
+  wait" button. Same GSAP "morph" open/close recipe as the nav account menu (see "Motion / GSAP
+  animation conventions" below), close button excluded from the child stagger for the same stacking-
+  context reason documented on the JazzCash modal.
+
+### Payments — the honest current state
+
+**No real payment processor is integrated. This is not an oversight — it's a deliberate, communicated
+stopgap.** Clicking "Upgrade to Pro/Studio" on the Pricing tab opens a modal (`#jazzcash-modal-overlay`,
+`openJazzCashModal("pro"|"studio")`) with **manual JazzCash mobile-wallet transfer instructions** — a
+fixed account name ("Muddassir Ahmed") and number (`0321-8249255`, `#jazzcash-number`), a Copy button
+(`navigator.clipboard.writeText()`, best-effort). The user then reaches out and gets manually upgraded
+via the admin panel's plan `<select>` above — there is currently no automated link between "money
+received" and "plan changed."
+
+- **Real processor research already done** (kept for the next session, not re-derivable from code):
+  Stripe is ruled out entirely — no Pakistan support (SBP requires local PSO/PSP licensing Stripe
+  hasn't obtained). Compared **Safepay** (SBP-regulated, developer-friendly REST API, real tokenized
+  recurring card billing, no-redirect checkout — **the recommended choice**), **PayFast Pakistan**
+  (broadest payment-method coverage including Raast, but documentation-heavy onboarding, slower
+  time-to-market for a small team), **JazzCash** (a mobile-wallet API at heart, weak as a standalone
+  subscription-billing backbone), and **PayPro** (an explicit PKR recurring-subscription specialist —
+  the one gap-filler among local providers for this exact use case, but "interface isn't as polished"
+  and integration takes more patience — worth a second look only if Safepay's recurring billing proves
+  thinner in practice than it sounds).
+- **Business-registration reality check (2026-09)**: a full SECP company is NOT required for Safepay.
+  Safepay's own legal-person definition includes "validly registered sole-proprietors" — in Pakistan
+  that just means an NTN (National Tax Number, **free**, same-day via FBR's IRIS portal, tied directly
+  to your CNIC for an individual) + a bank account + CNIC scan (front/back) of the account owner. A
+  **sandbox account needs none of this** — it can be created immediately with zero documents, and is the
+  right place to start (test the real recurring-charge flow before committing to a processor). Only
+  flipping to **production** (real money) requires the NTN/CNIC/bank-account docs via the Merchant
+  Onboarding Form (Safepay targets ~48hr review).
+- **Planned integration shape once a processor IS chosen**: the quota/plan system is already
+  processor-agnostic by design — `UserPlan.plan` is just a string. Integration should only ever mean one
+  new webhook endpoint that calls `plans.set_plan(session, user_id, plan)` on a successful/renewed/
+  cancelled payment — no redesign of `app/plans.py` needed. The manual JazzCash modal should stay
+  available as a permanent secondary option even after a real processor exists (per explicit user
+  request) — shown alongside an automated "Pay with card" path, not replaced by it, since some users may
+  prefer or need the manual route.
 
 ## Architecture (big picture)
 
@@ -1957,6 +2226,39 @@ never before the fade finishes, or the menu would visibly snap away instead of d
 in-flight timeline (`if (tl) tl.kill()`) before starting a new open/close, same rapid-click-safety
 discipline as the tab-switch timeline. **When adding a new dropdown, copy this exact easing/duration/
 stagger recipe rather than inventing a new one** — that consistency is the whole point of the request.
+
+**Not every element should get a GSAP entrance animation — a real one tried and reverted (2026-09-17).**
+The pre-auth header pill (see `static/auth-header.js` below) briefly had a "cut to full" clip-path
+entrance (starts clipped to a narrow center sliver, expands to full width) and the mobile hamburger icon
+briefly morphed (`menu` → `close` glyph via rotate/scale/fade) instead of swapping instantly. Both were
+removed the same day per explicit user feedback that they "looked cheap." **A real, separate reason
+beyond taste**: the header entrance had a genuine latent failure mode — `gsap.set(pillEl, { opacity: 0,
+... })` ran synchronously before the `.to()` reveal, so if GSAP's CDN script was ever slow/blocked (ad
+blocker, flaky network), the pill — including the SIGN UP button — would stay invisible **forever**, with
+no fallback trigger to un-stick it. This was flagged as the likely explanation for a real "the signup
+button isn't visible" bug report. **Lesson: an entrance animation on a critical conversion element
+(a signup CTA) needs a hard timeout/fallback if it's going to exist at all** — simplest fix used here was
+just not animating it. Both pages' `<script>` tag for GSAP was removed entirely once this was reverted,
+since neither page needs it for anything else.
+
+**Shared pre-auth header** (`static/auth-header.js`) — the SINGLE source of truth for `login.html`/
+`signup.html`'s nav, replacing two hand-copied `<header>` blocks that had drifted (one was missing the
+PRICING link, one had stale hrefs). Injects one merged pill (Logo | Nav links | primary CTA) via
+`outerHTML` into `<div id="auth-page-header"></div><script src="/static/auth-header.js"
+data-cta-label="..." data-cta-href="..." data-cta-filled="..."></script>`. **Real mobile bug fixed
+(2026-09-16)**: the wordmark + gaps + CTA pill could together exceed a narrow phone's width, pushing the
+CTA (e.g. login page's filled "SIGN UP" button) partly/fully off-screen with no scroll affordance to
+reach it. Fixed by hiding the "Interior‑Gen" wordmark text below the `sm` breakpoint (icon-only), and
+`whitespace-nowrap`/`shrink-0` on the CTA so it can never wrap or get squeezed — verified via a real
+390px-viewport Playwright screenshot, not just reasoned about (this project's own established lesson:
+guess the fix, then actually screenshot it before calling it done).
+
+**Main-site mobile nav sizing** (2026-09-16) — `index.html`'s two header pills (logo pill + tabs/account
+pill) used their full desktop `h-16` height/padding/logo size even on a narrow phone, where only the logo
+and hamburger are ever visible (everything else is `hidden md:flex`) — looked oversized relative to the
+screen width. Shrunk below `md` only (logo `w-8→w-6`, pill `h-16→h-11`, hamburger button `w-10→w-8`,
+tighter gaps/padding); desktop is completely untouched (`md:` variants restore every original value) —
+confirmed via side-by-side screenshots at 375px and 1280px.
 
 Structure preserved from the original vanilla build: single-screen, clarity-first flow per tab (upload
 → progress → results/error, one state visible at a time via `showState()`/`showHouseState()` in
