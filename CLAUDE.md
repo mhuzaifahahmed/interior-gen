@@ -1785,14 +1785,24 @@ aspirational). Real payment processing is **not** — see "Payments" below for t
   shared calendar-month cutover. `roll_quota_window_if_needed()` lazily advances it in whole
   `QUOTA_WINDOW_DAYS` increments (not just `window_start = now`) so a long-inactive user doesn't land on
   an artificially extended window.
-- **`PLAN_QUOTAS`** — the approved pricing table, `math.inf` for genuinely unlimited buckets:
+- **`PLAN_QUOTAS`** — the approved pricing table (`math.inf` for genuinely unlimited buckets), with real
+  monthly prices and the cost basis they're derived from:
 
-  | | Free | Pro | Studio |
+  | | **Free — PKR 0** | **Pro — PKR 2,499/mo** | **Studio — PKR 6,999/mo** |
   |---|---|---|---|
-  | Room (our model/Kaggle) | 5 | 150 | **Unlimited** |
-  | Room (OpenAI) | 0 (no access) | 30 | 100 |
-  | House (our model/Kaggle) | 3 | 60 | **Unlimited** |
-  | House (OpenAI) | 0 (no access) | 10 | 40 |
+  | Model access | Kaggle/our model only | Kaggle + OpenAI toggle | Kaggle + OpenAI toggle |
+  | Room generations | 5/mo (Kaggle only) | Kaggle 150/mo fair-use; OpenAI 30/mo | Kaggle **unlimited** fair-use; OpenAI 100/mo |
+  | House generations | 3/mo (Kaggle only) | Kaggle 60/mo fair-use; OpenAI 10/mo | Kaggle **unlimited** fair-use; OpenAI 40/mo |
+  | Free retries/generation | 0 (every retry counts) — **not built yet, see below** | 2 free (planned, not built) | 5 free (planned, not built) |
+  | Premium features | — | Model toggle, priority queue, full History | + commercial-use license, HD house renders, bulk/export, priority support |
+  | Est. worst-case OpenAI cost to us | $0 | ~$4.9/mo | ~$17.6/mo |
+  | Margin at max usage | n/a | positive (~$4) | positive (~$7) |
+
+  **Cost basis these numbers are built on**: Kaggle/"our model" ≈ PKR 0 marginal cost (bounded only by
+  a 30 GPU-hr/week/account quota — see "Provider split" above). OpenAI room generation (3 tiers,
+  low/low fidelity) ≈ **$0.10/generation** (~PKR 28 at ≈280 PKR/USD). OpenAI house render (high/high
+  fidelity) ≈ **$0.19/generation** (~PKR 53) — roughly 2× room's cost, which is why House's OpenAI
+  quotas are consistently lower than Room's at every plan tier.
 
   **Studio is NOT unlimited on OpenAI** — only the self-hosted Kaggle bucket is `math.inf`; OpenAI stays
   metered on every plan since it has a real per-image dollar cost regardless of plan (~$0.10/room
