@@ -3,6 +3,14 @@
 Living checklist - update/remove items as they're done, don't let this go stale. Distinct from the other
 future-plans files (which are point-in-time design docs) - this one is a working list.
 
+## Sequencing note (2026-09-17): what comes after the payment gateway
+
+Once the real payment gateway (Safepay, see CLAUDE.md's "Subscription plans, quotas, admin panel, and
+payments" section) is integrated and pushed to `main`, the user wants to start a **brand-new branch off
+main** for the next scope: **AutoCAD (.dxf) refinements** + **Build a House additional features**
+(unspecified beyond that yet - ask the user what specifically, when this phase starts). Do not mix that
+work into the payment-gateway branch/PR - keep it sequential: payment gateway -> main -> new branch.
+
 ## Pending: real UI bugs to fix, not yet started
 
 - [ ] **Signup button not visible enough on mobile (phone) viewport** - user-reported 2026-09-16, on the
