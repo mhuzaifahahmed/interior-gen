@@ -102,33 +102,42 @@ def test_verify_callback_signature_rejects_empty_inputs(monkeypatch):
     assert payments.verify_callback_signature("track_abc123", "") is False
 
 
-def test_fetch_order_state_returns_the_real_state_field(monkeypatch):
+def test_fetch_order_details_returns_the_real_data_object(monkeypatch):
     monkeypatch.setattr(
-        httpx, "get", lambda url, timeout: _FakeResponse(200, {"data": {"state": "TRACKER_STARTED"}})
+        httpx, "get", lambda url, timeout: _FakeResponse(200, {"data": {"state": "TRACKER_STARTED", "transaction": None}})
     )
-    assert payments.fetch_order_state("track_abc123") == "TRACKER_STARTED"
+    assert payments.fetch_order_details("track_abc123") == {"state": "TRACKER_STARTED", "transaction": None}
 
 
-def test_fetch_order_state_returns_none_on_request_failure(monkeypatch):
+def test_fetch_order_details_returns_none_on_request_failure(monkeypatch):
     def fake_get(*a, **k):
         raise httpx.ConnectError("boom")
 
     monkeypatch.setattr(httpx, "get", fake_get)
-    assert payments.fetch_order_state("track_abc123") is None
+    assert payments.fetch_order_details("track_abc123") is None
+
+
+# Real, live-verified shapes (2026-09-17) - a fresh tracker (right after
+# order/v1/init, before any payment attempt) has transaction: null; a
+# genuinely completed payment has state "TRACKER_ENDED" AND a fully
+# populated transaction object (id/token/fees/net/reference/signature).
+_FRESH_TRACKER = {"state": "TRACKER_STARTED", "transaction": None}
+_CANCELLED_TRACKER = {"state": "TRACKER_ENDED", "state_reason": "cancelled_by_user", "transaction": None}
+_COMPLETED_TRACKER = {
+    "state": "TRACKER_ENDED",
+    "transaction": {"id": 23845, "token": "trans_67dbc7eb", "reference": "917939", "fees": 443.39, "net": 6555.61},
+}
 
 
 @pytest.mark.parametrize(
-    "state,expected",
+    "order_details,expected",
     [
-        ("TRACKER_COMPLETED", True),
-        ("TRACKER_SUCCESS", True),
-        ("PAID", True),
-        ("tracker_completed", True),  # case-insensitive
-        ("TRACKER_STARTED", False),
-        ("TRACKER_CANCELLED", False),
+        (_COMPLETED_TRACKER, True),
+        (_FRESH_TRACKER, False),
+        (_CANCELLED_TRACKER, False),  # same terminal state as completed, but no transaction
         (None, False),
-        ("", False),
+        ({}, False),
     ],
 )
-def test_is_completed_state(state, expected):
-    assert payments.is_completed_state(state) is expected
+def test_is_completed_order(order_details, expected):
+    assert payments.is_completed_order(order_details) is expected

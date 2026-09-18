@@ -30,15 +30,16 @@ Checkout" SPA shell, no redirect). `beacon` is genuinely the tracker
 param's name, not `token`/`tracker` - confirmed from the bundle's own
 `fc(e.beacon)` -> `tracker` mapping.
 
-STILL NOT LIVE-VERIFIED: an actual completed test-card payment through the
-real checkout page (which needs a headless/real browser, not just HTTP
-requests) - so _ORDER_COMPLETED_STATE_MARKERS below (the string(s) `state`
-turns into on success) is still an educated guess from the state machine's
-naming convention (TRACKER_STARTED -> ??? -> presumably something
-containing COMPLETE/SUCCESS/PAID), not a confirmed value. Run one real
-sandbox test-card payment through CHECKOUT_URL_TEMPLATE below and check the
-real resulting `state` string before trusting this in front of a real user;
-update only that constant if the real value differs.
+A COMPLETED PAYMENT WAS LIVE-VERIFIED 2026-09-17 (real sandbox test-card
+payment run through the actual checkout page, tracker looked up afterward
+via GET /order/v1/{tracker}): the state string turned out to be
+"TRACKER_ENDED" - NOT any of the COMPLETE/SUCCESS/PAID variants originally
+guessed here (a real, confirmed bug this fixed - the original guess would
+have silently classified every real completed payment as a FAILURE). The
+actual completion signal used below is a genuinely populated `transaction`
+object on the order (id/token/fees/net/reference/signature), which is more
+robust than string-matching an ambiguous terminal-state name - see
+is_completed_order()'s own docstring.
 """
 
 import hashlib
@@ -54,13 +55,6 @@ logger = logging.getLogger(__name__)
 
 ORDER_INIT_TIMEOUT_SECONDS = 15
 ORDER_STATUS_TIMEOUT_SECONDS = 15
-
-# Real, confirmed state string for a fresh tracker (order/v1/init's own
-# response shows this). The state a COMPLETED payment ends up in is one of
-# the "NOT YET LIVE-VERIFIED" items above - every plausible variant is
-# checked case-insensitively as a substring match, so this keeps working
-# whichever exact spelling the real sandbox turns out to use.
-_ORDER_COMPLETED_STATE_MARKERS = ("COMPLETE", "SUCCESS", "PAID")
 
 # See this module's docstring - LIVE-VERIFIED path + param names (2026-09-17).
 CHECKOUT_URL_TEMPLATE = (
@@ -137,14 +131,16 @@ def verify_callback_signature(tracker: str, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-def fetch_order_state(tracker: str) -> str | None:
+def fetch_order_details(tracker: str) -> dict | None:
     """Server-to-server double-check that a tracker's payment actually
     completed, not just that the redirect signature is genuine (the
     signature alone only proves Safepay generated this tracker, not that the
     customer actually finished paying - a valid signature can arrive on a
-    cancelled/abandoned checkout too). Returns the raw `state` string, or
-    None on any request failure - callers treat None as "could not confirm,
-    do not upgrade the plan" rather than guessing."""
+    cancelled/abandoned checkout too). Returns the full `data` object from
+    GET {base}/order/v1/{tracker}, or None on any request failure - callers
+    treat None as "could not confirm, do not upgrade the plan" rather than
+    guessing. Returns the whole object (not just `state`) because
+    is_completed_order() below needs the `transaction` field too."""
     try:
         response = httpx.get(
             f"{settings.safepay_api_base}/order/v1/{tracker}",
@@ -155,14 +151,24 @@ def fetch_order_state(tracker: str) -> str | None:
     except httpx.HTTPError:
         logger.exception("Safepay order/v1/%s status check failed", tracker)
         return None
-    return (body.get("data") or {}).get("state")
+    return body.get("data")
 
 
-def is_completed_state(state: str | None) -> bool:
-    if not state:
+def is_completed_order(order_details: dict | None) -> bool:
+    """LIVE-VERIFIED 2026-09-17 (see this module's docstring) - a genuinely
+    completed payment's `state` is "TRACKER_ENDED" with a real, populated
+    `transaction` object attached (id/token/fees/net/reference/signature).
+    Checking for `transaction is not None` rather than matching `state`
+    against a fixed string is deliberately the PRIMARY signal - "TRACKER_ENDED"
+    is itself an ambiguous terminal-state name (a cancelled/abandoned
+    checkout could plausibly also end up "ended" with no transaction), while
+    a populated transaction object is a much stronger, harder-to-misread
+    proof that money actually moved. Every pre-payment state observed so far
+    (TRACKER_STARTED, right after order/v1/init, before any payment attempt)
+    has `transaction: null`."""
+    if not order_details:
         return False
-    upper = state.upper()
-    return any(marker in upper for marker in _ORDER_COMPLETED_STATE_MARKERS)
+    return order_details.get("transaction") is not None
 
 
 # Candidate header names for the webhook's signature - Safepay's own public
@@ -195,21 +201,24 @@ def verify_webhook_signature(raw_body: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-def extract_tracker_and_state(payload: dict) -> tuple[str | None, str | None]:
-    """Best-effort extraction of (tracker, state) from a webhook event body -
+def extract_tracker(payload: dict) -> str | None:
+    """Best-effort extraction of the tracker id from a webhook event body -
     NOT a confirmed shape (see this module's docstring: 0 real deliveries
     observed on this account yet). Tries every plausible key name/nesting
     this codebase has actually confirmed elsewhere (order/v1/init and
-    order/v1/{tracker} both nest under "data": {"token", "state"}) plus the
+    order/v1/{tracker} both nest the token under "data": {"token"}) plus the
     most common alternate webhook-envelope convention used elsewhere in this
     same codebase (Clerk's own webhook - {"type", "data": {...}}), so this
     degrades gracefully rather than crashing on the first real delivery.
-    ALWAYS log the raw payload at the call site (app/main.py's
-    safepay_webhook()) regardless of whether extraction succeeds, so the
-    first real delivery can be inspected and this function tightened to the
-    real shape once it's known.
+
+    Deliberately does NOT also try to extract a completion state from the
+    payload (an earlier version did) - the webhook's own event data is
+    still unconfirmed and was the reason app/payments.py originally guessed
+    the wrong completion signal (see this module's docstring for the real
+    incident). The tracker is enough: app/main.py's safepay_webhook() uses
+    it to re-fetch the order's REAL state via fetch_order_details()/
+    is_completed_order(), the same confirmed-live path safepay_callback()
+    uses, rather than trusting whatever the webhook body happens to claim.
     """
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    tracker = data.get("token") or data.get("tracker") or payload.get("tracker") or payload.get("token")
-    state = data.get("state") or data.get("status") or payload.get("state") or payload.get("status")
-    return tracker, state
+    return data.get("token") or data.get("tracker") or payload.get("tracker") or payload.get("token")

@@ -1969,17 +1969,33 @@ NTN/CNIC Merchant Onboarding Form review) is the only step left for real money; 
   `POST {base}/order/v1/init` (`{"client","amount","currency","environment"}` → `{"data":{"token",
   "state":"TRACKER_STARTED",...}}`) and `GET {base}/order/v1/{tracker}` (same shape back, used as a
   server-to-server "did this really get paid" double-check) were both hit live and confirmed to work
-  exactly as documented. **Still NOT live-verified**: the exact `state` string a genuinely COMPLETED
-  payment ends up in (needs a real browser test-card payment, not just HTTP calls) —
-  `payments.is_completed_state()` checks for COMPLETE/SUCCESS/PAID as a case-insensitive substring match
-  as an educated guess from the state machine's naming convention; update
-  `_ORDER_COMPLETED_STATE_MARKERS` in `app/payments.py` once a real completed payment's state is
-  observed, nothing else needs to change.
+  exactly as documented.
+  **Real incident, live-verified fix (2026-09-17, same day): the completion-detection guess was WRONG.**
+  A real sandbox test-card payment was run end to end through the actual checkout page — Safepay never
+  redirected the browser back afterward (clicking "Close" on their own "Transaction submitted" modal did
+  nothing observable), so nothing on our side fired and `/admin` never showed the upgrade. Looked up that
+  exact tracker directly via `GET /order/v1/{tracker}` and found the real payment HAD succeeded
+  server-side (a fully populated `transaction` object: id/token/fees/net/reference/signature) — but its
+  `state` was `"TRACKER_ENDED"`, not any of the guessed `COMPLETE`/`SUCCESS`/`PAID` variants. Had the
+  redirect or webhook actually fired under the original code, it would have silently misclassified this
+  genuinely successful payment as a FAILURE. Fixed by changing the completion signal entirely:
+  `is_completed_order(order_details)` now checks `order_details["transaction"] is not None` instead of
+  matching `state` against any string at all — a fresh `TRACKER_STARTED` tracker (right after
+  `order/v1/init`, before any payment attempt) has `transaction: null`, so this is a strictly more
+  reliable signal than guessing at state-string spelling, and sidesteps the fact that `"TRACKER_ENDED"`
+  is itself an ambiguous terminal-state name that a cancelled/abandoned checkout could plausibly also
+  reach. `fetch_order_state()` → `fetch_order_details()` (returns the full `data` object, not just
+  `state`, since the transaction field is what's now checked). **Separately, the browser not redirecting
+  back at all is still unexplained** (could be a Safepay sandbox UI quirk, could be something about how
+  `window.open`'s new-tab context handles the eventual `window.location` navigation) — but this no longer
+  matters as much as it first appeared to, since the independent server-to-server webhook path doesn't
+  depend on the browser at all, and now uses this same corrected completion check (see below).
 - **`app/payments.py`** (new, isolated module — mirrors `app/plans.py`'s own "a processor only ever needs
   to call `set_plan()`" isolation): `create_checkout_session()` (raises `SafepayError`, not best-effort —
   a broken checkout call means the user literally cannot pay), `verify_callback_signature()`
   (`HMAC-SHA256(tracker, secret_key)`, constant-time compare, exact scheme from Safepay's own public
-  examples), `fetch_order_state()` + `is_completed_state()`.
+  examples), `fetch_order_details()` + `is_completed_order()` (see the real incident above for why this
+  checks `transaction` presence, not a `state` string).
 - **`PaymentIntent` table** (`app/models.py`, brand-new — no migration entry needed, `create_all()`
   handles new tables): one row per checkout attempt, created BEFORE the browser ever reaches Safepay
   (`user_id`/`plan`/`amount_pkr`/`tracker`/`status`) — necessary because Safepay's redirect callback only
@@ -1989,7 +2005,7 @@ NTN/CNIC Merchant Onboarding Form review) is the only step left for real money; 
   `PaymentIntent`, calls `payments.create_checkout_session()`, returns `{"checkout_url"}` for the
   frontend to `window.location.href` to. 400 on an invalid plan, 502 wrapping a `SafepayError`.
 - **`GET /api/payments/safepay/callback`** (public, no auth — Safepay redirects the real browser here):
-  verifies the HMAC signature, then does the server-to-server `fetch_order_state()` double-check BEFORE
+  verifies the HMAC signature, then does the server-to-server `fetch_order_details()` double-check BEFORE
   ever calling `set_plan()` — the redirect signature alone only proves the tracker is genuinely Safepay's,
   not that the customer actually finished paying. Idempotent (a replayed/already-non-pending intent
   redirects to `?payment=error`, never double-upgrades). Always ends in a redirect to the frontend
@@ -2030,18 +2046,20 @@ NTN/CNIC Merchant Onboarding Form review) is the only step left for real money; 
   `POST /api/payments/safepay/webhook` — **re-point the dashboard's endpoint URL at that exact path**
   once this ships, the bare domain won't route anywhere real.
   - **What's confirmed vs. not, stated plainly** (0 real webhook deliveries have landed on this account
-    yet, since no payment has gone through the full flow): the SIGNATURE scheme (HMAC-SHA256 of the raw
-    request body using the webhook secret) is confirmed from Safepay's own public docs, which reference
-    an `X_SFPY_SIGNATURE`-style header — `app/payments.py`'s `WEBHOOK_SIGNATURE_HEADER_CANDIDATES` tries
+    yet, since no payment has gone through the full flow with the webhook URL correctly pointed at
+    `/api/payments/safepay/webhook`): the SIGNATURE scheme (HMAC-SHA256 of the raw request body using the
+    webhook secret) is confirmed from Safepay's own public docs, which reference an
+    `X_SFPY_SIGNATURE`-style header — `app/payments.py`'s `WEBHOOK_SIGNATURE_HEADER_CANDIDATES` tries
     several real-world spellings of that header name since the exact one hasn't been observed live yet.
-    The PAYLOAD shape (which JSON fields carry the tracker/order state) is an educated guess -
-    `extract_tracker_and_state()` tries the shape already confirmed elsewhere in this codebase
-    (`{"data": {"token", "state"}}`, same as `order/v1/init`'s own response) plus the generic
-    `{"type", "data": {...}}` envelope convention this project's Clerk webhook already uses. The handler
-    always logs the full raw payload (`logger.info` in `safepay_webhook()`) specifically so the FIRST
-    real delivery's exact shape can be read from the logs (or the dashboard's own "Webhook Logs"/
-    "Webhook Logs v2" pages, also seen live in the same screenshot) and `extract_tracker_and_state()`
-    tightened to match — nothing else needs to change once that's known.
+    The PAYLOAD shape uncertainty is mostly sidestepped rather than guessed further: `extract_tracker()`
+    (renamed from `extract_tracker_and_state()` — see the real completion-detection incident documented
+    above) only ever trusts the payload for the TRACKER id, tried against a couple of plausible shapes;
+    the actual completion decision always comes from a fresh `fetch_order_details()`/`is_completed_order()`
+    call (the same LIVE-VERIFIED path the redirect callback uses), never from whatever the webhook body
+    itself claims. The handler still always logs the full raw payload (`logger.info` in
+    `safepay_webhook()`) so the first real delivery's exact shape can be inspected if `extract_tracker()`
+    ever needs tightening — but getting that shape wrong no longer risks a misclassified payment the way
+    trusting a guessed `state` field did.
   - **Shares its upgrade logic with the redirect callback via `_finalize_payment_intent()`** — whichever
     of the two confirmation paths (browser redirect or server-to-server webhook) arrives first actually
     upgrades the plan; the other finds the `PaymentIntent` already non-`"pending"` and safely no-ops
@@ -2056,6 +2074,29 @@ NTN/CNIC Merchant Onboarding Form review) is the only step left for real money; 
     configured) — every other "couldn't use this payload" case (unparseable JSON, unknown tracker,
     already-processed intent) returns 200 so Safepay doesn't keep retrying a delivery this handler
     already knows it can't act on.
+
+### Self-serve "Cancel plan" (2026-09-17)
+
+Real user request, direct follow-up to the Safepay integration: no way existed for a user to downgrade
+themselves back to Free without asking an admin. **Honest scope**: this Safepay integration is a
+ONE-TIME payment per upgrade click (`app/payments.py`), not an auto-renewing subscription enrolled with
+Safepay — there is no real recurring charge to cancel on their side. "Cancel plan" here means exactly
+what the admin panel's plan-change endpoint already does: flip `UserPlan.plan` back to `"free"`
+immediately.
+
+- **`POST /api/plan/cancel`** (`app/main.py`, requires login): 400 if already on Free, otherwise
+  `set_plan(session, user.id, FREE)` + the same best-effort `account.json` S3 refresh every other
+  plan-change path does. Deliberately does NOT touch usage counters/quota window (same as every other
+  `set_plan()` call) — a user who's already used more Room generations this window than Free allows just
+  can't generate again until the window resets, same outcome as if they'd been on Free all along.
+- **Frontend**: a "Cancel plan" text link (`.cancel-plan-btn`) sits below whichever Pro/Studio pricing
+  card's CTA button is currently the user's actual plan (`applyPricingUI()` toggles it alongside the
+  existing "Current plan" disabled-button logic) — hidden on every other card. Confirms via a plain
+  `confirm()` dialog (honest about scope: "takes effect immediately", no mention of a "subscription"
+  being cancelled, since there isn't one to cancel) before calling the endpoint, then refreshes both the
+  Plans tab and the nav quota bar.
+- **Tests**: `tests/test_payments_api.py` gained 3 cases (downgrades to Free, rejects when already Free,
+  requires login).
 
 ### Materials-only pricing retry (2026-09-17)
 
@@ -2145,6 +2186,18 @@ Three deliberate seams keep the free/solo build swappable — respect them when 
    (bucket was wiped clean after). `tests/test_api.py`'s `FakeStorage` + `monkeypatch.setattr(main_module,
    "get_storage", ...)` is the fix - any new test hitting `TestClient(app)` must mock **both**
    `get_provider` and `get_storage`, not just the former.
+   **Hit AGAIN, same lesson, different call site (2026-09-17)**: `tests/test_payments_api.py`'s
+   Safepay callback/webhook "completed payment" tests reach `_finalize_payment_intent()`'s best-effort
+   `account.json` write, which calls the real `get_storage()` too - 4 tests were written without mocking
+   it, silently writing ~22 tiny `account.json` objects to the real bucket (under random
+   `users/user_<uuid4-hex>/` prefixes - easy to tell apart from real accounts, which use Clerk's own
+   mixed-case id format, not pure lowercase hex) across several full-suite runs before being caught. Fixed
+   the same way (a local `FakeStorage` + `monkeypatch.setattr(main_module, "get_storage", ...)` on every
+   affected test). **Left in the bucket, at the user's explicit choice** (not auto-deleted) - harmless,
+   isolated, identifiable by the `user_[0-9a-f]{24}` id pattern if ever cleaned up later. Any FUTURE test
+   that reaches a plan-upgrade code path (Safepay, admin plan-change, or anything else calling
+   `_write_account_json`) needs this same mock - it's not exclusive to the original `create_project`-style
+   call sites this note originally warned about.
 3. **Tier/prompt seam** (`app/pipeline/prompts.py`): tier differentiation is driven by a structured
    per-tier **style spec** dict (`TIER_SPECS`) plus a shared `PRESERVE_STRUCTURE` block. This dict is
    intentionally the seed of the future materials/pricing DB — keep it structured, not free-text. Encodes

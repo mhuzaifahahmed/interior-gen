@@ -25,6 +25,7 @@ from app.pipeline.generate_house import run_house_pipeline
 from app.pipeline.house_prompts import USER_PROMPT_MAX_CHARS
 from app.pipeline.prompts import ADDITIONAL_INSTRUCTIONS_MAX_CHARS, COLOR_PALETTES, STYLE_OPTIONS, build_tier_spec
 from app.plans import (
+    FREE,
     PLAN_PRICES_PKR,
     QuotaExceededError,
     backend_bucket,
@@ -298,6 +299,37 @@ def get_plan(
     return PlanStatusResponse(**plan_status(session, user.id))
 
 
+@app.post("/api/plan/cancel", response_model=PlanStatusResponse)
+def cancel_plan(session: Session = Depends(get_session), user: AuthUser = Depends(require_user)):
+    """Self-serve downgrade to Free - the "Cancel plan" link on the Plans
+    tab's Pro/Studio cards. Real, honest scope: this integration is a
+    ONE-TIME payment per upgrade (see app/payments.py), not an auto-renewing
+    subscription enrolled with Safepay - there is no recurring charge to
+    actually cancel on Safepay's side. "Cancel" here means exactly what
+    set_plan() already does for the admin panel: flip UserPlan.plan back to
+    Free immediately, same as an admin manually downgrading someone. Usage
+    counters/quota window are deliberately untouched (same as every other
+    set_plan() call) - a user who already used more Room generations this
+    window than Free allows simply can't generate again until the window
+    resets, the same outcome as if they'd been on Free the whole time."""
+    plan_row = get_or_create_user_plan(session, user.id)
+    if plan_row.plan == FREE:
+        raise HTTPException(400, "You're already on the Free plan.")
+
+    plan_row = set_plan(session, user.id, FREE)
+
+    # Best-effort - same account.json refresh convention as every other
+    # plan-change path (admin panel, Safepay upgrade).
+    try:
+        storage = get_storage()
+        storage_namespace = _storage_namespace(plan_row.user_id, plan_row.display_name)
+        _write_account_json(storage, storage_namespace, plan_row)
+    except Exception:
+        logger.exception("failed to refresh account.json after self-serve downgrade for user %s", user.id)
+
+    return PlanStatusResponse(**plan_status(session, user.id))
+
+
 def _admin_row(session: Session, plan_row) -> AdminUserRow:
     status = plan_status(session, plan_row.user_id)
     return AdminUserRow(
@@ -447,7 +479,7 @@ def _finalize_payment_intent(session: Session, intent: PaymentIntent, completed:
 def safepay_callback(request: Request, session: Session = Depends(get_session)):
     """Where Safepay redirects the BROWSER after checkout completes/is
     abandoned. Verifies the HMAC signature, then does a server-to-server
-    status check (payments.fetch_order_state) before ever flipping a plan -
+    status check (payments.fetch_order_details) before ever flipping a plan -
     the redirect signature alone only proves the tracker is genuinely
     Safepay's, not that the customer actually finished paying. Always ends
     in a redirect back to the frontend, never a raw JSON/error page, since a
@@ -474,8 +506,8 @@ def safepay_callback(request: Request, session: Session = Depends(get_session)):
         _finalize_payment_intent(session, intent, completed=False)
         return RedirectResponse(f"{frontend_base}/?payment=invalid")
 
-    state = payments.fetch_order_state(tracker)
-    completed = payments.is_completed_state(state)
+    order_details = payments.fetch_order_details(tracker)
+    completed = payments.is_completed_order(order_details)
     _finalize_payment_intent(session, intent, completed=completed)
 
     return RedirectResponse(f"{frontend_base}/?payment={'success' if completed else 'failed'}")
@@ -495,16 +527,21 @@ async def safepay_webhook(request: Request, session: Session = Depends(get_sessi
 
     NOT YET LIVE-VERIFIED (0 real deliveries observed on this account as of
     writing - no payment has gone through the real webhook yet): the exact
-    JSON payload shape and the exact signature header name. Both are
-    handled defensively - payments.extract_tracker_and_state() tries several
-    plausible shapes, and the signature check tries every plausible header
-    name (payments.WEBHOOK_SIGNATURE_HEADER_CANDIDATES). The FULL raw
-    payload is always logged (at INFO on a parse success, WARNING on any
-    failure) specifically so the first real delivery's exact shape can be
-    read from the logs (or the dashboard's own "Webhook Logs"/"Webhook Logs
-    v2" pages) and this handler tightened to match - update only
-    extract_tracker_and_state()/the header-candidate list in
-    app/payments.py once that's known, nothing else needs to change.
+    JSON payload shape and the exact signature header name. The signature
+    check tries every plausible header name
+    (payments.WEBHOOK_SIGNATURE_HEADER_CANDIDATES); payload uncertainty is
+    sidestepped almost entirely by only ever trusting the payload for the
+    TRACKER id (payments.extract_tracker(), tries several plausible shapes)
+    and then re-fetching the order's real state via
+    payments.fetch_order_details()/is_completed_order() - the same
+    confirmed-live completion check safepay_callback() uses - rather than
+    trusting whatever completion status the webhook body itself claims (see
+    app/payments.py's module docstring for the real incident that motivated
+    this: an earlier version trusted a guessed `state` string and silently
+    misclassified a genuinely completed payment as failed). The FULL raw
+    payload is always logged (at INFO) so the first real delivery's exact
+    shape can still be read from the logs if extract_tracker() ever needs
+    tightening.
 
     Returns 200 for almost everything (including "couldn't parse this" or
     "unknown tracker") rather than a 4xx/5xx - webhook senders typically
@@ -531,8 +568,8 @@ async def safepay_webhook(request: Request, session: Session = Depends(get_sessi
         logger.warning("Safepay webhook delivered a non-JSON body: %r", raw_body[:500])
         return {"status": "ignored"}
 
-    tracker, state = payments.extract_tracker_and_state(payload)
-    logger.info("Safepay webhook received - tracker=%r state=%r payload=%r", tracker, state, payload)
+    tracker = payments.extract_tracker(payload)
+    logger.info("Safepay webhook received - tracker=%r payload=%r", tracker, payload)
 
     if not tracker:
         return {"status": "ignored"}
@@ -541,7 +578,8 @@ async def safepay_webhook(request: Request, session: Session = Depends(get_sessi
     if intent is None or intent.status != "pending":
         return {"status": "ignored"}
 
-    _finalize_payment_intent(session, intent, completed=payments.is_completed_state(state))
+    order_details = payments.fetch_order_details(tracker)
+    _finalize_payment_intent(session, intent, completed=payments.is_completed_order(order_details))
     return {"status": "ok"}
 
 

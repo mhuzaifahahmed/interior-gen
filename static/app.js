@@ -623,10 +623,12 @@ async function applyPricingUI() {
     const card = document.querySelector(`.pricing-card[data-plan="${plan}"]`);
     if (!card) return;
     const btn = card.querySelector(".pricing-cta");
+    const cancelBtn = card.querySelector(".cancel-plan-btn");
     const isCurrent = currentPlan === plan;
     card.classList.toggle("pricing-card-current", isCurrent);
     btn.disabled = isCurrent;
     btn.textContent = isCurrent ? "Current plan" : `Upgrade to ${plan === "studio" ? "Studio" : "Pro"}`;
+    if (cancelBtn) cancelBtn.hidden = !isCurrent;
   });
   const freeUpgradeNudge = document.querySelector('.pricing-card[data-plan="free"] [data-plan="pro"]');
   if (freeUpgradeNudge) {
@@ -2397,6 +2399,33 @@ document.querySelectorAll(".pricing-cta").forEach((btn) => {
   });
 });
 
+// Self-serve "Cancel plan" (POST /api/plan/cancel) - shown only on whichever
+// Pro/Studio card the user is actually currently on (see applyPricingUI()
+// above). Honest about scope in the confirm() copy: there's no real
+// recurring Safepay subscription to stop, this just flips the plan back to
+// Free immediately - same thing an admin doing it manually would do.
+document.querySelectorAll(".cancel-plan-btn").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const plan = btn.closest(".pricing-card")?.dataset.plan;
+    const planLabel = plan === "studio" ? "Studio" : "Pro";
+    if (!confirm(`Cancel your ${planLabel} plan and move back to Free? This takes effect immediately.`)) {
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const res = await authFetch(apiUrl("/api/plan/cancel"), { method: "POST" });
+      if (!res.ok) throw new Error(await res.text());
+      await applyPricingUI();
+      await applyPlanMenuQuota();
+    } catch (err) {
+      console.error("Cancel plan failed", err);
+      alert("Couldn't cancel your plan right now - please try again shortly.");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+});
+
 jazzcashModalClose.addEventListener("click", closeJazzCashModal);
 jazzcashModalOverlay.addEventListener("click", (e) => {
   if (e.target === jazzcashModalOverlay) closeJazzCashModal();
@@ -2432,23 +2461,46 @@ const safepayCheckoutBtnLabel = document.getElementById("safepay-checkout-btn-la
 safepayCheckoutBtn.addEventListener("click", async () => {
   safepayCheckoutBtn.disabled = true;
   safepayCheckoutBtnLabel.textContent = "Opening checkout…";
+
+  // Real bug fixed here (mobile-only, reported live): window.open() was
+  // previously called AFTER the `await authFetch(...)` below. Mobile
+  // browsers (iOS Safari especially, some Android browsers too) revoke a
+  // click's "user activation" the moment an async gap passes - a
+  // window.open() called post-await gets silently blocked as a popup, with
+  // no JS exception to catch. Fix: open a blank tab SYNCHRONOUSLY, still
+  // directly inside this click handler's own call stack, then navigate
+  // THAT already-open tab once the real checkout_url is known. Deliberately
+  // NOT using the "noopener" string param (which would make window.open()
+  // return null, losing our ability to navigate it later) - the equivalent
+  // security property (the new tab can't reach back via window.opener) is
+  // achieved by nulling checkoutTab.opener directly instead, while still
+  // keeping OUR OWN reference to control its location.
+  const checkoutTab = window.open("about:blank", "_blank");
+  if (checkoutTab) checkoutTab.opener = null;
+
   try {
     const body = new FormData();
     body.append("plan", jazzcashModalPlan);
     const res = await authFetch(apiUrl("/api/payments/safepay/checkout"), { method: "POST", body });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
-    // Opened in a NEW tab, not a same-tab redirect - Safepay's checkout page
-    // uses a light theme, the opposite of this site's dark theme, so
-    // navigating away entirely made it awkward to get back. A new tab keeps
-    // this page exactly where the user left it (still on the Plans tab,
-    // modal still open underneath) - see awaitSafepayCompletion() below for
-    // how this tab notices when the OTHER tab finishes.
-    window.open(data.checkout_url, "_blank", "noopener,noreferrer");
+    if (checkoutTab) {
+      // Same-theme-mismatch reasoning as before: a new tab keeps this page
+      // exactly where the user left it (still on the Plans tab, modal still
+      // open underneath) - see awaitSafepayCompletion() below for how this
+      // tab notices when the OTHER tab finishes.
+      checkoutTab.location.href = data.checkout_url;
+    } else {
+      // Popup still blocked outright (e.g. user has popups fully disabled,
+      // not just the async-gap issue above) - fall back to a same-tab
+      // navigation so the flow isn't a dead end.
+      window.location.href = data.checkout_url;
+    }
     safepayCheckoutBtnLabel.textContent = "Pay with card";
     safepayCheckoutBtn.disabled = false;
     awaitSafepayCompletion();
   } catch (err) {
+    if (checkoutTab) checkoutTab.close();
     console.error("Safepay checkout failed", err);
     safepayCheckoutBtn.disabled = false;
     safepayCheckoutBtnLabel.textContent = "Pay with card";

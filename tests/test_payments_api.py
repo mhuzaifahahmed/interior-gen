@@ -15,6 +15,7 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+import app.main as main_module
 from app import payments
 from app.db import engine
 from app.main import app
@@ -23,8 +24,27 @@ from app.plans import get_or_create_user_plan
 from tests.conftest import login_as
 
 
+class FakeStorage:
+    """Same reasoning as test_api.py's own FakeStorage - get_storage() reads
+    settings.storage_backend (real dev config is "s3"), so any test path
+    that can reach storage.put() (here: cancel_plan()'s best-effort
+    account.json refresh) must mock it, or it silently writes to the real
+    live S3 bucket - see CLAUDE.md's "Test isolation, hard-learned" note."""
+
+    def put(self, key, data, content_type="application/json"):
+        pass
+
+
 def _fake_create_checkout_session(amount_pkr, order_id, redirect_url, cancel_url):
     return {"tracker": f"track_{order_id}", "checkout_url": f"https://sandbox.api.getsafepay.com/checkout/pay?beacon=track_{order_id}"}
+
+
+# Real, live-verified shapes (2026-09-17, see app/payments.py's module
+# docstring) - a completed payment has a populated `transaction` object; an
+# incomplete/cancelled one has transaction: null even at the same terminal
+# "TRACKER_ENDED" state.
+_COMPLETED_ORDER = {"state": "TRACKER_ENDED", "transaction": {"id": 1, "reference": "917939"}}
+_INCOMPLETE_ORDER = {"state": "TRACKER_ENDED", "transaction": None}
 
 
 def test_create_safepay_checkout_creates_a_pending_intent_and_returns_a_url(monkeypatch):
@@ -89,7 +109,8 @@ def test_safepay_callback_upgrades_the_plan_on_a_completed_payment(monkeypatch):
     signature = hmac.new(b"test-secret", intent.tracker.encode("utf-8"), hashlib.sha256).hexdigest()
 
     monkeypatch.setattr(payments.settings, "safepay_secret_key", "test-secret")
-    monkeypatch.setattr(payments, "fetch_order_state", lambda tracker: "TRACKER_COMPLETED")
+    monkeypatch.setattr(payments, "fetch_order_details", lambda tracker: _COMPLETED_ORDER)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
 
     with TestClient(app) as client:
         res = client.get(
@@ -114,7 +135,7 @@ def test_safepay_callback_does_not_upgrade_on_an_incomplete_payment(monkeypatch)
     signature = hmac.new(b"test-secret", intent.tracker.encode("utf-8"), hashlib.sha256).hexdigest()
 
     monkeypatch.setattr(payments.settings, "safepay_secret_key", "test-secret")
-    monkeypatch.setattr(payments, "fetch_order_state", lambda tracker: "TRACKER_CANCELLED")
+    monkeypatch.setattr(payments, "fetch_order_details", lambda tracker: _INCOMPLETE_ORDER)
 
     with TestClient(app) as client:
         res = client.get(
@@ -135,7 +156,7 @@ def test_safepay_callback_rejects_a_forged_signature(monkeypatch):
 
     monkeypatch.setattr(payments.settings, "safepay_secret_key", "test-secret")
     fetch_called = []
-    monkeypatch.setattr(payments, "fetch_order_state", lambda tracker: fetch_called.append(tracker))
+    monkeypatch.setattr(payments, "fetch_order_details", lambda tracker: fetch_called.append(tracker))
 
     with TestClient(app) as client:
         res = client.get(
@@ -168,7 +189,8 @@ def test_safepay_callback_is_idempotent_on_a_replayed_request(monkeypatch):
     signature = hmac.new(b"test-secret", intent.tracker.encode("utf-8"), hashlib.sha256).hexdigest()
 
     monkeypatch.setattr(payments.settings, "safepay_secret_key", "test-secret")
-    monkeypatch.setattr(payments, "fetch_order_state", lambda tracker: "TRACKER_COMPLETED")
+    monkeypatch.setattr(payments, "fetch_order_details", lambda tracker: _COMPLETED_ORDER)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
 
     with TestClient(app) as client:
         first = client.get(
@@ -196,8 +218,10 @@ def test_safepay_webhook_upgrades_the_plan_on_a_completed_event(monkeypatch):
     user_id = f"user_{uuid.uuid4().hex[:24]}"
     intent = _make_intent(user_id, plan="studio")
     monkeypatch.setattr(payments.settings, "safepay_webhook_secret", "test-webhook-secret")
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+    monkeypatch.setattr(payments, "fetch_order_details", lambda tracker: _COMPLETED_ORDER)
 
-    body = f'{{"type":"payment.completed","data":{{"token":"{intent.tracker}","state":"TRACKER_COMPLETED"}}}}'.encode()
+    body = f'{{"type":"payment.completed","data":{{"token":"{intent.tracker}"}}}}'.encode()
     signature = _webhook_signature(body)
 
     with TestClient(app) as client:
@@ -259,10 +283,11 @@ def test_safepay_webhook_and_callback_are_mutually_idempotent(monkeypatch):
 
     monkeypatch.setattr(payments.settings, "safepay_secret_key", "test-secret")
     monkeypatch.setattr(payments.settings, "safepay_webhook_secret", "test-webhook-secret")
-    monkeypatch.setattr(payments, "fetch_order_state", lambda tracker: "TRACKER_COMPLETED")
+    monkeypatch.setattr(payments, "fetch_order_details", lambda tracker: _COMPLETED_ORDER)
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
 
     callback_signature = hmac.new(b"test-secret", intent.tracker.encode("utf-8"), hashlib.sha256).hexdigest()
-    body = f'{{"data":{{"token":"{intent.tracker}","state":"TRACKER_COMPLETED"}}}}'.encode()
+    body = f'{{"data":{{"token":"{intent.tracker}"}}}}'.encode()
     webhook_signature = _webhook_signature(body)
 
     with TestClient(app) as client:
@@ -284,3 +309,35 @@ def test_safepay_webhook_and_callback_are_mutually_idempotent(monkeypatch):
     with Session(engine) as session:
         plan_row = get_or_create_user_plan(session, user_id)
         assert plan_row.plan == "pro"  # upgraded exactly once, not double-processed
+
+
+def test_cancel_plan_downgrades_to_free(monkeypatch):
+    from app.plans import set_plan
+
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        user_id = login_as(client)
+        with Session(engine) as session:
+            set_plan(session, user_id, "pro")
+
+        res = client.post("/api/plan/cancel")
+
+    assert res.status_code == 200
+    assert res.json()["plan"] == "free"
+    with Session(engine) as session:
+        plan_row = get_or_create_user_plan(session, user_id)
+        assert plan_row.plan == "free"
+
+
+def test_cancel_plan_rejects_when_already_free():
+    with TestClient(app) as client:
+        login_as(client)
+        res = client.post("/api/plan/cancel")
+    assert res.status_code == 400
+
+
+def test_cancel_plan_requires_login():
+    with TestClient(app) as client:
+        res = client.post("/api/plan/cancel")
+    assert res.status_code == 401
