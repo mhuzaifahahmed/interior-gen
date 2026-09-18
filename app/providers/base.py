@@ -204,6 +204,8 @@ class Provider(ABC):
         floor_count: int | None = None,
         preferred_backend: str | None = None,
         wants_garage: bool | None = None,
+        color: str | None = None,
+        style: str | None = None,
     ) -> bytes:
         """Render an exterior concept visualization per the prompt. Returns PNG
         bytes. NOT best-effort - mirrors generate_image()'s treatment in the
@@ -243,6 +245,32 @@ class Provider(ABC):
         signal" (backward-compatible - old callers/notebooks behave as before).
         EDIT-style backends ignore it (build_house_prompt() already states the
         program inline).
+
+        color (2026-09-18, v15) is the resolved COLOR_PROFILE words for the
+        user's chosen exterior palette (app/pipeline/house_prompts.py's
+        color_palette_words()), passed as a STRUCTURED field rather than
+        embedded in `prompt` - same "give real data, don't make the model
+        guess" pattern as wants_garage above. The Kaggle elevation model
+        weaves it into a dedicated, high-priority slot in its own prompt
+        (see kaggle_notebooks/elevation_server.py's _build_prompt()) rather
+        than fighting its own hardcoded color/material vocabulary for a
+        trailing text clause. None means "no palette chosen" - the model
+        picks its own colors. EDIT-style backends ignore it (build_house_
+        prompt() already states the palette inline in its long edit
+        paragraph, unchanged by this).
+
+        style (2026-09-18, v16) is the resolved HOUSE_STYLE_PROFILES words
+        for the user's chosen exterior architectural style (app/pipeline/
+        house_prompts.py's house_style_words()) - NOT room-redesign's
+        interior style vocabulary, this is exterior/architectural language
+        (massing, roofline, cladding). Same structured-field treatment as
+        color above, for the identical reason: a trailing text clause was
+        too weak against the elevation notebook's own hardcoded "Modern
+        Luxury Contemporary" scaffolding. The Kaggle elevation model weaves
+        it into a dedicated slot, replacing its default theme fragment. None
+        means "no style chosen" - the model keeps its modern-luxury default.
+        EDIT-style backends ignore it (build_house_prompt() already states
+        the style inline in its long edit paragraph).
         """
         ...
 

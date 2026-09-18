@@ -439,6 +439,72 @@ def test_generate_house_render_sends_structured_garage_flag(monkeypatch):
     assert "garage" not in captured["payload"]
 
 
+def test_generate_house_render_sends_structured_color_field(monkeypatch):
+    # v15 (2026-09-18): the resolved exterior color-palette words are sent as
+    # a structured `color` field, same treatment as `garage` above - not
+    # embedded in `prompt` (a trailing text clause was too weak against the
+    # notebook's own hardcoded color vocabulary - see house_prompts.py).
+    monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        kaggle_module.settings, "kaggle_house_api_url", "https://house-example.trycloudflare.com"
+    )
+    captured = {}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["payload"] = json
+        return FakeResponse(json_data={"status": "started", "job_id": "elev-c"})
+
+    def fake_get(url, timeout=None):
+        encoded = base64.b64encode(b"png").decode("ascii")
+        return FakeResponse(json_data={"status": "done", "generated_image_base64": encoded})
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+
+    provider = KaggleImageProvider()
+    provider.generate_house_render(None, "", color="clay, terracotta, olive green")
+    assert captured["payload"]["color"] == "clay, terracotta, olive green"
+
+    # No palette chosen (None) -> the key is omitted entirely, so an
+    # un-updated notebook keeps its old behavior (no color signal).
+    provider.generate_house_render(None, "", color=None)
+    assert "color" not in captured["payload"]
+
+
+def test_generate_house_render_sends_structured_style_field(monkeypatch):
+    # v16 (2026-09-18): the resolved exterior architectural-style words are
+    # sent as a structured `style` field, same treatment as `color`/`garage`
+    # above - not embedded in `prompt` (see house_prompts.py's v16 docstring
+    # note for why a trailing text clause is too weak against the notebook's
+    # own hardcoded "Modern Luxury Contemporary" scaffolding).
+    monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        kaggle_module.settings, "kaggle_house_api_url", "https://house-example.trycloudflare.com"
+    )
+    captured = {}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["payload"] = json
+        return FakeResponse(json_data={"status": "started", "job_id": "elev-s"})
+
+    def fake_get(url, timeout=None):
+        encoded = base64.b64encode(b"png").decode("ascii")
+        return FakeResponse(json_data={"status": "done", "generated_image_base64": encoded})
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+
+    provider = KaggleImageProvider()
+    provider.generate_house_render(None, "", style="Mediterranean villa architecture, stucco walls")
+    assert captured["payload"]["style"] == "Mediterranean villa architecture, stucco walls"
+
+    # No style chosen (None) -> the key is omitted entirely, so an
+    # un-updated notebook keeps its old behavior (no style signal, defaults
+    # to Modern Luxury Contemporary).
+    provider.generate_house_render(None, "", style=None)
+    assert "style" not in captured["payload"]
+
+
 def test_generate_house_render_raises_on_job_failed(monkeypatch):
     monkeypatch.setattr(kaggle_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(

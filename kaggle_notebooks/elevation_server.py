@@ -17,8 +17,30 @@
 #     body: {"prompt": str,            # SHORT user exterior-features text (may be "")
 #            "floors": int (optional),  # 1..3 - structured story count
 #            "garage": bool (optional), # True -> include car porch; False -> exclude; omit -> no signal
+#            "color": str (optional),   # e.g. "clay, terracotta, olive green, ..." - resolved
+#                                        # COLOR_PROFILE words for the user's chosen exterior
+#                                        # palette (app/pipeline/house_prompts.py's
+#                                        # color_palette_words()); omit -> no color signal, the
+#                                        # model picks its own colors (2026-09-18, v15 - see this
+#                                        # repo's CLAUDE.md for why this is structured, not
+#                                        # embedded in `prompt`: a trailing text clause was too
+#                                        # weak against this notebook's own hardcoded color
+#                                        # vocabulary in _build_prompt below)
+#            "style": str (optional),   # e.g. "Mediterranean villa architecture, stucco plaster
+#                                        # walls, terracotta clay tile pitched roof, arched
+#                                        # openings, ..." - resolved HOUSE_STYLE_PROFILES words
+#                                        # for the user's chosen exterior architectural style
+#                                        # (app/pipeline/house_prompts.py's house_style_words());
+#                                        # omit -> no style signal, the model keeps its default
+#                                        # Modern Luxury Contemporary look (2026-09-18, v16 - same
+#                                        # structured-field reasoning as "color" above: this
+#                                        # notebook is hardcoded around a modern-luxury look in
+#                                        # several places, which would fight any other style the
+#                                        # same way "dark textured stone" fought light palettes -
+#                                        # see _build_prompt/_floor_rules below)
 #            "plot_width": str (opt),   # e.g. "30ft" - context only
-#            "theme": str (optional),   # defaults to Modern Luxury Contemporary
+#            "theme": str (optional),   # defaults to Modern Luxury Contemporary; only used as a
+#                                        # fallback label when no "style" is given (see _build_prompt)
 #            "seed": int (optional)}    # -1 / omitted -> random
 #     -> {"status": "started", "job_id": str}
 #   GET /generate_elevation/status/{job_id}
@@ -99,17 +121,28 @@ NO_GARAGE_NEGATIVE = "garage, car porch, carport, driveway, parked car, vehicle,
 def _floor_rules(floors: int):
     """Returns (floor_str, floor_neg, width, height) - the story-count-specific
     prompt fragment, negative-prompt fragment, and canvas aspect ratio. Driven
-    by the STRUCTURED floors int the app sends, not parsed from free text."""
+    by the STRUCTURED floors int the app sends, not parsed from free text.
+
+    De-biased (2026-09-18, v16): these fragments used to assert "modern
+    luxury"/"flat roof" regardless of the chosen style (e.g. "strictly
+    single-story MODERN LUXURY bungalow... LOW PROFILE FLAT ROOF") - that
+    fought any non-modern `style` the same way the old hardcoded "dark
+    textured stone" fought light color palettes, since a Mediterranean or
+    Traditional house doesn't have a flat roof. Now purely about STORY COUNT,
+    not aesthetic - the aesthetic comes entirely from the style/theme slot in
+    _build_prompt() below. The no-style default render is unaffected in
+    practice, since DEFAULT_THEME ("Modern Luxury Contemporary") still fills
+    that slot when no style is chosen."""
     if floors <= 1:
         return (
-            "strictly single-story modern luxury bungalow, ground floor only, low profile flat roof",
+            "strictly single-story house, ground floor only, single level",
             "second floor, third floor, multi-story, upper floor, balcony on top",
             1152,
             640,
         )
     if floors == 2:
         return (
-            "strictly double-story G+1 luxury modern house, exactly two vertical levels, "
+            "strictly double-story G+1 house, exactly two vertical levels, "
             "ground floor and first floor only",
             "single story, 1 floor, 3 floors, triple story, 4 floors, high-rise",
             1024,
@@ -123,9 +156,32 @@ def _floor_rules(floors: int):
     )
 
 
-def _build_prompt(theme: str, plot_width: str, floors: int, features: str, garage):
+def _build_prompt(theme: str, plot_width: str, floors: int, features: str, garage, color: str = None, style: str = None):
     """garage: True -> include a car porch; False -> actively exclude one;
-    None -> no signal (old app/backward-compat), leave the model to decide."""
+    None -> no signal (old app/backward-compat), leave the model to decide.
+
+    color (2026-09-18, v15): the app's resolved COLOR_PROFILE words for the
+    user's chosen exterior palette (e.g. "clay, terracotta, olive green, warm
+    brown, sand, stone, and natural wood tones"), or None/empty for "no
+    preference". Given a DEDICATED, front-loaded slot right after the theme
+    and before the free-text features - the same "never-cut priority slot"
+    treatment the room-redesign app gives color in build_kaggle_prompt(),
+    mirrored here on the notebook side since this model owns its own
+    scaffolding. When color IS given, the trailing hardcoded material clause
+    drops "dark" from "dark textured stone" (kept generic "textured stone")
+    so a light palette isn't fought by a baked-in dark material word.
+
+    style (2026-09-18, v16): the app's resolved HOUSE_STYLE_PROFILES words
+    for the user's chosen exterior architectural style (e.g. "Mediterranean
+    villa architecture, stucco plaster walls, terracotta clay tile pitched
+    roof, arched windows and doorways, wrought-iron balconies"), or
+    None/empty for "no preference". When given, it REPLACES the "{theme}
+    style" fragment entirely (rather than being appended alongside it) - the
+    app-sent style descriptor becomes the dedicated aesthetic slot, same
+    front-loaded priority treatment as color. When style is None/empty, the
+    `theme` fragment fills that slot exactly as before (backward-compatible -
+    an un-updated app/request keeps the old "Modern Luxury Contemporary
+    style" behavior)."""
     floor_str, floor_neg, w, h = _floor_rules(floors)
     width_frag = f"{plot_width} plot frontage, " if plot_width else ""
 
@@ -135,12 +191,25 @@ def _build_prompt(theme: str, plot_width: str, floors: int, features: str, garag
     if garage is True and "porch" not in features.lower() and "garage" not in features.lower():
         features = f"{features}, {GARAGE_FEATURE}" if features else GARAGE_FEATURE
 
+    color = (color or "").strip()
+    color_frag = f"exterior color palette of {color}, facade finished in {color}, " if color else ""
+    stone_word = "textured stone" if color else "dark textured stone"
+
+    style = (style or "").strip()
+    style_frag = f"{style}, " if style else f"{theme} style, "
+
+    # A style with no features text (empty `prompt` + a style chosen, see
+    # _run_job) would otherwise leave a dangling ", ." right before "Direct
+    # eye-level..." - strip the trailing separator so the sentence still
+    # reads cleanly either way.
+    descriptor = f"{style_frag}{color_frag}{features}".strip().rstrip(", ")
+
     prompt = (
         "street photography, orthographic 2D direct front elevation view of a "
-        f"{floor_str}, {width_frag}{theme} style, {features}. Direct eye-level "
+        f"{floor_str}, {width_frag}{descriptor}. Direct eye-level "
         "straight camera shot from across the street curb, perpendicular centered "
         "facade view, tight building framing, clear daytime, sunny lighting with "
-        "subtle natural reflections on glass, smooth concrete, dark textured stone, "
+        f"subtle natural reflections on glass, smooth concrete, {stone_word}, "
         "wood textures, Hasselblad 8k architectural photograph, pristine "
         "photorealistic details, crisp straight lines"
     )
@@ -174,9 +243,15 @@ def _run_job(job_id: str, payload: dict):
         except (TypeError, ValueError):
             floors = 2
         floors = max(1, min(3, floors))
-        # The app's short prompt IS the exterior "features" text. Empty -> the
-        # model's own sensible default features.
-        features = (payload.get("prompt") or "").strip() or DEFAULT_FEATURES
+        style = (payload.get("style") or "").strip() or None  # resolved HOUSE_STYLE_PROFILES words, or None
+        # The app's short prompt IS the exterior "features" text. Empty ->
+        # falls back to DEFAULT_FEATURES ONLY when no style was chosen - those
+        # defaults ("glass balcony, black aluminum window frames") are modern-
+        # specific and would fight a chosen non-modern style (e.g.
+        # Mediterranean) the same way the old hardcoded "dark textured stone"
+        # fought light color palettes. With a real style, an empty features
+        # string is left empty - the style descriptor alone carries the look.
+        features = (payload.get("prompt") or "").strip() or ("" if style else DEFAULT_FEATURES)
 
         seed = payload.get("seed", -1)
         try:
@@ -187,7 +262,8 @@ def _run_job(job_id: str, payload: dict):
             seed = random.randint(0, 2147483647)
 
         garage = payload.get("garage", None)  # True / False / None (no signal)
-        prompt, negative_prompt, w, h = _build_prompt(theme, plot_width, floors, features, garage)
+        color = (payload.get("color") or "").strip() or None  # resolved COLOR_PROFILE words, or None
+        prompt, negative_prompt, w, h = _build_prompt(theme, plot_width, floors, features, garage, color, style)
 
         with _gpu_lock:
             generator = torch.Generator("cuda").manual_seed(seed)
@@ -225,6 +301,8 @@ class ElevationRequest(BaseModel):
     theme: str | None = None
     seed: int | None = -1
     garage: bool | None = None  # True -> include car porch; False -> exclude; None -> no signal
+    color: str | None = None  # resolved COLOR_PROFILE words for the exterior palette; None -> no signal
+    style: str | None = None  # resolved HOUSE_STYLE_PROFILES words for the architectural style; None -> no signal
 
 
 @app.get("/")

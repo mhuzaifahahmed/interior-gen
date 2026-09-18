@@ -1765,6 +1765,148 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   `uvicorn.run(app, host="0.0.0.0", port=8000)` conflicted with Kaggle's already-running event loop even
   with `nest_asyncio` patched in — replaced with `uvicorn.Config` + `uvicorn.Server` +
   `asyncio.get_event_loop().run_until_complete(server.serve())`, the user's own live-tested fix.
+- **v23 (2026-09-18): exterior color palette, closing a real gap - Build a House previously had NO color
+  input at all.** Reuses Room Redesign's own `COLOR_PROFILE`/`COLOR_PALETTES` vocabulary
+  (`app/pipeline/prompts.py` - "Neutral"/"Earthy"/"Warm"/"Cool"/"Monochrome"/"Terracotta"/"Sage"/
+  "Black & White") rather than inventing a second, house-only palette system - one shared source of
+  truth for what each palette name means. A new "Exterior color palette (optional)" morph dropdown sits
+  in the Plot Parameters panel (`static/index.html`, between the Floors/Bedrooms/Bathrooms row and the
+  Facing dropdown), submitted as `color_palette` Form data only when the user actually picks one
+  (mirrors Facing's "optional, omitted when blank" treatment) - unlike Room Redesign's own Color Palette
+  field, which is required and hard-validated (400 on an unrecognized value). Here it's deliberately
+  soft: `create_house_project` (`app/main.py`) degrades any value not in `COLOR_PALETTES` to `None`
+  rather than rejecting the request - a cosmetic input should never block a generation. Persisted in
+  `HouseProject.house_inputs_json` (no new DB column - reuses the existing `house_inputs` dict alongside
+  floor_count/bedrooms/bathrooms/extras/facing) and exposed via `HouseProjectStatusResponse.house_inputs`.
+  **Frontend** (`static/app.js`): `houseColorPaletteDropdown` (`setupMorphDropdown`, same recipe as every
+  other house-tab dropdown) reads/writes `#house-color-palette`; the submit handler only appends
+  `color_palette` to the upload `FormData` when non-empty; the 401-login-redirect pending-generation
+  handoff (`savePendingGeneration`/its restore path) carries `colorPalette` through. `resetToHouseUpload()`
+  deliberately does NOT reset this dropdown back to blank, matching the existing (also-unreset)
+  Unit/Floors/Bedrooms/Bathrooms/Facing dropdowns' behavior. None of this v23 frontend/persistence layer
+  changed in v15 below - only HOW the color reaches the render model changed.
+- **v15/v24 (2026-09-18, later the same day): color made a STRUCTURED signal for the Kaggle elevation
+  model, not embedded prompt text - v23's mechanism for the TEXT-TO-IMAGE path was too weak.** Real
+  user report: the palette wasn't visibly changing the exterior render. Root cause: v23's
+  `build_house_elevation_prompt()` appended the palette's color words as a TRAILING TEXT FRAGMENT
+  (`"Exterior color palette: ..."`) onto the minimal prompt the app sends to the Kaggle notebook
+  (`kaggle_notebooks/elevation_server.py`) - but that notebook wraps whatever text it receives inside its
+  OWN prompt scaffolding, which hardcodes competing color/material vocabulary ("smooth concrete, dark
+  textured stone, wood textures") with no dedicated slot for an appended clause, so the chosen palette
+  could be drowned out. **User's explicit instruction: make it work exactly like Room Redesign, and the
+  notebook code changes too.** Room Redesign's actual mechanism (confirmed by re-tracing the whole flow):
+  the app injects `COLOR_PROFILE[palette]`'s color words into a DEDICATED, never-cut priority slot inside
+  `build_kaggle_prompt()` (`app/pipeline/prompts.py`) - the room notebook does no color logic of its own,
+  it just consumes the app-composed string. The elevation notebook is architecturally different (it owns
+  its own scaffolding and the app deliberately sends only minimal structured inputs like `floors`/
+  `garage`), so the faithful mirror isn't more embedded text - it's a structured `color` field sent the
+  same way `floors`/`garage` already are, with the NOTEBOOK weaving it into a dedicated, front-loaded
+  position in ITS OWN prompt (the real equivalent of Room Redesign's "dedicated priority slot").
+  - **`app/pipeline/house_prompts.py`**: `build_house_elevation_prompt()` reverted to take no
+    `color_palette` param at all (back to just `prompt`) - color no longer rides in this text.
+    `_color_palette_text()` renamed to the now-public **`color_palette_words(palette)`** (same
+    `COLOR_PROFILE.get()` body, `None` for blank/unrecognized) since `generate_house.py`'s render step now
+    calls it directly to resolve the structured kwarg. `build_house_prompt()` (the OpenAI/Modal EDIT-backend
+    path) is **UNCHANGED** - it still inlines `color_palette_words()` into its long edit paragraph exactly
+    as v23 built it, since those backends ignore the new structured `color` kwarg entirely and the inline
+    sentence is still the only channel they read.
+  - **Provider seam**: `Provider.generate_house_render()` gained a `color: str | None = None` param across
+    `base.py`/`hybrid.py`/`kaggle.py`/`openai.py`/`gemini.py`/`modal_provider.py` - same "accepted by all,
+    honored only by Kaggle" treatment already established for `wants_garage`. `kaggle.py`'s payload dict
+    adds `payload["color"] = color` only when truthy (omitted otherwise, so an un-updated notebook keeps
+    its old behavior - same convention as `garage`).
+  - **`app/pipeline/generate_house.py`**'s render step resolves `color_words = color_palette_words(color_palette)`
+    ONCE and passes it as `provider.generate_house_render(..., color=color_words, ...)` on the single call
+    site (both backend branches share it; EDIT backends just ignore the kwarg). `HOUSE_PROMPT_VERSION`
+    bumped `v14` → `v15`.
+  - **`kaggle_notebooks/elevation_server.py`** (the two-sided half - pasted into the live Kaggle notebook
+    and redeployed): `ElevationRequest` gained `color: str | None = None`; `_run_job` extracts it and
+    passes it into `_build_prompt(theme, plot_width, floors, features, garage, color)`; `_build_prompt`
+    inserts a `color_frag` (`"exterior color palette of {color}, facade finished in {color}, "`) right
+    after the theme and BEFORE the free-text features - a dedicated, front-loaded slot, the real
+    notebook-side equivalent of Room Redesign's never-cut priority slot. When `color` is given, the
+    trailing hardcoded material clause also softens `"dark textured stone"` → `"textured stone"` so a
+    light palette isn't fought by a baked-in "dark". No color terms added to the negative prompt (parity
+    with Room Redesign, whose `build_kaggle_negative_prompt` carries no color either). Contract comment at
+    the top of the file updated to document the new `color` field.
+  - **Tests**: `tests/test_house_prompts.py` (elevation prompt never contains color text anymore;
+    `color_palette_words()` unit tests), `tests/test_house_pipeline.py` (`FakeProvider` gained a
+    `render_colors` list capturing the structured kwarg per call; asserts color reaches
+    `generate_house_render` as a kwarg - never inside the elevation prompt text - and is `None` when no
+    palette was chosen; the edit-path test still asserts inline color text, unchanged), `tests/
+    test_house_api.py`/`test_hybrid_provider.py` (fake `generate_house_render` signatures updated to
+    accept the new `color` kwarg), `tests/test_kaggle_provider.py` (new payload test mirroring the
+    existing `wants_garage` one - `payload["color"]` present when given, omitted when `None`). 616/616
+    passing (full suite).
+- **v16/v25 (2026-09-18, later the same day): "Architectural style" added, same structured-field design as
+  color - explicit user request: "i want style from room redesign too." Label chosen after asking the user
+  directly (`AskUserQuestion`): **"Architectural style"**, not "Interior style" (Room Redesign's own
+  wording) - this drives an exterior house render, so "Interior style" would be a misnomer. Kept
+  **optional** (matching color_palette, not Room Redesign's required field) per the same question.
+  - **NOT a reuse of `app/pipeline/prompts.py`'s `STYLE_PROFILES`, unlike color which reused
+    `COLOR_PROFILE` verbatim.** That dict is interior furniture/decor language ("sleek furniture", "cozy
+    textiles", "open shelving") - sending it to an EXTERIOR elevation model would actively mislead it.
+    `app/pipeline/house_prompts.py` gained its own **`HOUSE_STYLE_PROFILES`** - the same 9
+    `STYLE_OPTIONS` names, mapped to facade/massing/roofline/cladding language instead (e.g.
+    `"Mediterranean": "Mediterranean villa architecture, stucco plaster walls, terracotta clay tile
+    pitched roof, arched windows and doorways, wrought-iron balconies"`, `"Industrial": "industrial
+    architecture, exposed concrete and brick facade, steel-framed windows, warehouse-inspired massing,
+    utilitarian roofline"`) - deliberately **colorless** (no color words in any descriptor - color stays
+    its own field/`COLOR_PROFILE`, never mixed in; `tests/test_house_prompts.py`'s
+    `test_house_style_profiles_never_contain_color_words` guards this with a word-boundary regex check,
+    not a naive substring check - a naive one false-positived on "warehouse-**inspi`red`**"). Public
+    **`house_style_words(style)`** resolver, parallel to `color_palette_words()` (`None`/unrecognized ->
+    `None`, never raises).
+  - **The elevation notebook (`kaggle_notebooks/elevation_server.py`) needed real de-biasing, not just a
+    new field** - a second real gap found while planning this (parallel to color's "dark textured stone"
+    problem): it was hardcoded around "Modern Luxury Contemporary" in THREE places that would fight any
+    non-modern style: `DEFAULT_THEME`, the modern-biased `DEFAULT_FEATURES` ("glass balcony, black
+    aluminum window frames, teak louvers"), and `_floor_rules`'s floor descriptors ("**modern luxury**
+    house", "**low profile flat roof**" - a real problem for e.g. a Mediterranean tile-roof house).
+    `_floor_rules` was rewritten to be purely about STORY COUNT (e.g. `"strictly double-story G+1 house,
+    exactly two vertical levels..."`), with all aesthetic assertions removed - the no-style default render
+    is unaffected since `DEFAULT_THEME` still fills the style slot when nothing is chosen.
+  - **`app/providers/generate_house_render()` gained a `style: str | None = None` param** across
+    `base.py`/`hybrid.py`/`kaggle.py`/`openai.py`/`gemini.py`/`modal_provider.py` - identical "accepted by
+    all, honored only by Kaggle" treatment as `color`/`wants_garage`. `kaggle.py`'s payload dict adds
+    `payload["style"] = style` only when truthy.
+  - **`app/pipeline/generate_house.py`**'s render step resolves `style_words = house_style_words(architectural_style)`
+    once and passes it as `provider.generate_house_render(..., style=style_words, ...)` alongside the
+    existing `color=color_words`. `build_house_prompt()` (EDIT-backend path) gained an `architectural_style`
+    param and inlines a style sentence (`"The house is in a {words} architectural style."`) right after the
+    floor-count constraint, BEFORE the color sentence - matching Room Redesign's own "Style, then Palette"
+    ordering. `HOUSE_PROMPT_VERSION` bumped `v15` → `v16`.
+  - **`kaggle_notebooks/elevation_server.py`** (redeployed by the user): `ElevationRequest` gained `style:
+    str | None = None`; `_build_prompt()` gained a `style` param - when given, the app-sent descriptor
+    **replaces** the `"{theme} style, "` fragment entirely (not appended alongside it), the dedicated
+    front-loaded aesthetic slot; when absent, `theme` fills it exactly as before (backward-compatible).
+    `_run_job` also skips the modern-biased `DEFAULT_FEATURES` fallback when a style is chosen but the
+    user's own `prompt`/features text is empty (`features = ... or ("" if style else DEFAULT_FEATURES)`) -
+    so e.g. a chosen Mediterranean style isn't fought by "glass balcony, black aluminum window frames"
+    defaults; the style descriptor alone carries the look. A real edge case this surfaced and fixed: an
+    empty-features + real-style combination previously left a dangling `", ."` right before "Direct
+    eye-level..." in the assembled prompt - fixed by joining style/color/features into one `descriptor`
+    string and `.rstrip(", ")` before appending the period.
+  - **`app/main.py::create_house_project`** gained `architectural_style: str | None = Form(None)`,
+    soft-degraded (`if architectural_style not in STYLE_OPTIONS: architectural_style = None` - optional, no
+    400, same as `color_palette`), added to `house_inputs` (no new DB column), threaded to
+    `run_house_pipeline`.
+  - **Frontend**: `static/index.html` gained an "Architectural style (optional)" morph dropdown (the same
+    9 style names, "No preference" default) positioned before the color-palette dropdown - matching Room
+    Redesign's own Style-then-Palette ordering. `static/app.js`'s `houseArchStyleDropdown` follows the
+    exact same wiring pattern as `houseColorPaletteDropdown` (submit only when non-empty, carried through
+    the 401-login pending-generation save/restore as `architecturalStyle`, left unreset by
+    `resetToHouseUpload()`).
+  - **Tests**: `tests/test_house_prompts.py` (`house_style_words()` unit tests, colorless-descriptor
+    guard, `build_house_prompt` style-sentence present/absent/ignored-when-unrecognized, style-before-color
+    ordering, elevation prompt never contains style text), `tests/test_house_pipeline.py` (`FakeProvider`
+    gained a `render_styles` capture list; asserts the resolved descriptor reaches
+    `generate_house_render` as the structured `style=` kwarg - never inside the elevation prompt text -
+    and is `None` when no style chosen; edit-path test asserts inline style text), `tests/test_house_api.py`
+    (persists in `house_inputs`, degrades silently on an unrecognized value, existing exact-dict
+    `house_inputs` assertions extended with the new `architectural_style` key), `tests/test_hybrid_provider.py`
+    (fake signatures updated), `tests/test_kaggle_provider.py` (new payload test mirroring the `color` one -
+    `payload["style"]` present when given, omitted when `None`). 630/630 passing (full suite).
 
 ## Subscription plans, quotas, admin panel, and payments
 

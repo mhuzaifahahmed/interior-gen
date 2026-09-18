@@ -1,8 +1,11 @@
 from app.pipeline.house_prompts import (
     HOUSE_NEGATIVE_PROMPT,
+    HOUSE_STYLE_PROFILES,
     USER_PROMPT_MAX_CHARS,
     build_house_elevation_prompt,
     build_house_prompt,
+    color_palette_words,
+    house_style_words,
 )
 
 
@@ -116,3 +119,106 @@ def test_build_house_prompt_always_edits_the_plot_photo():
     # using_blueprint_image branch/param anymore).
     prompt = build_house_prompt({"length": 40, "width": 60, "unit": "ft"})
     assert "Edit this photograph of a real building plot" in prompt
+
+
+def test_build_house_prompt_includes_color_palette_when_given():
+    prompt = build_house_prompt({"length": 40, "width": 60, "unit": "ft"}, color_palette="Sage")
+    assert "sage green" in prompt.lower()
+    assert "exterior color palette" in prompt.lower()
+
+
+def test_build_house_prompt_omits_color_palette_when_not_given():
+    prompt = build_house_prompt({"length": 40, "width": 60, "unit": "ft"})
+    assert "color palette" not in prompt.lower()
+
+
+def test_build_house_prompt_ignores_an_unrecognized_color_palette():
+    # Optional/cosmetic input - an unrecognized key must never raise, it
+    # just degrades to "no color instruction" (same as color_palette=None).
+    prompt = build_house_prompt({"length": 40, "width": 60, "unit": "ft"}, color_palette="Not A Real Palette")
+    assert "color palette" not in prompt.lower()
+
+
+def test_build_house_elevation_prompt_never_embeds_color_text():
+    # v15: color is sent to the elevation model as a STRUCTURED `color` field
+    # (see generate_house.py's render step / Provider.generate_house_render),
+    # never embedded in this minimal prompt string anymore - a trailing text
+    # clause was too weak against the notebook's own hardcoded color
+    # vocabulary. build_house_elevation_prompt() takes no color_palette param
+    # at all now.
+    result = build_house_elevation_prompt("modern car porch")
+    assert result == "modern car porch"
+    assert "color" not in result.lower()
+
+
+def test_color_palette_words_returns_the_real_color_profile_text():
+    assert color_palette_words("Earthy") == "clay, terracotta, olive green, warm brown, sand, stone, and natural wood tones"
+    assert "cool gray" in color_palette_words("Cool")
+
+
+def test_color_palette_words_returns_none_for_blank_or_unrecognized():
+    assert color_palette_words(None) is None
+    assert color_palette_words("") is None
+    assert color_palette_words("Not A Real Palette") is None
+
+
+def test_house_style_words_returns_the_real_house_style_profile_text():
+    assert house_style_words("Mediterranean") == HOUSE_STYLE_PROFILES["Mediterranean"]
+    assert "architecture" in house_style_words("Industrial")
+
+
+def test_house_style_words_returns_none_for_blank_or_unrecognized():
+    assert house_style_words(None) is None
+    assert house_style_words("") is None
+    assert house_style_words("Not A Real Style") is None
+
+
+def test_house_style_profiles_never_contain_color_words():
+    # Deliberately colorless - color is its own structured `color`
+    # field/COLOR_PROFILE, never mixed into the style vocabulary. Word-
+    # boundary matching (not bare substring) so e.g. "warehouse-inspired"
+    # doesn't false-positive on "red".
+    import re
+
+    banned = ("red", "blue", "green", "yellow", "black", "white", "gold", "beige")
+    for style, words in HOUSE_STYLE_PROFILES.items():
+        lowered = words.lower()
+        for word in banned:
+            assert not re.search(rf"\b{word}\b", lowered), (
+                f"{style!r} descriptor unexpectedly mentions color word {word!r}"
+            )
+
+
+def test_build_house_prompt_includes_architectural_style_when_given():
+    prompt = build_house_prompt({"length": 40, "width": 60, "unit": "ft"}, architectural_style="Mediterranean")
+    assert "mediterranean villa architecture" in prompt.lower()
+    assert "architectural style" in prompt.lower()
+
+
+def test_build_house_prompt_omits_architectural_style_when_not_given():
+    prompt = build_house_prompt({"length": 40, "width": 60, "unit": "ft"})
+    assert "architectural style" not in prompt.lower()
+
+
+def test_build_house_prompt_ignores_an_unrecognized_architectural_style():
+    prompt = build_house_prompt({"length": 40, "width": 60, "unit": "ft"}, architectural_style="Not A Real Style")
+    assert "architectural style" not in prompt.lower()
+
+
+def test_build_house_prompt_states_style_before_color():
+    prompt = build_house_prompt(
+        {"length": 40, "width": 60, "unit": "ft"}, color_palette="Sage", architectural_style="Industrial"
+    )
+    style_pos = prompt.lower().index("architectural style")
+    color_pos = prompt.lower().index("color palette")
+    assert style_pos < color_pos
+
+
+def test_build_house_elevation_prompt_never_embeds_style_text():
+    # v16: architectural style is sent to the elevation model as a
+    # STRUCTURED `style` field (see generate_house.py's render step /
+    # Provider.generate_house_render), never embedded in this minimal
+    # prompt string - build_house_elevation_prompt() takes no style param.
+    result = build_house_elevation_prompt("modern car porch")
+    assert result == "modern car porch"
+    assert "style" not in result.lower()

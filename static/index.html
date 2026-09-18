@@ -752,6 +752,49 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 </div>
 </div>
 <div>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Architectural style (optional)</label>
+<div class="relative">
+<button type="button" id="house-arch-style-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-2 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="house-arch-style-btn-label" class="text-on-surface-variant">No preference</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="house-arch-style-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30 max-h-64 overflow-y-auto" id="house-arch-style-menu" role="listbox">
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="" role="option">No preference</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Modern" role="option">Modern</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Minimalist" role="option">Minimalist</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Scandinavian" role="option">Scandinavian</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Japandi" role="option">Japandi</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Industrial" role="option">Industrial</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Mediterranean" role="option">Mediterranean</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Spanish" role="option">Spanish</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Traditional" role="option">Traditional</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Luxury" role="option">Luxury</button>
+</div>
+</div>
+<input type="hidden" id="house-arch-style" name="architectural_style" value=""/>
+</div>
+<div>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Exterior color palette (optional)</label>
+<div class="relative">
+<button type="button" id="house-color-palette-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-2 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="house-color-palette-btn-label" class="text-on-surface-variant">No preference</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="house-color-palette-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30 max-h-64 overflow-y-auto" id="house-color-palette-menu" role="listbox">
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="" role="option">No preference</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Neutral" role="option">Neutral</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Earthy" role="option">Earthy</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Warm" role="option">Warm</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Cool" role="option">Cool</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Monochrome" role="option">Monochrome</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Terracotta" role="option">Terracotta</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Sage" role="option">Sage</button>
+<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="Black & White" role="option">Black &amp; White</button>
+</div>
+</div>
+<input type="hidden" id="house-color-palette" name="color_palette" value=""/>
+</div>
+<div>
 <label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Which way does the entrance face? (optional)</label>
 <div class="relative">
 <button type="button" id="house-facing-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-2 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">

@@ -972,6 +972,29 @@ const houseFacingDropdown = setupMorphDropdown({
   hiddenInputId: "house-facing",
   placeholder: "Not sure - default to South",
 });
+// Architectural style (2026-09-18) - reuses the exact same 9 style names as
+// Room Redesign's Interior Style dropdown above, but resolved to EXTERIOR
+// architecture vocabulary server-side (see house_prompts.py's
+// HOUSE_STYLE_PROFILES) and optional here (unlike Room Redesign's required
+// field) - see app/main.py's create_house_project docstring.
+const houseArchStyleDropdown = setupMorphDropdown({
+  btnId: "house-arch-style-btn",
+  chevronId: "house-arch-style-chevron",
+  menuId: "house-arch-style-menu",
+  hiddenInputId: "house-arch-style",
+  placeholder: "No preference",
+});
+// Exterior color palette (2026-09-18) - reuses the exact same 8 palette
+// options as Room Redesign's Color Palette dropdown above, but optional here
+// (blank "No preference" is a real, supported choice, unlike Room Redesign's
+// required field) - see app/main.py's create_house_project docstring.
+const houseColorPaletteDropdown = setupMorphDropdown({
+  btnId: "house-color-palette-btn",
+  chevronId: "house-color-palette-chevron",
+  menuId: "house-color-palette-menu",
+  hiddenInputId: "house-color-palette",
+  placeholder: "No preference",
+});
 
 const houseUploadView = document.getElementById("house-upload-view");
 const houseForm = document.getElementById("house-upload-form");
@@ -991,6 +1014,8 @@ const houseFloorCountInput = document.getElementById("house-floor-count");
 const houseBedroomsInput = document.getElementById("house-bedrooms");
 const houseBathroomsInput = document.getElementById("house-bathrooms");
 const houseFacingInput = document.getElementById("house-facing");
+const houseArchStyleInput = document.getElementById("house-arch-style");
+const houseColorPaletteInput = document.getElementById("house-color-palette");
 const houseExtrasInput = document.getElementById("house-extras");
 
 const houseProgressCard = document.getElementById("house-progress-card");
@@ -1272,6 +1297,8 @@ async function restorePendingGeneration() {
     houseBedroomsDropdown.setValue(pending.bedrooms || "3");
     houseBathroomsDropdown.setValue(pending.bathrooms || "2");
     houseFacingDropdown.setValue(pending.facing || "");
+    houseArchStyleDropdown.setValue(pending.architecturalStyle || "");
+    houseColorPaletteDropdown.setValue(pending.colorPalette || "");
     houseExtrasInput.value = pending.extras || "";
     // Real bug fixed here: setting .value directly does NOT fire the
     // "input" event updateHouseGenerateBtnState() listens for (unlike a
@@ -2796,6 +2823,14 @@ houseForm.addEventListener("submit", async (e) => {
   // the backend resolves an omitted/blank value to "south" by default (see
   // run_house_pipeline()'s docstring).
   if (houseFacingInput.value) formData.append("facing", houseFacingInput.value);
+  // Architectural style is optional - only sent when the user actually
+  // picked one; an omitted value means "no style signal" server-side (see
+  // house_prompts.py's build_house_prompt/house_style_words).
+  if (houseArchStyleInput.value) formData.append("architectural_style", houseArchStyleInput.value);
+  // Exterior color palette is optional - only sent when the user actually
+  // picked one; an omitted value means "no color instruction" server-side
+  // (see house_prompts.py's build_house_prompt/build_house_elevation_prompt).
+  if (houseColorPaletteInput.value) formData.append("color_palette", houseColorPaletteInput.value);
   formData.append("extras", houseExtrasInput.value.trim());
   formData.append("display_name", await currentUserDisplayName());
   formData.append("email", await currentUserEmail());
@@ -2822,6 +2857,8 @@ houseForm.addEventListener("submit", async (e) => {
         bedrooms: houseBedroomsInput.value,
         bathrooms: houseBathroomsInput.value,
         facing: houseFacingInput.value,
+        architecturalStyle: houseArchStyleInput.value,
+        colorPalette: houseColorPaletteInput.value,
         extras: houseExtrasInput.value,
       });
       window.location.href = "/static/login.html";

@@ -155,13 +155,15 @@ class ModalImageProvider:
         prompt: str,
         floor_count: int | None = None,
         wants_garage: bool | None = None,
+        color: str | None = None,
+        style: str | None = None,
     ) -> bytes:
         """"Build a House" exterior/interior concept render. Prompt is passed
         through as-is (unlike generate_image, no shortening) - house prompts
-        are already length-capped upstream by house_prompts.py. floor_count and
-        wants_garage are ignored (interface parity - only the Kaggle
-        text-to-image elevation model uses them; this edit backend states the
-        count and full room program in the prompt)."""
+        are already length-capped upstream by house_prompts.py. floor_count,
+        wants_garage, color, and style are ignored (interface parity - only
+        the Kaggle text-to-image elevation model uses them; this edit backend
+        states the count, room program, palette, and style in the prompt)."""
         payload = {
             "image_base64": base64.b64encode(image_bytes).decode(),
             "prompt": prompt,

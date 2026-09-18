@@ -34,7 +34,7 @@ class FakeProvider:
     def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
         return {"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]}]}
 
-    def generate_house_render(self, image_bytes, prompt, floor_count=None, preferred_backend=None, wants_garage=None):
+    def generate_house_render(self, image_bytes, prompt, floor_count=None, preferred_backend=None, wants_garage=None, color=None, style=None):
         self.render_prompts.append(prompt)
         self.received_preferred_backends.append(preferred_backend)
         buf = io.BytesIO()
@@ -209,7 +209,7 @@ def test_full_house_upload_without_photo_still_completes(monkeypatch):
         def analyze_plot(self, image_bytes, dimensions):
             raise AssertionError("analyze_plot must not be called when no photo was uploaded")
 
-        def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None):
+        def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None, color=None, style=None):
             raise AssertionError("generate_house_render must not be called when no photo was uploaded")
 
     monkeypatch.setattr(main_module, "get_provider", lambda: NoCallProvider())
@@ -325,6 +325,8 @@ def test_structured_house_inputs_compose_the_prompt_and_persist(monkeypatch):
             "bathrooms": 2,
             "extras": "dirty kitchen each floor, garage",
             "facing": None,
+            "color_palette": None,
+            "architectural_style": None,
         }
         assert body["dimensions"] == {"length": 40.0, "width": 60.0, "unit": "ft"}
 
@@ -352,6 +354,92 @@ def test_house_facing_selection_persists_in_house_inputs(monkeypatch):
 
         body = client.get(f"/api/house-projects/{house_project_id}").json()
         assert body["house_inputs"]["facing"] == "east"
+
+
+def test_house_color_palette_selection_persists_in_house_inputs(monkeypatch):
+    # Real user request (2026-09-18): Build a House previously had no color
+    # input at all - closing that gap by reusing Room Redesign's own
+    # COLOR_PALETTES vocabulary (see app/pipeline/prompts.py).
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "color_palette": "Sage"},
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        body = client.get(f"/api/house-projects/{house_project_id}").json()
+        assert body["house_inputs"]["color_palette"] == "Sage"
+
+
+def test_house_unrecognized_color_palette_degrades_to_none(monkeypatch):
+    # Optional/cosmetic input - an unrecognized value must never 400 the
+    # whole request, it just degrades to "no color instruction".
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "color_palette": "Not A Real Palette"},
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        body = client.get(f"/api/house-projects/{house_project_id}").json()
+        assert body["house_inputs"]["color_palette"] is None
+
+
+def test_house_architectural_style_selection_persists_in_house_inputs(monkeypatch):
+    # Real user request (2026-09-18): the same "give Build a House a
+    # dropdown from Room Redesign" pattern as color_palette above, this time
+    # for architectural style (reusing Room Redesign's STYLE_OPTIONS names).
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "architectural_style": "Mediterranean"},
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        body = client.get(f"/api/house-projects/{house_project_id}").json()
+        assert body["house_inputs"]["architectural_style"] == "Mediterranean"
+
+
+def test_house_unrecognized_architectural_style_degrades_to_none(monkeypatch):
+    # Optional/cosmetic input - an unrecognized value must never 400 the
+    # whole request, it just degrades to "no style signal".
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "architectural_style": "Not A Real Style"},
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        body = client.get(f"/api/house-projects/{house_project_id}").json()
+        assert body["house_inputs"]["architectural_style"] is None
 
 
 def test_house_floor_count_out_of_range_is_clamped(monkeypatch):
@@ -407,6 +495,8 @@ def test_house_input_metadata_json_written_to_storage(monkeypatch):
             "bathrooms": 2,
             "extras": "modern style",
             "facing": None,
+            "color_palette": None,
+            "architectural_style": None,
         }
 
 

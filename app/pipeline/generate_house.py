@@ -11,7 +11,12 @@ from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
 from app.pipeline.blueprint_svg import render_floor_blueprint
 from app.pipeline.feasibility import check_feasibility
 from app.pipeline.floor_layout import layout_floor
-from app.pipeline.house_prompts import build_house_elevation_prompt, build_house_prompt
+from app.pipeline.house_prompts import (
+    build_house_elevation_prompt,
+    build_house_prompt,
+    color_palette_words,
+    house_style_words,
+)
 from app.pipeline.house_requirements import mentions_garage, parse_front_yard_depth, parse_garage_cars
 from app.pipeline.room_specs import classify_room_category
 from app.providers.base import Provider
@@ -134,7 +139,32 @@ def _is_cancelled(session: Session, house_project: HouseProject) -> bool:
 # still write a floor_plan image to a project the user no longer sees
 # (list_house_projects excludes cancelled rows), same "harmless orphan"
 # treatment already accepted elsewhere in this file for S3 objects.
-HOUSE_PROMPT_VERSION = "v13"  # v13 (2026-09-14): the exterior render is now a real
+HOUSE_PROMPT_VERSION = "v16"  # v16 (2026-09-18, same day as v14/v15): an optional exterior
+# architectural_style, structured exactly like v15's color - a new `style` field passed to
+# Provider.generate_house_render(), never embedded in build_house_elevation_prompt()'s output.
+# house_prompts.py gained its OWN exterior style vocabulary (HOUSE_STYLE_PROFILES/
+# house_style_words()) rather than reusing app/pipeline/prompts.py's STYLE_PROFILES, which is
+# interior furniture/decor language - wrong for an exterior elevation model. Requires
+# kaggle_notebooks/elevation_server.py to be redeployed with its matching change (a new `style`
+# field on ElevationRequest, placed in a dedicated prompt slot, plus de-biasing the notebook's
+# "Modern Luxury Contemporary" hardcoding so a chosen style isn't fought by it) - an un-updated
+# notebook simply ignores the extra field and keeps its modern-luxury default. build_house_prompt()
+# (the EDIT-backend path) inlines house_style_words() the same way it already inlines color, since
+# OpenAI/Modal ignore the structured `style` kwarg entirely.
+# v15 (2026-09-18, same day as v14): the elevation model's color
+# palette is now a STRUCTURED `color` field passed to Provider.generate_house_render(), not text
+# embedded in build_house_elevation_prompt()'s output - a trailing text clause was too weak
+# against the notebook's own hardcoded color/material vocabulary (see house_prompts.py's module
+# docstring for the full story). Requires kaggle_notebooks/elevation_server.py to be redeployed
+# with its matching change (a new `color` field on ElevationRequest, injected into
+# _build_prompt()'s positive prompt) - an un-updated notebook simply ignores the extra field.
+# build_house_prompt() (the EDIT-backend path) is unchanged - it still inlines color_palette_words()
+# into its long edit paragraph, since OpenAI/Modal ignore the structured `color` kwarg entirely.
+# v14 (2026-09-18): optional exterior color_palette, threaded
+# into build_house_prompt()/build_house_elevation_prompt() - reuses Room Redesign's own
+# COLOR_PROFILE vocabulary (see house_prompts.py). See app/main.py's create_house_project for
+# the new "Exterior color palette" dropdown/Form field this comes from.
+# v13 (2026-09-14): the exterior render is now a real
 # TEXT-TO-IMAGE elevation model (RealVisXL on Kaggle, HOUSE_IMAGE_PROVIDER=kaggle) instead of
 # only the OpenAI photo-EDIT path. It needs no plot photo (generates a facade from the
 # floors/requirements), so the render step runs even for photo-less projects when the active
@@ -236,6 +266,8 @@ def run_house_pipeline(
     floor_count: int | None = None,
     facing_input: str | None = None,
     preferred_backend: str | None = None,
+    color_palette: str | None = None,
+    architectural_style: str | None = None,
 ) -> None:
     """Runs the "Build a House" pipeline for one HouseProject. Mirrors
     app/pipeline/generate.py's run_pipeline shape: its own DB session (runs as
@@ -274,6 +306,26 @@ def run_house_pipeline(
     OpenAI under the hood (no trained Kaggle house model exists yet - see
     HybridProvider._resolve_house_provider()'s docstring), an honest,
     already-documented gap, not something this parameter fixes.
+
+    color_palette (2026-09-18, optional) - one of app/pipeline/prompts.py's
+    COLOR_PALETTES keys, reused verbatim from Room Redesign's own palette
+    vocabulary. As of v15, resolved once via house_prompts.color_palette_words()
+    and passed as Provider.generate_house_render()'s structured `color` kwarg
+    (Kaggle only honors it; the EDIT-backend prompt builder still inlines it
+    via build_house_prompt() below) - a None/unrecognized value degrades
+    silently to "no color signal", never an error - this is a cosmetic input,
+    not a validated one at this layer (app/main.py's create_house_project is
+    where an unrecognized value gets degraded to None before it ever reaches
+    here).
+
+    architectural_style (2026-09-18, v16, optional) - one of app/pipeline/
+    prompts.py's STYLE_OPTIONS keys. Same treatment as color_palette: resolved
+    once via house_prompts.house_style_words() (an EXTERIOR/architectural
+    vocabulary, NOT room-redesign's interior STYLE_PROFILES - see that
+    function's docstring) and passed as generate_house_render()'s structured
+    `style` kwarg for the Kaggle elevation model; build_house_prompt() below
+    still inlines it for the EDIT-backend path. Same soft-degrade contract as
+    color_palette.
     """
     key_prefix = f"users/{username}/buildAHouse/output" if username else "local.output"
     with Session(engine) as session:
@@ -627,14 +679,27 @@ def run_house_pipeline(
                 # `floors` input - the computed layout is authoritative when
                 # present, otherwise the dropdown value.
                 resolved_floors = (len(room_layout["floors"]) if room_layout else None) or floor_count
+                # Resolved once, used by both branches below (v15/v16,
+                # 2026-09-18): the EDIT-backend prompt still inlines this text
+                # (unchanged); the elevation model gets it as its own
+                # structured `color`/`style` kwarg instead of embedded prompt
+                # text - see house_prompts.py's v15/v16 docstring notes for
+                # why a trailing text clause was too weak against the
+                # notebook's own hardcoded color/material/theme vocabulary.
+                color_words = color_palette_words(color_palette)
+                style_words = house_style_words(architectural_style)
                 if render_needs_photo:
                     # EDIT backend: long natural-language instruction paragraph
                     # (build_house_prompt) that states the story count inline.
-                    render_prompt = build_house_prompt(dimensions, prompt, plot_description, room_layout)
+                    render_prompt = build_house_prompt(
+                        dimensions, prompt, plot_description, room_layout, color_palette, architectural_style
+                    )
                 else:
                     # TEXT-TO-IMAGE elevation: minimal app-side prompt (the
                     # notebook owns the heavy scaffolding) - see
-                    # build_house_elevation_prompt's docstring.
+                    # build_house_elevation_prompt's docstring. Neither color
+                    # nor style is embedded here - both are sent structured
+                    # below instead.
                     render_prompt = build_house_elevation_prompt(prompt)
                 backend_kwargs = {"preferred_backend": preferred_backend} if preferred_backend else {}
                 # Real, deterministic "did the user ask for a garage" signal
@@ -652,6 +717,8 @@ def run_house_pipeline(
                     render_prompt,
                     resolved_floors,
                     wants_garage=mentions_garage(prompt or ""),
+                    color=color_words,
+                    style=style_words,
                     **backend_kwargs,
                 )
                 render_key = f"{key_prefix}/{house_project_id}/render.png"
@@ -672,6 +739,8 @@ def run_house_pipeline(
                     "house_prompt_version": HOUSE_PROMPT_VERSION,
                     "dimensions": dimensions,
                     "prompt": prompt,
+                    "color_palette": color_palette,
+                    "architectural_style": architectural_style,
                     "floor_plan_generated": house_project.floor_plan_status == "done",
                     "blueprint_generated": house_project.blueprint_status == "done",
                     "floor_count": len(blueprint_keys) or (len(room_layout["floors"]) if room_layout else 0),

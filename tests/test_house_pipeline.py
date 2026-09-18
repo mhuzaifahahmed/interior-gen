@@ -16,6 +16,8 @@ class FakeProvider:
         self.plot_calls = []
         self.floor_plan_calls = []
         self.render_calls = []
+        self.render_colors = []
+        self.render_styles = []
         self.room_layout_calls = []
         self._floor_plan_images = floor_plan_images
 
@@ -38,8 +40,10 @@ class FakeProvider:
             ]
         }
 
-    def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None):
+    def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None, color=None, style=None):
         self.render_calls.append((image_bytes, prompt, floor_count))
+        self.render_colors.append(color)
+        self.render_styles.append(style)
         return b"fake-render-bytes"
 
 
@@ -203,7 +207,7 @@ def test_run_house_pipeline_marks_failed_on_render_error(monkeypatch):
         session.commit()
 
     class FailingProvider(FakeProvider):
-        def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None):
+        def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None, color=None, style=None):
             raise RuntimeError("OpenAI quota exceeded")
 
     run_house_pipeline("h3", FailingProvider(), storage, {"length": 40, "width": 60, "unit": "ft"})
@@ -592,6 +596,213 @@ def test_run_house_pipeline_renders_elevation_without_a_photo_for_text_to_image_
         assert house_project.render_key is not None
 
 
+def test_run_house_pipeline_threads_color_palette_as_a_structured_field_for_elevation(monkeypatch):
+    # v15 (2026-09-18): for the TEXT-TO-IMAGE elevation backend, color is sent
+    # as a STRUCTURED `color` kwarg to generate_house_render() (like
+    # wants_garage), NOT embedded in the minimal elevation prompt text - a
+    # trailing text clause was too weak against the notebook's own hardcoded
+    # color vocabulary. So the prompt string must NOT contain the color words,
+    # and provider.render_colors must carry the real resolved COLOR_PROFILE
+    # text instead.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="helevpalette", status="queued")
+        session.add(house_project)
+        session.commit()
+
+    class ElevationProvider(FakeProvider):
+        def house_render_needs_photo(self, preferred_backend=None):
+            return False
+
+    provider = ElevationProvider()
+    run_house_pipeline(
+        "helevpalette",
+        provider,
+        storage,
+        {"length": 30, "width": 30, "unit": "ft"},
+        prompt="1 floor",
+        floor_count=1,
+        color_palette="Earthy",
+    )
+
+    assert len(provider.render_calls) == 1
+    _, render_prompt, _ = provider.render_calls[0]
+    assert "clay" not in render_prompt.lower()
+    assert "color" not in render_prompt.lower()
+    assert provider.render_colors == ["clay, terracotta, olive green, warm brown, sand, stone, and natural wood tones"]
+
+
+def test_run_house_pipeline_passes_none_color_when_no_palette_chosen(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="helevnopalette", status="queued")
+        session.add(house_project)
+        session.commit()
+
+    class ElevationProvider(FakeProvider):
+        def house_render_needs_photo(self, preferred_backend=None):
+            return False
+
+    provider = ElevationProvider()
+    run_house_pipeline(
+        "helevnopalette",
+        provider,
+        storage,
+        {"length": 30, "width": 30, "unit": "ft"},
+        prompt="1 floor",
+        floor_count=1,
+    )
+
+    assert provider.render_colors == [None]
+
+
+def test_run_house_pipeline_threads_color_palette_into_the_edit_prompt(monkeypatch):
+    # Default (photo-EDIT) backend path - build_house_prompt(), not
+    # build_house_elevation_prompt(). Requires a real plot photo since the
+    # default FakeProvider's house_render_needs_photo() defaults to True.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.put("users/u/buildAHouse/input/heditpalette/plot.png", b"fake-plot-bytes")
+
+    with Session(engine) as session:
+        house_project = HouseProject(
+            id="heditpalette",
+            status="queued",
+            plot_image_key="users/u/buildAHouse/input/heditpalette/plot.png",
+        )
+        session.add(house_project)
+        session.commit()
+
+    provider = FakeProvider()
+    run_house_pipeline(
+        "heditpalette",
+        provider,
+        storage,
+        {"length": 30, "width": 30, "unit": "ft"},
+        prompt="1 floor",
+        color_palette="Cool",
+    )
+
+    assert len(provider.render_calls) == 1
+    _, render_prompt, _ = provider.render_calls[0]
+    assert "cool gray" in render_prompt.lower()
+    assert "Edit this photograph" in render_prompt
+
+
+def test_run_house_pipeline_threads_architectural_style_as_a_structured_field_for_elevation(monkeypatch):
+    # v16 (2026-09-18): for the TEXT-TO-IMAGE elevation backend, architectural
+    # style is sent as a STRUCTURED `style` kwarg to generate_house_render()
+    # (like color/wants_garage), NOT embedded in the minimal elevation prompt
+    # text - see house_prompts.py's v16 docstring note. So the prompt string
+    # must NOT contain the style words, and provider.render_styles must carry
+    # the real resolved HOUSE_STYLE_PROFILES text instead.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="helevstyle", status="queued")
+        session.add(house_project)
+        session.commit()
+
+    class ElevationProvider(FakeProvider):
+        def house_render_needs_photo(self, preferred_backend=None):
+            return False
+
+    provider = ElevationProvider()
+    run_house_pipeline(
+        "helevstyle",
+        provider,
+        storage,
+        {"length": 30, "width": 30, "unit": "ft"},
+        prompt="1 floor",
+        floor_count=1,
+        architectural_style="Mediterranean",
+    )
+
+    assert len(provider.render_calls) == 1
+    _, render_prompt, _ = provider.render_calls[0]
+    assert "mediterranean" not in render_prompt.lower()
+    assert "villa" not in render_prompt.lower()
+    from app.pipeline.house_prompts import HOUSE_STYLE_PROFILES
+
+    assert provider.render_styles == [HOUSE_STYLE_PROFILES["Mediterranean"]]
+
+
+def test_run_house_pipeline_passes_none_style_when_no_style_chosen(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="helevnostyle", status="queued")
+        session.add(house_project)
+        session.commit()
+
+    class ElevationProvider(FakeProvider):
+        def house_render_needs_photo(self, preferred_backend=None):
+            return False
+
+    provider = ElevationProvider()
+    run_house_pipeline(
+        "helevnostyle",
+        provider,
+        storage,
+        {"length": 30, "width": 30, "unit": "ft"},
+        prompt="1 floor",
+        floor_count=1,
+    )
+
+    assert provider.render_styles == [None]
+
+
+def test_run_house_pipeline_threads_architectural_style_into_the_edit_prompt(monkeypatch):
+    # Default (photo-EDIT) backend path - build_house_prompt(), not
+    # build_house_elevation_prompt(). Requires a real plot photo since the
+    # default FakeProvider's house_render_needs_photo() defaults to True.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.put("users/u/buildAHouse/input/heditstyle/plot.png", b"fake-plot-bytes")
+
+    with Session(engine) as session:
+        house_project = HouseProject(
+            id="heditstyle",
+            status="queued",
+            plot_image_key="users/u/buildAHouse/input/heditstyle/plot.png",
+        )
+        session.add(house_project)
+        session.commit()
+
+    provider = FakeProvider()
+    run_house_pipeline(
+        "heditstyle",
+        provider,
+        storage,
+        {"length": 30, "width": 30, "unit": "ft"},
+        prompt="1 floor",
+        architectural_style="Industrial",
+    )
+
+    assert len(provider.render_calls) == 1
+    _, render_prompt, _ = provider.render_calls[0]
+    assert "industrial architecture" in render_prompt.lower()
+    assert "Edit this photograph" in render_prompt
+
+
 class ManyRoomsProvider(FakeProvider):
     """Returns a room program too large for a tiny plot - used to exercise
     the feasibility hard gate (2026-08-27)."""
@@ -971,7 +1182,7 @@ def test_run_house_pipeline_does_not_wait_for_floor_plan_before_completing(monke
             time.sleep(2.0)
             return super().generate_floor_plan(plot_description, dimensions, prompt, room_layout)
 
-        def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None):
+        def generate_house_render(self, image_bytes, prompt, floor_count=None, wants_garage=None, color=None, style=None):
             time.sleep(0.1)
             return super().generate_house_render(image_bytes, prompt, floor_count)
 

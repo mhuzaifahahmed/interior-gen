@@ -323,13 +323,15 @@ class GeminiProvider(Provider):
         prompt: str,
         floor_count: int | None = None,
         wants_garage: bool | None = None,
+        color: str | None = None,
+        style: str | None = None,
     ) -> bytes:
         # Reuses Gemini's own (dormant in the composition root, but real and
         # working) instruction-based image editing - same call shape as
         # generate_image() above, just under the house feature's own method
         # name so its parameters never get tangled with room-redesign's tier
-        # semantics. floor_count/wants_garage ignored (interface parity - edit
-        # backend, states the program in the prompt).
+        # semantics. floor_count/wants_garage/color/style ignored (interface
+        # parity - edit backend, states the program in the prompt).
         return self.generate_image(image_bytes, prompt)
 
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:

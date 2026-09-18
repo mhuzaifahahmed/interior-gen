@@ -1038,6 +1038,8 @@ async def create_house_project(
     bathrooms: int | None = Form(None),
     extras: str = Form(""),
     facing: str | None = Form(None),
+    color_palette: str | None = Form(None),
+    architectural_style: str | None = Form(None),
     preferred_model: str | None = Form(None),
     session: Session = Depends(get_session),
     user: AuthUser | None = Depends(get_current_user),
@@ -1083,6 +1085,21 @@ async def create_house_project(
     south"). Kept unvalidated at this layer on purpose, matching this
     endpoint's existing "silently correct obvious nonsense rather than error
     the whole request" treatment for floor_count/bedrooms/bathrooms above.
+
+    color_palette (2026-09-18, optional) - reuses Room Redesign's own
+    COLOR_PALETTES vocabulary (see app/pipeline/prompts.py's COLOR_PROFILE)
+    so Build a House's exterior render can finally be steered toward a
+    color scheme, closing a real gap (this tool previously had no color
+    input at all). Unlike Room Redesign's color_palette (required, hard-
+    validated below), this one is optional and degrades silently - an
+    unrecognized/blank value just means "no color instruction", not a 400.
+
+    architectural_style (2026-09-18, optional) - reuses Room Redesign's own
+    STYLE_OPTIONS names (validated against the same list), but is resolved
+    to an EXTERIOR architecture vocabulary at the prompt-builder layer (see
+    app/pipeline/house_prompts.py's HOUSE_STYLE_PROFILES/house_style_words) -
+    NOT room-redesign's interior style descriptions. Same soft-degrade
+    treatment as color_palette: unrecognized/blank -> None, never a 400.
     """
     data: bytes | None = None
     if file is not None:
@@ -1105,6 +1122,10 @@ async def create_house_project(
     if bathrooms is not None:
         bathrooms = max(0, min(bathrooms, 20))
     extras = extras.strip()[:USER_PROMPT_MAX_CHARS]
+    if color_palette not in COLOR_PALETTES:
+        color_palette = None
+    if architectural_style not in STYLE_OPTIONS:
+        architectural_style = None
 
     house_inputs = {
         "floor_count": floor_count,
@@ -1112,6 +1133,8 @@ async def create_house_project(
         "bathrooms": bathrooms,
         "extras": extras or None,
         "facing": facing or None,
+        "color_palette": color_palette,
+        "architectural_style": architectural_style,
     }
     composed_requirements = _compose_house_requirements(floor_count, bedrooms, bathrooms, extras)
     # Defensive re-truncation, same reasoning as style_notes/city above - the
@@ -1212,6 +1235,8 @@ async def create_house_project(
         floor_count,
         facing,
         backend_override,
+        color_palette,
+        architectural_style,
     )
 
     return HouseProjectCreateResponse(house_project_id=house_project.id)

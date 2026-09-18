@@ -68,12 +68,15 @@ class OpenAIImageProvider:
         prompt: str,
         floor_count: int | None = None,
         wants_garage: bool | None = None,
+        color: str | None = None,
+        style: str | None = None,
     ) -> bytes:
-        # floor_count and wants_garage are ignored here - this is an image-EDIT
-        # backend, and build_house_prompt() already states the exact story count
-        # and full room program (garage included, when requested) inside the
-        # prompt text (those structured fields only matter to the Kaggle
-        # text-to-image elevation model). Accepted for interface parity.
+        # floor_count, wants_garage, color, and style are ignored here - this
+        # is an image-EDIT backend, and build_house_prompt() already states
+        # the exact story count, full room program, chosen color palette, and
+        # chosen architectural style inside the prompt text (those structured
+        # fields only matter to the Kaggle text-to-image elevation model).
+        # Accepted for interface parity.
         # Shares the exact request shape with generate_image() via _edit_image -
         # kept as its own public method (not just calling generate_image
         # directly) so the "Build a House" feature's parameters never get

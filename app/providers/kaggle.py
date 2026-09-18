@@ -324,6 +324,8 @@ class KaggleImageProvider:
         prompt: str,
         floor_count: int | None = None,
         wants_garage: bool | None = None,
+        color: str | None = None,
+        style: str | None = None,
     ) -> bytes:
         """"Build a House" front-elevation render, via a SEPARATE Kaggle
         notebook/tunnel from room-redesign's (settings.kaggle_house_api_url,
@@ -364,6 +366,29 @@ class KaggleImageProvider:
         verbatim via showHouseError(), so a friendly, actionable message here
         (via classify_kaggle_failure) matters. No _request_lock - separate
         account/notebook/GPU from room-redesign's.
+
+        color (2026-09-18, v15) is the resolved COLOR_PROFILE words for the
+        user's chosen exterior palette (house_prompts.color_palette_words()) -
+        a STRUCTURED field, same treatment as `garage` below, not embedded in
+        `prompt`. Real reason it's structured rather than more prompt text: an
+        earlier version appended the palette as a trailing text clause onto
+        `prompt`, but the notebook wraps that text inside its OWN prompt
+        scaffolding, which hardcodes competing color/material vocabulary
+        ("dark textured stone", etc.) with no dedicated slot for an appended
+        clause - the palette could be drowned out. Sending it structured lets
+        the notebook place it in a dedicated, high-priority position instead
+        (see elevation_server.py's _build_prompt()). Omitted when falsy so an
+        un-updated notebook keeps its old behavior (no color signal).
+
+        style (2026-09-18, v16) is the resolved HOUSE_STYLE_PROFILES words
+        for the user's chosen exterior architectural style
+        (house_prompts.house_style_words()) - same structured-field
+        treatment as color above, for the same reason: the notebook is
+        hardcoded around "Modern Luxury Contemporary" in several places
+        (DEFAULT_THEME/DEFAULT_FEATURES/_floor_rules), which would fight any
+        other style the same way its hardcoded color vocabulary fought
+        non-default palettes. Omitted when falsy so an un-updated notebook
+        keeps its old modern-luxury-default behavior.
         """
         payload: dict = {"prompt": prompt or ""}
         if floor_count:
@@ -374,6 +399,10 @@ class KaggleImageProvider:
         # omitted when None so an un-updated notebook keeps its old behavior.
         if wants_garage is not None:
             payload["garage"] = bool(wants_garage)
+        if color:
+            payload["color"] = color
+        if style:
+            payload["style"] = style
 
         base_url = settings.kaggle_house_api_url
         try:
