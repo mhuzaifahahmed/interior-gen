@@ -291,6 +291,32 @@ def test_layout_floor_falls_back_when_no_room_for_a_corridor():
         assert r["w"] > 0 and r["h"] > 0
 
 
+def test_layout_floor_tags_suites_even_without_a_corridor():
+    # Real gap fixed 2026-09-18: suite pairing/tagging previously only ran
+    # on the corridor path - a private zone too small/shallow for a
+    # corridor (this exact room mix fails the corridor depth check, see
+    # test_layout_floor_falls_back_when_no_room_for_a_corridor above) never
+    # got a "suite" tag on its bed/bath rects at all, so
+    # blueprint_svg.py's ensuite door logic fell back to a much weaker
+    # name-only heuristic. The master bedroom+bathroom pair must be tagged
+    # with the SAME suite id even in this no-corridor fallback.
+    rooms = [
+        {"name": "Living Room", "area": 1},
+        {"name": "Master Bedroom", "area": 1},
+        {"name": "Master Bathroom", "area": 1},
+        {"name": "Bedroom 2", "area": 1},
+    ]
+    rects = layout_floor(rooms, {"length": 10, "width": 8, "unit": "ft"})
+    assert not any(r["name"] == "Hallway" for r in rects)  # confirms this hit the fallback, not the corridor
+    by_name = {r["name"]: r for r in rects}
+    master_bed_suite = by_name["Master Bedroom"].get("suite")
+    master_bath_suite = by_name["Master Bathroom"].get("suite")
+    assert master_bed_suite is not None
+    assert master_bed_suite == master_bath_suite
+    # The standalone second bedroom has no bathroom of its own - no suite tag.
+    assert by_name["Bedroom 2"].get("suite") is None
+
+
 def test_layout_floor_preserves_order_within_a_corridor_row():
     # Same "master bedroom next to its own ensuite bathroom" guarantee as
     # test_layout_floor_preserves_relative_order_within_a_zone, but with

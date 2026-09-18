@@ -97,10 +97,36 @@ entrance/garage cluster lands together at the "main side" and the kitchen
 sits next to the private zone's hallway as the transition, instead of
 scattering by whatever order Gemini returned. Small private zones (fewer
 than MIN_ROOMS_FOR_CORRIDOR rooms, or not enough depth left after reserving
-the corridor) fall back unchanged to the plain `_slice()` behavior that
-existed before this - confirmed by the pre-existing
-test_layout_floor_preserves_relative_order_within_a_zone test (only 2
-private rooms) continuing to pass untouched.
+the corridor) fall back to the plain `_slice()` behavior that existed before
+this - confirmed by the pre-existing test_layout_floor_preserves_relative_
+order_within_a_zone test (only 2 private rooms) continuing to pass unchanged
+in its OWN assertion (adjacency), though the fallback DOES still now run
+`_arrange_suites()` first (see the 2026-09-18 fix immediately below) rather
+than skipping it - the original "unchanged behavior" claim only ever meant
+"still uses plain _slice(), no corridor," not "suite tagging is skipped."
+
+REAL GAP FIXED (2026-09-18): the small/no-corridor fallback above was
+skipping `_arrange_suites()` entirely - not just the corridor, but the
+REORDERING AND SUITE-TAGGING too - so a compact house (e.g. 2 bedrooms + 2
+bathrooms on a plot too narrow to pass the corridor depth check) never got
+real bed<->bath pairing at all, and blueprint_svg.py's ensuite door logic
+fell back to a much weaker name-only ("master" in the room's own name)
+heuristic for every such house. `_layout_private_zone()`'s fallback branch
+now calls `_arrange_suites()` too, then manually tags the `_slice()` output
+with the returned suite ids (`_slice()` always returns rects in the same
+relative order as its `names` input - see its own docstring - so the ids
+line up positionally, no name-matching needed). This was found and fixed
+while evaluating an externally-supplied alternate blueprint_svg.py that
+claimed "better" bed placement/circulation - that file's actual improvements
+were rendering-only (drawn AFTER placement, invisible to the AI Concept
+Layout model, which is conditioned on floor_layout.py's rects, not on
+anything blueprint_svg.py draws - see conditioning_image.py) and its
+bedroom/door changes carried real regression risk (reintroducing a
+previously-fixed label-collision bug; an unconditional bedroom<->bedroom/
+kitchen<->bedroom door suppression with no reachability guarantee, which can
+orphan a room with zero doors when there's no hallway to route through
+instead) - rejected wholesale, but tracing through it surfaced this real,
+narrower, safely-fixable gap in the actual placement layer instead.
 
 TRUE FRONT-TO-BACK ZONING + REAL MIN/MAX ROOM PROPORTIONS + KITCHEN-DINING
 ADJACENCY (2026-09-04, real user critique of a live layout: garage sat in a
@@ -789,7 +815,24 @@ def _layout_private_zone(
     cross_dim = h if split_along_width else w
 
     if len(names) < MIN_ROOMS_FOR_CORRIDOR or cross_dim - hallway_width < min_row_depth:
-        return _slice(names, weights, x, y, w, h, sum(weights))
+        # No real corridor here (too few rooms, or not enough depth) - but
+        # suite pairing (2026-09-03's _arrange_suites, see module docstring)
+        # was previously only applied on the corridor path, meaning a SMALL
+        # private zone (e.g. a compact 1-2 bedroom house, or 2 bed + 2 bath
+        # on a narrow plot that fails the depth check) never got bed<->bath
+        # pairing OR the "suite" tag blueprint_svg.py's ensuite door logic
+        # relies on - real gap, since without a tag that logic falls back to
+        # a much weaker name-only ("master" in the name) heuristic. _slice()
+        # always returns rects in the SAME order as its `names` input (each
+        # room appears once, in relative order - see _slice()'s own
+        # docstring), so the suite ids line up positionally with the
+        # returned rects with no extra matching needed.
+        names, weights, suite_ids = _arrange_suites(names, weights)
+        rects = _slice(names, weights, x, y, w, h, sum(weights))
+        for rect, suite_id in zip(rects, suite_ids):
+            if suite_id is not None:
+                rect["suite"] = suite_id
+        return rects
 
     names, weights, suite_ids = _arrange_suites(names, weights)
     total_weight = sum(weights)
