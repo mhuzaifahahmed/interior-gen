@@ -1,6 +1,7 @@
 from app.pipeline.room_specs import (
     classify_room_category,
     garage_min_area_sqm,
+    max_area_for_room,
     min_area_for_room,
     to_plot_unit,
 )
@@ -46,3 +47,31 @@ def test_min_area_for_room_uses_garage_cars_when_given():
     default_cars = min_area_for_room("Garage", "ft")
     three_cars = min_area_for_room("Garage", "ft", cars=3)
     assert three_cars > default_cars
+
+
+def test_master_bedroom_has_a_larger_minimum_than_a_regular_bedroom():
+    # Real user request (2026-09-19): a master bedroom should actually feel
+    # bigger than a standard bedroom, not identically sized.
+    regular = min_area_for_room("Bedroom 2", "ft")
+    master = min_area_for_room("Master Bedroom", "ft")
+    assert master > regular
+
+
+def test_master_bedroom_has_a_larger_maximum_than_a_regular_bedroom():
+    regular = max_area_for_room("Bedroom 2", "ft")
+    master = max_area_for_room("Master Bedroom", "ft")
+    assert master > regular
+
+
+def test_master_bedroom_still_classifies_as_a_plain_bedroom():
+    # Deliberately NOT a new category - every other consumer (zoning, suite
+    # pairing, feasibility, furniture dispatch) must keep treating master
+    # and regular bedrooms identically; only the size numbers differ.
+    assert classify_room_category("Master Bedroom") == "bedroom"
+
+
+def test_a_room_merely_containing_master_in_an_unrelated_context_is_unaffected():
+    # "master" only triggers the bump when the room is ALSO classified as a
+    # bedroom - a non-bedroom room happening to include the word shouldn't
+    # get bedroom-shaped sizing at all.
+    assert min_area_for_room("Master Suite Closet", "ft") == min_area_for_room("Closet", "ft")

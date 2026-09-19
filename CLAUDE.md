@@ -1961,6 +1961,24 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     `tests/test_conditioning_image.py` (boundary gap present/moves with facing - 2 new),
     `tests/test_house_pipeline.py` (facing reaches both renderers, spy test - 1 new). 650/650 passing
     (full suite).
+- **v18 (2026-09-19): master bedrooms are now genuinely bigger, not identically sized to a regular
+  bedroom.** Real user request, direct follow-up to v17. `app/pipeline/room_specs.py` gained
+  `MASTER_BEDROOM_MIN_MULTIPLIER` (1.35x) and `MASTER_BEDROOM_MAX_MULTIPLIER` (2.4x, applied on top of
+  the already-bumped minimum - a real ceiling of 3.24x a standard bedroom's raw minimum, vs a regular
+  bedroom's 1.8x), applied by `min_area_for_room()`/`max_area_for_room()` whenever a room's own name
+  contains "master" AND it classifies as a bedroom. Deliberately NOT a new `classify_room_category()`
+  category - every other consumer of that classifier (zoning, suite pairing, feasibility math, furniture
+  dispatch) already treats master and regular bedrooms identically and correctly; a new category would
+  risk disturbing all of that for a change that's purely about size. `_is_master_bedroom()` is the one
+  new gate, checked only inside the two sizing functions. Flows through `layout_floor()`'s existing
+  min/max-area machinery unchanged, so it reaches all three renderers (PNG, DXF, AI conditioning image)
+  for free - no renderer-specific code needed. Visually verified (not just unit-tested, this project's
+  own standing lesson for sizing/furniture changes): rendered a realistic 45x50ft house and confirmed
+  the Master Bedroom (345 sq ft) came out visibly and proportionally larger than a same-weighted regular
+  Bedroom 2 (192 sq ft), with correct suite pairing/door placement/bed furniture scaling intact. Tests:
+  `tests/test_room_specs.py` (master min/max both exceed a regular bedroom's, still classifies as plain
+  "bedroom", a non-bedroom room merely containing "master" in its name is unaffected - 4 new). 654/654
+  passing (full suite).
 
 ## Subscription plans, quotas, admin panel, and payments
 

@@ -100,6 +100,30 @@ _CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+# Real user request (2026-09-19): a master bedroom should actually FEEL
+# like one - noticeably bigger than a standard bedroom, not identically
+# sized. Deliberately NOT a new classify_room_category() category - every
+# consumer of that classifier (zoning, suite pairing, feasibility math,
+# furniture dispatch) already treats "master" and regular bedrooms
+# identically and correctly, and a new category would risk disturbing all
+# of that for a change that's purely about SIZE. Instead, min_area_for_room()/
+# max_area_for_room() apply an extra multiplier ON TOP of the regular
+# "bedroom" category's own numbers whenever the room's own name says
+# "master" - the room is still classified as a plain "bedroom" everywhere
+# else in the codebase.
+MASTER_BEDROOM_MIN_MULTIPLIER = 1.35  # guaranteed floor above a regular bedroom's own minimum
+# Applied on top of the (already-bumped) minimum, not the regular bedroom
+# category's own multiplier - a master bedroom's real ceiling ends up
+# 1.35 * 2.4 = 3.24x a standard bedroom's raw minimum, vs a regular
+# bedroom's 1.8x, so it has real room to grow larger via layout_floor()'s
+# own weight-based redistribution, not just a bigger guaranteed floor.
+MASTER_BEDROOM_MAX_MULTIPLIER = 2.4
+
+
+def _is_master_bedroom(room_name: str) -> bool:
+    return "master" in (room_name or "").lower() and classify_room_category(room_name) == "bedroom"
+
+
 def classify_room_category(room_name: str) -> str:
     """Returns one of ROOM_SIZE_SPECS_M's keys, or "default" for anything
     unrecognized - never raises, same "unrecognized name is a valid, quiet
@@ -126,17 +150,28 @@ def min_area_for_room(room_name: str, unit: str, cars: int | None = None) -> flo
     if category == "garage":
         return garage_min_area_sqm(cars or 1, unit)
     spec = ROOM_SIZE_SPECS_M[category]
-    return to_plot_unit(spec["min_width"], unit) * to_plot_unit(spec["min_depth"], unit)
+    base = to_plot_unit(spec["min_width"], unit) * to_plot_unit(spec["min_depth"], unit)
+    if _is_master_bedroom(room_name):
+        return base * MASTER_BEDROOM_MIN_MULTIPLIER
+    return base
 
 
 def max_area_for_room(room_name: str, unit: str, cars: int | None = None) -> float:
     """Maximum sensible area (in the plot's unit, squared) for a room -
     ROOM_MAX_MULTIPLIER times its own minimum (see that constant's docstring
     for why this exists and why garage/staircase are pinned to exactly their
-    minimum). Used by layout_floor() to cap how far a room can grow beyond
-    its guaranteed minimum before the excess is redistributed elsewhere."""
+    minimum). A master bedroom uses MASTER_BEDROOM_MAX_MULTIPLIER instead of
+    the regular "bedroom" category's own multiplier - applied on top of its
+    already-bumped minimum (see MASTER_BEDROOM_MIN_MULTIPLIER), so it has
+    real room to grow larger via layout_floor()'s weight-based
+    redistribution, not just a bigger guaranteed floor. Used by
+    layout_floor() to cap how far a room can grow beyond its guaranteed
+    minimum before the excess is redistributed elsewhere."""
     category = classify_room_category(room_name)
-    return min_area_for_room(room_name, unit, cars) * ROOM_MAX_MULTIPLIER[category]
+    min_area = min_area_for_room(room_name, unit, cars)
+    if _is_master_bedroom(room_name):
+        return min_area * MASTER_BEDROOM_MAX_MULTIPLIER
+    return min_area * ROOM_MAX_MULTIPLIER[category]
 
 
 def garage_min_area_sqm(cars: int, unit: str) -> float:
