@@ -256,9 +256,9 @@ def generate_floor_plan(
         # real layout; omitting the field keeps a not-yet-updated notebook
         # working exactly as before (its own create_plot_boundary() fallback).
         payload["conditioning_images"] = [
-            base64.b64encode(render_conditioning_edge_map(rects_by_floor[floor_number], dimensions)).decode(
-                "utf-8"
-            )
+            base64.b64encode(
+                render_conditioning_edge_map(rects_by_floor[floor_number], dimensions, facing=facing)
+            ).decode("utf-8")
             for floor_number in sorted(rects_by_floor)
         ]
 

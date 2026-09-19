@@ -1907,6 +1907,60 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     `house_inputs` assertions extended with the new `architectural_style` key), `tests/test_hybrid_provider.py`
     (fake signatures updated), `tests/test_kaggle_provider.py` (new payload test mirroring the `color` one -
     `payload["style"]` present when given, omitted when `None`). 630/630 passing (full suite).
+- **v17 (2026-09-19): a real front entrance, drawn on the exact facing edge, across all three
+  renderers - plus a hard rule that the bed can never block a door.** Real user report on a live
+  screenshot: no main house entrance existed at all (only interior room-to-room doors), furniture
+  (a bed/sofa) could land directly in front of a door, and the chosen N/S/E/W facing had no visible
+  proof it was honored. Root cause confirmed by reading the code: `layout_floor()` already applies
+  `facing` as a coordinate transform producing a real, deterministic front edge (north→`y=0`,
+  south→`y=width`, east→`x=length`, west→`x=0`) - but that value was never passed to any of the three
+  renderers, only to placement.
+  - **`app/pipeline/blueprint_svg.py`'s new `_front_door_opening(rects, length, width, facing)`** picks
+    the exterior edge matching `facing` and returns a door-opening edge-dict (same shape `_shared_edge()`
+    returns) on whichever real room touches it - preferring a foyer/entry room, else any public-zone
+    room, else the largest room on that edge. `render_floor_blueprint()` gained a `facing=None` param;
+    a new `_draw_front_door()` cuts a real opening through the EXTERIOR poché band (not an interior
+    partition) with the same leaf+arc symbol plus an "ENTRANCE" text mark - the literal visible proof
+    facing was honored. `_room_door_walls(rect, door_edges)` computes which of a room's 4 walls
+    (top/bottom/left/right) carry a real door (interior, post-suppression, plus the front door) -
+    threaded into the furniture pass.
+  - **Bed placement gained a HARD rule** (`_furnish_bedroom`): the bed must never anchor to a wall
+    carrying a door. Bottom-anchored by default (unchanged geometry); if the bottom wall has a door, the
+    WHOLE bed (pillows/blanket/nightstand/wardrobe) flips to the top wall via a straight vertical mirror,
+    as long as top is itself door-free. If both bottom AND top have doors (a room with 3+ doors), falls
+    back to the bottom anchor anyway - drawing no bed at all would be worse. Left/right-wall doors are a
+    stated, accepted simplification (the bed's footprint is already padded off those walls).
+  - **Every other wall-anchored fixture gets a practical keep-clear skip**, not per-shape relocation:
+    `_WALL_ANCHORED_FURNITURE_WALLS` records the REAL walls each `_furnish_*` function's own geometry
+    touches (kitchen: top+right; living: top+left; study/closet: top; laundry: top+left) - that room's
+    whole furniture group is skipped when ANY of its own walls has a door. Bathroom/dining/garage/
+    staircase are unaffected (already spread across corners or centered, not wall-hugging).
+  - **`app/pipeline/blueprint_dxf.py`** and **`app/pipeline/conditioning_image.py`** both gained the same
+    `facing=None` param, reusing `_front_door_opening()` directly (imported from `blueprint_svg.py`) so
+    all three renderers - the PNG blueprint, the real `.dxf` AutoCAD export, and the AI Concept Layout's
+    conditioning image - can never disagree about where the entrance is. The DXF cuts a real door gap
+    (not a window) on the matching exterior wall segment; the conditioning image draws the plot boundary
+    as 4 separate line segments instead of one closed rectangle, with a gap on the matching side, so the
+    AI model traces the entrance too. `kaggle_autocad.py`'s existing conditioning-image call site was
+    extended to pass `facing` through (it already threaded `facing` into `layout_floor()` for this exact
+    reason - see the `v15` facing entry above).
+  - **Two real geometry bugs found via visual inspection, not just unit tests** (this project's own
+    repeated lesson for blueprint/furniture changes, applied again): rendering all 4 facings and actually
+    looking at each PNG showed (1) the door swing arc/leaf, copied from `_draw_door()`'s fixed +x/+y
+    convention, drew OUTSIDE the house entirely for south and east facings (that convention is only safe
+    for an interior door, where both sides are real rooms) - fixed by making the leaf/arc direction
+    genuinely inward-aware in both `_draw_front_door()` and the DXF's new `_draw_front_door_symbol()`
+    (a geometric reflection of the original, verified point-for-point, not a re-derived shape); and (2) a
+    west-facing entrance still visually overlapped the Living Room's sofa, because the furniture-skip
+    check only ever looked at the "top" wall - living room furniture also touches "left" (the side-arm
+    rectangle), which the initial fix missed. Both confirmed fixed by re-rendering and re-inspecting
+    every facing plus a garage case, a small/tight plot, and a dense multi-suite stress case.
+  - Tests: `tests/test_blueprint_svg.py` (front-door edge/facing table, entry-room preference, bed
+    flip + fallback, per-type furniture skip, bathroom/dining unaffected - 16 new), `tests/
+    test_blueprint_dxf.py` (front-door gap present/moves with facing/valid `doc.audit()` - 3 new),
+    `tests/test_conditioning_image.py` (boundary gap present/moves with facing - 2 new),
+    `tests/test_house_pipeline.py` (facing reaches both renderers, spy test - 1 new). 650/650 passing
+    (full suite).
 
 ## Subscription plans, quotas, admin panel, and payments
 

@@ -85,3 +85,26 @@ def test_render_conditioning_edge_map_skips_furniture_hint_for_a_tiny_room():
     png_bytes = render_conditioning_edge_map(tiny_rects, dimensions)
 
     assert png_bytes.startswith(b"\x89PNG")
+
+
+def test_render_conditioning_edge_map_facing_cuts_a_gap_in_the_boundary():
+    # 2026-09-19: without `facing` the boundary is a fully closed rectangle
+    # (no entrance) - with a real facing, a real gap gets cut so the AI
+    # model can trace the entrance too, matching the deterministic PNG/DXF.
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    rects = layout_floor(
+        [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}], dimensions, facing="north"
+    )
+    without_facing = render_conditioning_edge_map(rects, dimensions)
+    with_facing = render_conditioning_edge_map(rects, dimensions, facing="north")
+    assert without_facing != with_facing
+
+
+def test_render_conditioning_edge_map_different_facings_produce_different_gaps():
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    rooms = [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]
+    north_rects = layout_floor(rooms, dimensions, facing="north")
+    south_rects = layout_floor(rooms, dimensions, facing="south")
+    north_png = render_conditioning_edge_map(north_rects, dimensions, facing="north")
+    south_png = render_conditioning_edge_map(south_rects, dimensions, facing="south")
+    assert north_png != south_png

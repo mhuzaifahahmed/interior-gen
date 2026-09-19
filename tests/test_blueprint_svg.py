@@ -7,6 +7,9 @@ from app.pipeline.blueprint_svg import (
     _draw_furniture,
     _draw_room_label,
     _fit_room_name,
+    _front_door_opening,
+    _furnish_bedroom,
+    _room_door_walls,
     _should_suppress_direct_door,
     _should_suppress_garage_direct_door,
     render_floor_blueprint,
@@ -301,7 +304,7 @@ def test_render_floor_blueprint_suppresses_garage_to_living_door_when_entry_pres
     assert png_bytes.startswith(b"\x89PNG")
 
 
-def _draw_furniture_and_diff_from_blank(rect, scale):
+def _draw_furniture_and_diff_from_blank(rect, scale, door_walls=None):
     """Renders _draw_furniture() for one rect onto a blank canvas and
     returns whether any pixel changed - a direct way to check "did a
     furniture symbol actually get drawn" without depending on the exact
@@ -309,8 +312,197 @@ def _draw_furniture_and_diff_from_blank(rect, scale):
     image = Image.new("RGB", (200, 200), "white")
     blank = image.copy()
     draw = ImageDraw.Draw(image)
-    _draw_furniture(draw, rect, 0, 0, scale)
+    _draw_furniture(draw, rect, 0, 0, scale, door_walls=door_walls)
     return ImageChops.difference(image, blank).getbbox() is not None
+
+
+# ---- Front entrance (2026-09-19) ----
+
+
+def test_front_door_opening_none_without_a_facing():
+    rects = layout_floor([{"name": "Living Room", "area": 1}], {"length": 40, "width": 60, "unit": "ft"})
+    assert _front_door_opening(rects, 40, 60, None) is None
+    assert _front_door_opening(rects, 40, 60, "sideways") is None
+
+
+def test_front_door_opening_lands_on_the_correct_edge_for_each_facing():
+    # A room mix with real public-zone rooms spanning the plot's front edge
+    # under every facing (front-to-back zoning always puts the public zone
+    # on the low-y side before any facing transform - see layout_floor()'s
+    # own docstring) - confirms the opening's orientation/pos match the
+    # facing->edge table exactly.
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    rooms = [
+        {"name": "Living Room", "area": 2},
+        {"name": "Kitchen", "area": 1},
+        {"name": "Bedroom", "area": 2},
+    ]
+    length, width = dimensions["length"], dimensions["width"]
+
+    north_rects = layout_floor(rooms, dimensions, facing="north")
+    north_edge = _front_door_opening(north_rects, length, width, "north")
+    assert north_edge["orientation"] == "horizontal"
+    assert north_edge["pos"] == 0.0
+
+    south_rects = layout_floor(rooms, dimensions, facing="south")
+    south_edge = _front_door_opening(south_rects, length, width, "south")
+    assert south_edge["orientation"] == "horizontal"
+    assert south_edge["pos"] == width
+
+    east_rects = layout_floor(rooms, dimensions, facing="east")
+    east_edge = _front_door_opening(east_rects, length, width, "east")
+    assert east_edge["orientation"] == "vertical"
+    assert east_edge["pos"] == length
+
+    west_rects = layout_floor(rooms, dimensions, facing="west")
+    west_edge = _front_door_opening(west_rects, length, width, "west")
+    assert west_edge["orientation"] == "vertical"
+    assert west_edge["pos"] == 0.0
+
+
+def test_front_door_opening_prefers_the_entry_room():
+    dimensions = {"length": 50, "width": 45, "unit": "ft"}
+    rooms = [
+        {"name": "Garage", "area": 2},
+        {"name": "Entry", "area": 1},
+        {"name": "Living Room", "area": 3},
+        {"name": "Bedroom", "area": 2},
+    ]
+    rects = layout_floor(rooms, dimensions, facing="north")
+    edge = _front_door_opening(rects, dimensions["length"], dimensions["width"], "north")
+    entry = next(r for r in rects if r["name"] == "Entry")
+    # The opening's span must fall within the entry room's own edge span.
+    assert edge["start"] >= entry["x"] - 1e-4
+    assert edge["end"] <= entry["x"] + entry["w"] + 1e-4
+
+
+def test_render_floor_blueprint_with_facing_differs_from_without():
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    rects = layout_floor(
+        [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}], dimensions, facing="north"
+    )
+    no_facing = render_floor_blueprint(1, rects, dimensions)
+    with_facing = render_floor_blueprint(1, rects, dimensions, facing="north")
+    assert no_facing != with_facing
+
+
+def test_render_floor_blueprint_different_facings_produce_different_output():
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    rooms = [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]
+    north_rects = layout_floor(rooms, dimensions, facing="north")
+    south_rects = layout_floor(rooms, dimensions, facing="south")
+    north_png = render_floor_blueprint(1, north_rects, dimensions, facing="north")
+    south_png = render_floor_blueprint(1, south_rects, dimensions, facing="south")
+    assert north_png != south_png
+
+
+def test_room_door_walls_identifies_each_side():
+    rect = {"name": "Bedroom", "x": 10.0, "y": 10.0, "w": 10.0, "h": 10.0}
+    top_edge = {"orientation": "horizontal", "pos": 10.0, "start": 10.0, "end": 20.0}
+    bottom_edge = {"orientation": "horizontal", "pos": 20.0, "start": 10.0, "end": 20.0}
+    left_edge = {"orientation": "vertical", "pos": 10.0, "start": 10.0, "end": 20.0}
+    right_edge = {"orientation": "vertical", "pos": 20.0, "start": 10.0, "end": 20.0}
+
+    assert _room_door_walls(rect, [top_edge]) == {"top"}
+    assert _room_door_walls(rect, [bottom_edge]) == {"bottom"}
+    assert _room_door_walls(rect, [left_edge]) == {"left"}
+    assert _room_door_walls(rect, [right_edge]) == {"right"}
+    assert _room_door_walls(rect, [top_edge, right_edge]) == {"top", "right"}
+    assert _room_door_walls(rect, []) == set()
+
+
+def test_room_door_walls_ignores_a_non_overlapping_coincidental_position():
+    # An edge at the same y-coordinate as this room's top wall, but with a
+    # completely different x-span (an unrelated room elsewhere on the
+    # floor) - must NOT be attributed to this room.
+    rect = {"name": "Bedroom", "x": 10.0, "y": 10.0, "w": 10.0, "h": 10.0}
+    unrelated_edge = {"orientation": "horizontal", "pos": 10.0, "start": 100.0, "end": 110.0}
+    assert _room_door_walls(rect, [unrelated_edge]) == set()
+
+
+# ---- Bed hard rule: never anchor to a door wall (2026-09-19) ----
+
+
+def test_bed_flips_to_top_wall_when_bottom_wall_has_a_door():
+    no_door_output = _draw_furniture_and_diff_from_blank(
+        {"name": "Bedroom", "x": 0, "y": 0, "w": 12, "h": 12}, scale=10
+    )
+    assert no_door_output is True  # sanity: a bed is drawn at all in this box
+
+    def render(door_walls):
+        image = Image.new("RGB", (200, 200), "white")
+        draw = ImageDraw.Draw(image)
+        _draw_furniture(draw, {"name": "Bedroom", "x": 0, "y": 0, "w": 12, "h": 12}, 0, 0, 10, door_walls=door_walls)
+        return image
+
+    default_image = render(set())
+    flipped_image = render({"bottom"})
+    # A real, different bed position - not the same pixels shifted by
+    # coincidence.
+    assert ImageChops.difference(default_image, flipped_image).getbbox() is not None
+
+
+def test_bed_falls_back_to_bottom_anchor_when_every_wall_has_a_door():
+    # The real edge case the hard rule explicitly accepts: nothing to do
+    # when both bottom AND top have doors - falls back to the original
+    # bottom anchor rather than drawing no bed at all.
+    def render(door_walls):
+        image = Image.new("RGB", (200, 200), "white")
+        draw = ImageDraw.Draw(image)
+        _draw_furniture(draw, {"name": "Bedroom", "x": 0, "y": 0, "w": 12, "h": 12}, 0, 0, 10, door_walls=door_walls)
+        return image
+
+    no_doors = render(set())
+    both_blocked = render({"bottom", "top"})
+    assert list(no_doors.getdata()) == list(both_blocked.getdata())
+
+
+def test_furnish_bedroom_direct_call_flips_geometry_when_bottom_blocked():
+    image_default = Image.new("RGB", (200, 200), "white")
+    draw_default = ImageDraw.Draw(image_default)
+    _furnish_bedroom(draw_default, 0, 0, 120, 120, 120, 120, cy=60)
+
+    image_flipped = Image.new("RGB", (200, 200), "white")
+    draw_flipped = ImageDraw.Draw(image_flipped)
+    _furnish_bedroom(draw_flipped, 0, 0, 120, 120, 120, 120, cy=60, door_walls={"bottom"})
+
+    assert ImageChops.difference(image_default, image_flipped).getbbox() is not None
+
+
+# ---- Practical keep-clear skip for other wall-anchored furniture ----
+
+
+def test_kitchen_furniture_skipped_when_its_anchor_wall_has_a_door():
+    with_door = _draw_furniture_and_diff_from_blank(
+        {"name": "Kitchen", "x": 0, "y": 0, "w": 12, "h": 12}, scale=10, door_walls={"top"}
+    )
+    without_door = _draw_furniture_and_diff_from_blank(
+        {"name": "Kitchen", "x": 0, "y": 0, "w": 12, "h": 12}, scale=10, door_walls=set()
+    )
+    assert without_door is True
+    assert with_door is False
+
+
+def test_living_room_furniture_skipped_when_its_anchor_wall_has_a_door():
+    with_door = _draw_furniture_and_diff_from_blank(
+        {"name": "Living Room", "x": 0, "y": 0, "w": 12, "h": 12}, scale=10, door_walls={"top"}
+    )
+    without_door = _draw_furniture_and_diff_from_blank(
+        {"name": "Living Room", "x": 0, "y": 0, "w": 12, "h": 12}, scale=10, door_walls=set()
+    )
+    assert without_door is True
+    assert with_door is False
+
+
+def test_bathroom_furniture_unaffected_by_door_walls():
+    # Bathroom fixtures are spread across corners, not wall-anchored to a
+    # single side - deliberately NOT part of the keep-clear skip (see
+    # _draw_furniture()'s comment), so a door on any wall must not
+    # suppress them.
+    with_door = _draw_furniture_and_diff_from_blank(
+        {"name": "Bathroom", "x": 0, "y": 0, "w": 12, "h": 12}, scale=10, door_walls={"top", "bottom"}
+    )
+    assert with_door is True
 
 
 def test_garage_furniture_renders_below_the_general_threshold_but_above_its_own():

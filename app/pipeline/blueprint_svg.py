@@ -103,7 +103,9 @@ WINDOW_COLOR = (143, 175, 158)  # ~#8faf9e tertiary sage
 FURNITURE_COLOR = INK_SOFT  # softer than WALL_COLOR - visually secondary to structure
 
 
-def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dict, total_floors: int = 1) -> bytes:
+def render_floor_blueprint(
+    floor_number: int, rects: list[dict], dimensions: dict, total_floors: int = 1, facing: str | None = None
+) -> bytes:
     """rects: output of floor_layout.layout_floor - [{"name","x","y","w","h"}, ...]
     in the same real-world unit as dimensions. total_floors: the building's
     total floor count. When > 1, generate_house.py has already injected a
@@ -111,7 +113,15 @@ def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dic
     zone) - this function just draws the UP/DN stair symbol INSIDE that
     room like any other furniture (see _furnish_staircase()), it doesn't
     pick where the room goes. A single-storey building has no such room and
-    nothing is drawn. Returns PNG bytes."""
+    nothing is drawn.
+
+    facing (2026-09-19): the same "north"/"south"/"east"/"west" value
+    layout_floor() was given, used ONLY to draw a real front-entrance
+    opening on the matching exterior edge (see _front_door_opening()) - it
+    does not affect placement here at all (that already happened inside
+    layout_floor()). None/unrecognized draws no entrance, matching the
+    pre-2026-09-19 behavior exactly (backward-compatible for any caller
+    that doesn't pass it). Returns PNG bytes."""
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
     unit = dimensions.get("unit", "") or "units"
@@ -146,18 +156,19 @@ def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dic
     for rect in rects:
         _carve_room(draw, _room_bbox(rect, plot_x0, plot_y0, scale))
 
-    # The staircase's UP/DN direction (None on a single-storey building,
-    # where there's no "Staircase" room to begin with) - threaded into the
-    # furniture pass so _furnish_staircase() can draw the right arrow/label
-    # inside whichever rect is actually named "Staircase" (see
-    # floor_layout.py/generate_house.py for how that room gets reserved).
-    stair_direction = ("UP" if floor_number < total_floors else "DN") if total_floors > 1 else None
-    for rect in rects:
-        _draw_furniture(draw, rect, plot_x0, plot_y0, scale, small_font, stair_direction)
-
+    # Real door openings (post-suppression), computed BEFORE furniture is
+    # drawn - not because drawing order matters for the doors themselves,
+    # but because _draw_furniture() needs to know which of each room's
+    # walls actually have a door so it can avoid blocking one (see
+    # _room_door_walls()). The front entrance (2026-09-19, see
+    # _front_door_opening()) is collected into the SAME list so it's
+    # treated identically to an interior door for furniture-avoidance
+    # purposes, then drawn separately below (it's not between two rooms,
+    # so it can't go through the interior _draw_door() loop).
     door_len_px = max(10.0, min(26.0, 2.6 * scale))
     has_hallway = any(r["name"] == "Hallway" for r in rects)
     has_entry = any(classify_room_category(r["name"]) == "foyer" for r in rects)
+    interior_door_edges = []
     for a, b in combinations(rects, 2):
         edge = _shared_edge(a, b)
         if edge is None:
@@ -166,7 +177,26 @@ def render_floor_blueprint(floor_number: int, rects: list[dict], dimensions: dic
             continue
         if has_entry and _should_suppress_garage_direct_door(a, b):
             continue
+        interior_door_edges.append(edge)
+
+    facing_normalized = (facing or "").strip().lower()
+    front_door_edge = _front_door_opening(rects, length, width, facing_normalized)
+    all_door_edges = interior_door_edges + ([front_door_edge] if front_door_edge else [])
+
+    # The staircase's UP/DN direction (None on a single-storey building,
+    # where there's no "Staircase" room to begin with) - threaded into the
+    # furniture pass so _furnish_staircase() can draw the right arrow/label
+    # inside whichever rect is actually named "Staircase" (see
+    # floor_layout.py/generate_house.py for how that room gets reserved).
+    stair_direction = ("UP" if floor_number < total_floors else "DN") if total_floors > 1 else None
+    for rect in rects:
+        door_walls = _room_door_walls(rect, all_door_edges)
+        _draw_furniture(draw, rect, plot_x0, plot_y0, scale, small_font, stair_direction, door_walls)
+
+    for edge in interior_door_edges:
         _draw_door(draw, edge, plot_x0, plot_y0, scale, door_len_px)
+    if front_door_edge:
+        _draw_front_door(draw, front_door_edge, facing_normalized, plot_x0, plot_y0, scale, door_len_px, small_font)
 
     for rect in rects:
         _draw_windows(draw, rect, length, width, plot_x0, plot_y0, scale)
@@ -316,6 +346,99 @@ def _should_suppress_garage_direct_door(a: dict, b: dict) -> bool:
     return other_cat in _GARAGE_SUPPRESSED_NEIGHBORS
 
 
+# ---- Front entrance ----
+# Real gap fixed 2026-09-19 (user-reported): the door loop above only ever
+# draws doors between two ADJACENT ROOMS - nothing cut an opening in the
+# EXTERIOR plot boundary, so there was no main house entrance at all, and
+# the chosen N/S/E/W facing had no visible proof it was honored (it only
+# affected room placement, invisibly). layout_floor()'s own facing
+# convention (see its docstring) is: north front = low-y (top), south =
+# high-y (bottom), east = high-x (right), west = low-x (left) - the front
+# door lands on whichever real room touches that edge.
+_FACING_ORDER = ("north", "south", "east", "west")
+
+
+def _front_door_opening(rects: list[dict], length: float, width: float, facing: str | None) -> dict | None:
+    """Picks the exterior boundary edge matching `facing` and returns a
+    door-opening edge-dict of the SAME shape _shared_edge() returns
+    ({orientation, pos, start, end}), spanning whichever real room's own
+    span on that edge - so it can be drawn with the same door-drawing
+    geometry already used for interior doors (see _draw_front_door()).
+
+    Room selection prefers a real foyer/entry room if one touches the
+    facing edge, else any public-zone room, else whichever room has the
+    largest span on that edge (a defensive fallback - expected to rarely
+    matter, since generate_house.py already injects an Entry room whenever
+    a garage was requested, and the public zone is always placed on the
+    front edge by layout_floor()'s own front-to-back zoning).
+
+    Returns None when `facing` isn't a real value - matches this module's
+    existing "no signal, no mark" restraint (e.g. `_furnish_*`'s silent
+    skip for an unrecognized room name)."""
+    facing = (facing or "").strip().lower()
+    if facing not in _FACING_ORDER:
+        return None
+
+    if facing == "north":
+        orientation, pos = "horizontal", 0.0
+        candidates = [r for r in rects if abs(r["y"] - pos) < _EDGE_TOL]
+        span = lambda r: (r["x"], r["x"] + r["w"])
+    elif facing == "south":
+        orientation, pos = "horizontal", width
+        candidates = [r for r in rects if abs((r["y"] + r["h"]) - pos) < _EDGE_TOL]
+        span = lambda r: (r["x"], r["x"] + r["w"])
+    elif facing == "west":
+        orientation, pos = "vertical", 0.0
+        candidates = [r for r in rects if abs(r["x"] - pos) < _EDGE_TOL]
+        span = lambda r: (r["y"], r["y"] + r["h"])
+    else:  # east
+        orientation, pos = "vertical", length
+        candidates = [r for r in rects if abs((r["x"] + r["w"]) - pos) < _EDGE_TOL]
+        span = lambda r: (r["y"], r["y"] + r["h"])
+
+    if not candidates:
+        return None
+
+    foyers = [r for r in candidates if classify_room_category(r["name"]) == "foyer"]
+    public = [r for r in candidates if _zone_key(r["name"]) == 0]
+    pool = foyers or public or candidates
+    room = max(pool, key=lambda r: span(r)[1] - span(r)[0])
+
+    start, end = span(room)
+    return {"orientation": orientation, "pos": pos, "start": start, "end": end}
+
+
+def _room_door_walls(rect: dict, door_edges: list[dict]) -> set[str]:
+    """Returns which of a room's four walls ("top"/"bottom"/"left"/"right")
+    carry a real door opening - built from the SAME edge-dicts already used
+    to draw doors (interior, post-suppression, plus the front entrance), so
+    furniture placement (see _draw_furniture()) can avoid blocking a door
+    without duplicating any door-suppression logic. The overlap check
+    (edge start/end vs. this room's own span) guards against a coincidental
+    same-position wall on an unrelated, non-adjacent room."""
+    walls: set[str] = set()
+    for edge in door_edges:
+        if edge["orientation"] == "horizontal":
+            room_start, room_end = rect["x"], rect["x"] + rect["w"]
+            overlaps = edge["start"] < room_end - _EDGE_TOL and edge["end"] > room_start + _EDGE_TOL
+            if not overlaps:
+                continue
+            if abs(edge["pos"] - rect["y"]) < _EDGE_TOL:
+                walls.add("top")
+            if abs(edge["pos"] - (rect["y"] + rect["h"])) < _EDGE_TOL:
+                walls.add("bottom")
+        else:
+            room_start, room_end = rect["y"], rect["y"] + rect["h"]
+            overlaps = edge["start"] < room_end - _EDGE_TOL and edge["end"] > room_start + _EDGE_TOL
+            if not overlaps:
+                continue
+            if abs(edge["pos"] - rect["x"]) < _EDGE_TOL:
+                walls.add("left")
+            if abs(edge["pos"] - (rect["x"] + rect["w"])) < _EDGE_TOL:
+                walls.add("right")
+    return walls
+
+
 # Real bug hit and fixed via visual inspection (2026-09-02): the real
 # circulation corridor (see floor_layout.py) packs private-zone rooms in a
 # row, each spanning the row's FULL depth - so a shared side-wall between
@@ -367,6 +490,88 @@ def _draw_door(draw: ImageDraw.ImageDraw, edge: dict, plot_x0: float, plot_y0: f
         [hx - leaf_len_px, hy - leaf_len_px, hx + leaf_len_px, hy + leaf_len_px],
         start=0, end=90, fill=WALL_COLOR, width=1,
     )
+
+
+_FRONT_DOOR_LABEL_OFFSET_PX = 16
+
+
+def _draw_front_door(
+    draw: ImageDraw.ImageDraw,
+    edge: dict,
+    facing: str,
+    plot_x0: float,
+    plot_y0: float,
+    scale: float,
+    nominal_len_px: float,
+    font: ImageFont.FreeTypeFont,
+) -> None:
+    """Cuts a real opening through the EXTERIOR wall at `edge` - unlike
+    _draw_door(), which only ever cuts an INTERIOR partition back to
+    ROOM_FILL, this erases all the way through to PAPER (the same
+    exterior-band clearing _draw_windows() already uses), i.e. genuinely
+    open to the outside. Centered within the room's own span on that edge
+    (see _front_door_opening()), with the same leaf+arc symbol plus a small
+    "ENTRANCE" label on the interior side - the one visible proof the
+    chosen facing was actually honored, not just an invisible
+    room-placement side effect."""
+    seg_len_px = (edge["end"] - edge["start"]) * scale
+    leaf_len_px = min(nominal_len_px, seg_len_px * 0.7)
+    if leaf_len_px < 6:
+        return
+
+    mid_units = (edge["start"] + edge["end"]) / 2
+    gap_start_units = mid_units - (leaf_len_px / scale) / 2
+    erase_width = WALL_HALF_THICKNESS_PX + WALL_EXTERIOR_EXTRA_PX + 6
+
+    # Real bug caught via visual inspection (2026-09-19): _draw_door()'s
+    # fixed swing direction (leaf always opens toward +x/+y) is safe for an
+    # INTERIOR door, since both sides are real rooms either way - but for
+    # this EXTERIOR door, swinging outward means drawing the leaf/arc into
+    # the margin, OUTSIDE the house, for south and east facings (confirmed
+    # by rendering all 4 facings and inspecting each one directly, not just
+    # reasoned about). The leaf must always swing INWARD, and the arc's
+    # start/end angles (PIL: 0=+x, 90=+y, 180=-x, 270=-y) have to follow it
+    # to keep sweeping the correct 90-degree quarter between the erase
+    # direction and the open leaf.
+    # Real bug caught via visual inspection (2026-09-19): a FIXED 16px inward
+    # offset wasn't enough clearance - _draw_centered_text() centers the
+    # label ON that offset point, so roughly HALF the text still extended
+    # back toward (and visually onto/through) the wall band for east/south,
+    # where the text rendered on top of near-black WALL_COLOR pixels and
+    # read as "cut off" due to lost contrast, not literal clipping. The
+    # label's own half-width/half-height (whichever axis is perpendicular
+    # to the wall) - not a fixed pixel guess - is what actually determines
+    # safe clearance, and it must also clear the arc symbol's own radius
+    # (leaf_len_px) so the two don't visually collide either.
+    text_w, text_h = _text_dims(draw, "ENTRANCE", font)
+
+    if edge["orientation"] == "vertical":
+        hx = plot_x0 + edge["pos"] * scale
+        hy = plot_y0 + gap_start_units * scale
+        gap_end = (hx, hy + leaf_len_px)
+        inward = 1 if facing == "west" else -1
+        open_end = (hx + inward * leaf_len_px, hy)
+        arc_start, arc_end = (0, 90) if inward == 1 else (90, 180)
+        clearance = max(text_w / 2, leaf_len_px) + _FRONT_DOOR_LABEL_OFFSET_PX
+        label_xy = (hx + inward * clearance, hy + leaf_len_px / 2)
+    else:
+        hx = plot_x0 + gap_start_units * scale
+        hy = plot_y0 + edge["pos"] * scale
+        gap_end = (hx + leaf_len_px, hy)
+        inward = 1 if facing == "north" else -1
+        open_end = (hx, hy + inward * leaf_len_px)
+        arc_start, arc_end = (0, 90) if inward == 1 else (270, 360)
+        clearance = max(text_h / 2, leaf_len_px) + _FRONT_DOOR_LABEL_OFFSET_PX
+        label_xy = (hx + leaf_len_px / 2, hy + inward * clearance)
+
+    hinge = (hx, hy)
+    draw.line([hinge, gap_end], fill=PAPER, width=erase_width)
+    draw.line([hinge, open_end], fill=WALL_COLOR, width=1)
+    draw.arc(
+        [hx - leaf_len_px, hy - leaf_len_px, hx + leaf_len_px, hy + leaf_len_px],
+        start=arc_start, end=arc_end, fill=WALL_COLOR, width=1,
+    )
+    _draw_centered_text(draw, label_xy, "ENTRANCE", font, INK_SOFT)
 
 
 # ---- Windows ----
@@ -512,6 +717,18 @@ def _fit_room_name(
     return [" ".join(words[:best_split]), " ".join(words[best_split:])], min_font
 
 
+# Real walls each _furnish_* function's own shapes touch (traced directly
+# from that function's geometry, not guessed) - see _draw_furniture()'s own
+# comment for why this must be a per-type SET, not a single "top" constant.
+_WALL_ANCHORED_FURNITURE_WALLS = {
+    "kitchen": {"top", "right"},   # _furnish_kitchen: top counter run + right counter run
+    "living": {"top", "left"},     # _furnish_living: sofa back (top) + side arm (left)
+    "study": {"top"},              # _furnish_study: desk against the top wall
+    "laundry": {"top", "left"},    # _furnish_laundry: units packed into the top-left corner
+    "closet": {"top"},             # _furnish_closet: hanging rod along the top wall
+}
+
+
 def _draw_furniture(
     draw: ImageDraw.ImageDraw,
     rect: dict,
@@ -520,7 +737,9 @@ def _draw_furniture(
     scale: float,
     font: ImageFont.FreeTypeFont | None = None,
     stair_direction: str | None = None,
+    door_walls: set[str] | None = None,
 ) -> None:
+    door_walls = door_walls or set()
     x0, y0, x1, y1 = _room_bbox(rect, plot_x0, plot_y0, scale)
     box_w, box_h = x1 - x0, y1 - y0
     name = rect["name"].lower()
@@ -538,31 +757,108 @@ def _draw_furniture(
     ix0, iy0, ix1, iy1 = x0 + pad, y0 + pad, x1 - pad, y1 - pad
     iw, ih = ix1 - ix0, iy1 - iy0
 
+    # Real gap fixed 2026-09-19 (user-reported): furniture was drawn with no
+    # idea where doors were, so a bed/sofa/table could land directly in
+    # front of one. The bed gets a HARD rule (see _furnish_bedroom() - it
+    # must never anchor to a door wall); every other wall-anchored piece
+    # below gets a simpler, practical rule: skip drawing that room's whole
+    # furniture group when ANY wall its own shapes actually touch has a
+    # door, rather than trying to relocate individual pieces.
+    #
+    # _WALL_ANCHORED_FURNITURE_WALLS records the REAL walls each function's
+    # own geometry touches (read directly from each _furnish_* function
+    # below, not guessed) - a real bug caught via visual inspection: an
+    # earlier version of this check only ever looked at "top", but
+    # _furnish_living()'s side-arm rectangle also touches "left" and
+    # _furnish_kitchen()'s second counter run also touches "right" - a
+    # west-facing front door still visibly overlapped the living room's
+    # sofa/arm before this was corrected to check both walls. Bathroom/
+    # dining/garage/staircase aren't wall-anchored to a single side
+    # (already spread across corners or centered), so they're unaffected -
+    # a single door rarely fully blocks them the way it would a single
+    # wall-hugging piece.
     if "bath" in name or "wc" in name or "washroom" in name or "toilet" in name:
         _furnish_bathroom(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "bed" in name:
-        _furnish_bedroom(draw, ix0, iy0, ix1, iy1, iw, ih, cy)
+        _furnish_bedroom(draw, ix0, iy0, ix1, iy1, iw, ih, cy, door_walls)
     elif "kitchen" in name:
-        _furnish_kitchen(draw, ix0, iy0, ix1, iy1, iw, ih)
+        if not (door_walls & _WALL_ANCHORED_FURNITURE_WALLS["kitchen"]):
+            _furnish_kitchen(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "dining" in name:
         _furnish_dining(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif any(k in name for k in ("living", "lounge", "family", "drawing")):
-        _furnish_living(draw, ix0, iy0, ix1, iy1, iw, ih)
+        if not (door_walls & _WALL_ANCHORED_FURNITURE_WALLS["living"]):
+            _furnish_living(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "study" in name or "office" in name:
-        _furnish_study(draw, ix0, iy0, ix1, iy1, iw, ih)
+        if not (door_walls & _WALL_ANCHORED_FURNITURE_WALLS["study"]):
+            _furnish_study(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "garage" in name:
         _furnish_garage(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "laundry" in name or "utility" in name:
-        _furnish_laundry(draw, ix0, iy0, ix1, iy1, iw, ih)
+        if not (door_walls & _WALL_ANCHORED_FURNITURE_WALLS["laundry"]):
+            _furnish_laundry(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "closet" in name or "wardrobe" in name or "dressing" in name:
-        _furnish_closet(draw, ix0, iy0, ix1, iy1, iw, ih)
+        if not (door_walls & _WALL_ANCHORED_FURNITURE_WALLS["closet"]):
+            _furnish_closet(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "stair" in name and stair_direction and font is not None:
         _furnish_staircase(draw, ix0, iy0, ix1, iy1, iw, ih, stair_direction, font)
     # entry/foyer/hallway/storage/unrecognized: no furniture symbol
 
 
-def _furnish_bedroom(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, w: float, h: float, cy: float) -> None:
+def _furnish_bedroom(
+    draw: ImageDraw.ImageDraw,
+    x0: float, y0: float, x1: float, y1: float, w: float, h: float, cy: float,
+    door_walls: set[str] | None = None,
+) -> None:
+    """Bed placement carries a HARD rule (2026-09-19, real user report: a
+    bed was drawn directly in front of a door): the bed must NEVER anchor
+    to a wall that has a door opening on it - blocking the one way in/out
+    of a bedroom is the worst case of the "furniture blocks the door" bug.
+
+    The bed is bottom-anchored by default (the original, well-tested
+    geometry below). If the bottom wall has a door, the WHOLE bed -
+    pillows, blanket line, nightstand, wardrobe - flips to anchor against
+    the top wall instead, as long as the top wall is itself door-free (a
+    straight vertical mirror of the same shapes, so none of the individual
+    proportions change). If BOTH bottom and top have doors (a real edge
+    case - a room with 3+ doors), there's no flip left that helps, so this
+    falls back to the bottom anchor anyway, since drawing no bed at all
+    would be worse. Doors on the LEFT/RIGHT walls don't conflict with this
+    bed's footprint (already padded off those walls by construction) - a
+    known, accepted simplification, not a rotation to all 4 walls."""
+    door_walls = door_walls or set()
     bed_w, bed_h = w * 0.42, h * 0.42
+
+    if "bottom" in door_walls and "top" not in door_walls:
+        # Mirrored: touched wall is the TOP (y0) instead of the bottom -
+        # every offset below is the vertical mirror of the bottom-anchored
+        # branch, keeping the same "pillows/nightstand near the head end,
+        # away from the touched wall" convention.
+        label_ceiling = cy - _LABEL_CLEARANCE_PX
+        if y0 + bed_h > label_ceiling:
+            bed_h = label_ceiling - y0
+        if bed_h < h * 0.2:
+            return  # too little vertical room left above the label to draw a legible bed
+        bx0, by0, bx1, by1 = x0, y0, x0 + bed_w, y0 + bed_h
+        draw.rectangle([bx0, by0, bx1, by1], outline=FURNITURE_COLOR, width=1)
+        pillow_h = bed_h * 0.18
+        pillow_gap = bed_w * 0.06
+        pillow_w = (bed_w - 3 * pillow_gap) / 2
+        for i in range(2):
+            px0 = bx0 + pillow_gap + i * (pillow_w + pillow_gap)
+            draw.rounded_rectangle(
+                [px0, by1 - bed_h * 0.06 - pillow_h, px0 + pillow_w, by1 - bed_h * 0.06],
+                radius=min(pillow_w, pillow_h) * 0.3, outline=FURNITURE_COLOR, width=1,
+            )
+        draw.line([(bx0, by1 - bed_h * 0.7), (bx1, by1 - bed_h * 0.7)], fill=FURNITURE_COLOR, width=1)
+        nightstand = min(w, h) * 0.12
+        if bx1 + nightstand + 4 <= x1:
+            draw.rectangle([bx1 + 4, by1 - nightstand, bx1 + 4 + nightstand, by1], outline=FURNITURE_COLOR, width=1)
+        wardrobe_w = w * 0.32
+        if y1 - h * 0.14 > cy + _LABEL_CLEARANCE_PX:  # skip if it would reach into the label's lower band
+            draw.rectangle([x1 - wardrobe_w, y1 - h * 0.14, x1, y1], outline=FURNITURE_COLOR, width=1)
+        return
+
     by0 = y1 - bed_h
     # Real overlap hit and fixed via an actual rendered test (a bed's pillow
     # line crossed straight through the label text) - a proportional-only

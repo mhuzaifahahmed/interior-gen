@@ -167,3 +167,54 @@ def test_render_floor_blueprint_dxf_insunits_reflects_the_stated_unit():
 
     assert ft_doc.header["$INSUNITS"] == 2
     assert m_doc.header["$INSUNITS"] == 6
+
+
+def test_render_floor_blueprint_dxf_draws_a_front_entrance_when_facing_given():
+    # 2026-09-19: without `facing`, the exterior boundary only ever gets
+    # window gaps - no entrance at all (matches blueprint_svg.py's own real
+    # gap fixed the same day). With a real facing, exactly one exterior
+    # wall segment on the matching edge gets a real DOOR gap instead.
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    rooms = [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]
+    rects = layout_floor(rooms, dimensions, facing="north")
+
+    without_facing = _parse(render_floor_blueprint_dxf(1, rects, dimensions))
+    door_arcs_without = [a for a in without_facing.modelspace().query("ARC") if a.dxf.layer == "DOORS"]
+
+    with_facing = _parse(render_floor_blueprint_dxf(1, rects, dimensions, facing="north"))
+    door_arcs_with = [a for a in with_facing.modelspace().query("ARC") if a.dxf.layer == "DOORS"]
+
+    # A real, new door arc on the y=0 (north/front) boundary line.
+    front_door_arcs = [a for a in door_arcs_with if round(a.dxf.center.y, 3) == 0.0]
+    assert len(front_door_arcs) >= 1
+    assert len(door_arcs_with) > len(door_arcs_without)
+
+
+def test_render_floor_blueprint_dxf_front_entrance_moves_with_facing():
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    rooms = [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]
+
+    north_rects = layout_floor(rooms, dimensions, facing="north")
+    north_doc = _parse(render_floor_blueprint_dxf(1, north_rects, dimensions, facing="north"))
+    north_front_doors = [
+        a for a in north_doc.modelspace().query("ARC") if a.dxf.layer == "DOORS" and round(a.dxf.center.y, 3) == 0.0
+    ]
+
+    south_rects = layout_floor(rooms, dimensions, facing="south")
+    south_doc = _parse(render_floor_blueprint_dxf(1, south_rects, dimensions, facing="south"))
+    south_front_doors = [
+        a
+        for a in south_doc.modelspace().query("ARC")
+        if a.dxf.layer == "DOORS" and round(a.dxf.center.y, 3) == round(dimensions["width"], 3)
+    ]
+
+    assert len(north_front_doors) >= 1
+    assert len(south_front_doors) >= 1
+
+
+def test_render_floor_blueprint_dxf_still_valid_with_facing():
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    rects = layout_floor([{"name": "Living Room", "area": 1}], dimensions, facing="west")
+    doc = _parse(render_floor_blueprint_dxf(1, rects, dimensions, facing="west"))
+    audit_result = doc.audit()
+    assert len(audit_result.errors) == 0

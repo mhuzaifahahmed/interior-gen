@@ -43,7 +43,7 @@ from itertools import combinations
 import ezdxf
 from ezdxf.enums import TextEntityAlignment
 
-from app.pipeline.blueprint_svg import _shared_edge, _should_suppress_direct_door
+from app.pipeline.blueprint_svg import _front_door_opening, _shared_edge, _should_suppress_direct_door
 from app.pipeline.room_specs import to_plot_unit
 
 # DXF's $INSUNITS header field - only the two units this app's dimension
@@ -67,11 +67,19 @@ WINDOW_WIDTH_M = 1.2  # a reasonable default window width (~4ft)
 _EDGE_TOL = 1e-4
 
 
-def render_floor_blueprint_dxf(floor_number: int, rects: list[dict], dimensions: dict) -> bytes:
+def render_floor_blueprint_dxf(
+    floor_number: int, rects: list[dict], dimensions: dict, facing: str | None = None
+) -> bytes:
     """rects: output of floor_layout.layout_floor - [{"name","x","y","w","h"}, ...]
-    in the same real-world unit as dimensions. Returns DXF file bytes
-    (UTF-8 encoded ASCII DXF, R2010 format - broadly compatible with modern
-    AutoCAD and every major CAD viewer)."""
+    in the same real-world unit as dimensions. facing (2026-09-19): same
+    value passed to blueprint_svg.render_floor_blueprint() - when given, the
+    ONE exterior wall segment matching the front entrance (see
+    blueprint_svg._front_door_opening(), reused here directly so the PNG
+    and the DXF can never disagree about where the entrance is) gets a real
+    DOOR gap instead of a window, on the DOORS layer. None/unrecognized
+    draws no entrance, same as before this param existed. Returns DXF file
+    bytes (UTF-8 encoded ASCII DXF, R2010 format - broadly compatible with
+    modern AutoCAD and every major CAD viewer)."""
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
     unit = dimensions.get("unit", "") or ""
@@ -79,6 +87,7 @@ def render_floor_blueprint_dxf(floor_number: int, rects: list[dict], dimensions:
     wall_thickness = to_plot_unit(WALL_THICKNESS_M, unit)
     door_width = to_plot_unit(DOOR_WIDTH_M, unit)
     window_width = to_plot_unit(WINDOW_WIDTH_M, unit)
+    front_door_edge = _front_door_opening(rects, length, width, facing)
 
     doc = ezdxf.new(dxfversion="R2010")
     doc.header["$INSUNITS"] = _INSUNITS_BY_UNIT.get(unit, 0)
@@ -102,8 +111,11 @@ def render_floor_blueprint_dxf(floor_number: int, rects: list[dict], dimensions:
     # Exterior walls (with real window gaps) - one pass per room, only for
     # edges that actually lie on the plot boundary, so no segment is ever
     # drawn twice.
+    facing_normalized = (facing or "").strip().lower()
     for rect in rects:
-        _draw_exterior_walls_for_room(msp, rect, length, width, wall_thickness, window_width)
+        _draw_exterior_walls_for_room(
+            msp, rect, length, width, wall_thickness, window_width, door_width, front_door_edge, facing_normalized
+        )
 
     # Interior walls (with real door gaps where a door isn't suppressed) -
     # one pass per unique adjacent room PAIR (combinations never repeats a
@@ -162,19 +174,63 @@ def _draw_interior_wall(msp, edge: dict, wall_thickness: float, door_width: floa
         _draw_door_symbol(msp, orientation, pos, gap[0], gap[1])
 
 
+def _matches_front_door(
+    front_door_edge: dict | None, orientation: str, pos: float, start: float, end: float
+) -> bool:
+    """True when this exterior wall segment is the one carrying the front
+    entrance (same edge blueprint_svg.render_floor_blueprint() drew it on -
+    both call the identical _front_door_opening(), so the PNG and the DXF
+    can never disagree here)."""
+    if front_door_edge is None:
+        return False
+    if front_door_edge["orientation"] != orientation or abs(front_door_edge["pos"] - pos) > _EDGE_TOL:
+        return False
+    return front_door_edge["start"] < end - _EDGE_TOL and front_door_edge["end"] > start + _EDGE_TOL
+
+
 def _draw_exterior_walls_for_room(
-    msp, rect: dict, length: float, width: float, wall_thickness: float, window_width: float
+    msp,
+    rect: dict,
+    length: float,
+    width: float,
+    wall_thickness: float,
+    window_width: float,
+    door_width: float | None = None,
+    front_door_edge: dict | None = None,
+    facing: str = "",
 ) -> None:
     x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
 
     if abs(x) < _EDGE_TOL:
-        _draw_exterior_segment(msp, "vertical", 0.0, y, y + h, wall_thickness, window_width)
+        if door_width is not None and _matches_front_door(front_door_edge, "vertical", 0.0, y, y + h):
+            inward = 1 if facing == "west" else -1
+            _draw_exterior_segment_with_front_door(msp, "vertical", 0.0, y, y + h, wall_thickness, door_width, inward)
+        else:
+            _draw_exterior_segment(msp, "vertical", 0.0, y, y + h, wall_thickness, window_width)
     if abs((x + w) - length) < _EDGE_TOL:
-        _draw_exterior_segment(msp, "vertical", length, y, y + h, wall_thickness, window_width)
+        if door_width is not None and _matches_front_door(front_door_edge, "vertical", length, y, y + h):
+            inward = 1 if facing == "west" else -1
+            _draw_exterior_segment_with_front_door(
+                msp, "vertical", length, y, y + h, wall_thickness, door_width, inward
+            )
+        else:
+            _draw_exterior_segment(msp, "vertical", length, y, y + h, wall_thickness, window_width)
     if abs(y) < _EDGE_TOL:
-        _draw_exterior_segment(msp, "horizontal", 0.0, x, x + w, wall_thickness, window_width)
+        if door_width is not None and _matches_front_door(front_door_edge, "horizontal", 0.0, x, x + w):
+            inward = 1 if facing == "north" else -1
+            _draw_exterior_segment_with_front_door(
+                msp, "horizontal", 0.0, x, x + w, wall_thickness, door_width, inward
+            )
+        else:
+            _draw_exterior_segment(msp, "horizontal", 0.0, x, x + w, wall_thickness, window_width)
     if abs((y + h) - width) < _EDGE_TOL:
-        _draw_exterior_segment(msp, "horizontal", width, x, x + w, wall_thickness, window_width)
+        if door_width is not None and _matches_front_door(front_door_edge, "horizontal", width, x, x + w):
+            inward = 1 if facing == "north" else -1
+            _draw_exterior_segment_with_front_door(
+                msp, "horizontal", width, x, x + w, wall_thickness, door_width, inward
+            )
+        else:
+            _draw_exterior_segment(msp, "horizontal", width, x, x + w, wall_thickness, window_width)
 
 
 def _draw_exterior_segment(
@@ -193,6 +249,35 @@ def _draw_exterior_segment(
     _draw_wall_segment(msp, orientation, pos, start, gap_start, wall_thickness)
     _draw_wall_segment(msp, orientation, pos, gap_end, end, wall_thickness)
     _draw_window_symbol(msp, orientation, pos, gap_start, gap_end)
+
+
+def _draw_exterior_segment_with_front_door(
+    msp,
+    orientation: str,
+    pos: float,
+    start: float,
+    end: float,
+    wall_thickness: float,
+    door_width: float,
+    inward: int,
+) -> None:
+    """Same shape as _draw_exterior_segment(), but cuts a real DOOR opening
+    (on the DOORS layer) instead of a window - used for the one exterior
+    wall segment carrying the front entrance. Uses _draw_front_door_symbol()
+    (NOT the plain _draw_door_symbol() interior doors use) - see that
+    function's docstring for why an exterior door needs to know which
+    direction is actually inward."""
+    seg_len = end - start
+    door_len = min(door_width, seg_len * 0.7, seg_len - 0.2)
+    if door_len <= 0.3:
+        _draw_wall_segment(msp, orientation, pos, start, end, wall_thickness)
+        return
+
+    mid = (start + end) / 2
+    gap_start, gap_end = mid - door_len / 2, mid + door_len / 2
+    _draw_wall_segment(msp, orientation, pos, start, gap_start, wall_thickness)
+    _draw_wall_segment(msp, orientation, pos, gap_end, end, wall_thickness)
+    _draw_front_door_symbol(msp, orientation, pos, gap_start, gap_end, inward)
 
 
 def _draw_door_symbol(msp, orientation: str, pos: float, gap_start: float, gap_end: float) -> None:
@@ -214,6 +299,41 @@ def _draw_door_symbol(msp, orientation: str, pos: float, gap_start: float, gap_e
         radius=leaf_len,
         start_angle=0 if orientation == "vertical" else 90,
         end_angle=90 if orientation == "vertical" else 180,
+        dxfattribs={"layer": "DOORS"},
+    )
+
+
+def _draw_front_door_symbol(
+    msp, orientation: str, pos: float, gap_start: float, gap_end: float, inward: int
+) -> None:
+    """Same leaf+arc convention as _draw_door_symbol(), but the leaf swings
+    INWARD (a real, deterministic direction) instead of _draw_door_symbol()'s
+    fixed +x/+y convention. That fixed convention is only safe for an
+    INTERIOR door (real room space on both sides either way) - real bug
+    caught via visual inspection of the equivalent PNG symbol
+    (blueprint_svg._draw_front_door()): for an EXTERIOR door, always
+    swinging +x/+y draws the leaf OUTSIDE the house for south/east facings.
+
+    inward=1 reproduces _draw_door_symbol()'s exact original geometry
+    (verified point-for-point: leaf_end and the arc's swept angles are
+    identical). inward=-1 is a geometric REFLECTION of that same symbol
+    across the axis perpendicular to the wall (negate the one coordinate
+    that changes, and correspondingly reflect the arc's angle range) - not
+    a different, re-derived shape, so it carries the same "legible mark, not
+    construction-grade" fidelity as the original in both directions."""
+    leaf_len = gap_end - gap_start
+    if orientation == "vertical":
+        hinge = (pos, gap_start)
+        leaf_end = (pos + inward * leaf_len, gap_start)
+        start_angle, end_angle = (0, 90) if inward == 1 else (90, 180)
+    else:
+        hinge = (gap_start, pos)
+        leaf_end = (gap_start, pos + inward * leaf_len)
+        start_angle, end_angle = (90, 180) if inward == 1 else (180, 270)
+
+    msp.add_line(hinge, leaf_end, dxfattribs={"layer": "DOORS"})
+    msp.add_arc(
+        center=hinge, radius=leaf_len, start_angle=start_angle, end_angle=end_angle,
         dxfattribs={"layer": "DOORS"},
     )
 

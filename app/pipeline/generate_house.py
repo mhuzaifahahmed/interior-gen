@@ -557,7 +557,7 @@ def run_house_pipeline(
                     for floor in room_layout["floors"]:
                         rects = layout_floor(floor["rooms"], building_dimensions, garage_cars, facing)
                         png_bytes = render_floor_blueprint(
-                            floor["floor_number"], rects, building_dimensions, total_floors
+                            floor["floor_number"], rects, building_dimensions, total_floors, facing
                         )
                         key = f"{key_prefix}/{house_project_id}/blueprint_floor{floor['floor_number']}.png"
                         storage.put(key, png_bytes, content_type="image/png")
@@ -568,7 +568,9 @@ def run_house_pipeline(
                         # DXF-serialization bug can never take down the PNG
                         # blueprint (which the render step below depends on).
                         try:
-                            dxf_bytes = render_floor_blueprint_dxf(floor["floor_number"], rects, building_dimensions)
+                            dxf_bytes = render_floor_blueprint_dxf(
+                                floor["floor_number"], rects, building_dimensions, facing
+                            )
                             dxf_key = f"{key_prefix}/{house_project_id}/blueprint_floor{floor['floor_number']}.dxf"
                             storage.put(dxf_key, dxf_bytes, content_type="application/dxf")
                             blueprint_dxf_keys.append(dxf_key)

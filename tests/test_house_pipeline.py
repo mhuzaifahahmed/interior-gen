@@ -1155,6 +1155,48 @@ def test_run_house_pipeline_honors_an_explicit_facing_selection(monkeypatch):
     assert captured_facings == ["east"]
 
 
+def test_run_house_pipeline_passes_facing_to_blueprint_and_dxf_renderers(monkeypatch):
+    # 2026-09-19: facing must reach render_floor_blueprint()/
+    # render_floor_blueprint_dxf() too, not just layout_floor() - without
+    # this, the deterministic renderers would never draw the real front
+    # entrance blueprint_svg._front_door_opening() computes.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hfacing3/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hfacing3", status="queued", plot_image_key="hfacing3/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    captured_blueprint_facings = []
+    real_render_floor_blueprint = generate_house_module.render_floor_blueprint
+
+    def spy_render_floor_blueprint(floor_number, rects, dimensions, total_floors=1, facing=None):
+        captured_blueprint_facings.append(facing)
+        return real_render_floor_blueprint(floor_number, rects, dimensions, total_floors, facing)
+
+    captured_dxf_facings = []
+    real_render_floor_blueprint_dxf = generate_house_module.render_floor_blueprint_dxf
+
+    def spy_render_floor_blueprint_dxf(floor_number, rects, dimensions, facing=None):
+        captured_dxf_facings.append(facing)
+        return real_render_floor_blueprint_dxf(floor_number, rects, dimensions, facing)
+
+    monkeypatch.setattr(generate_house_module, "render_floor_blueprint", spy_render_floor_blueprint)
+    monkeypatch.setattr(generate_house_module, "render_floor_blueprint_dxf", spy_render_floor_blueprint_dxf)
+
+    provider = FakeProvider()
+    run_house_pipeline(
+        "hfacing3", provider, storage, {"length": 40, "width": 60, "unit": "ft"}, facing_input="West"
+    )
+
+    assert captured_blueprint_facings == ["west"]
+    assert captured_dxf_facings == ["west"]
+
+
 def test_run_house_pipeline_does_not_wait_for_floor_plan_before_completing(monkeypatch):
     # v11 (2026-09-01): real regression guard for the decoupling - a live
     # Kaggle Concept Layout call was measured at ~2min/floor, and the whole

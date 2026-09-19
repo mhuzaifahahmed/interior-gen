@@ -55,6 +55,7 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw
 
+from app.pipeline.blueprint_svg import _front_door_opening
 from app.pipeline.room_specs import classify_room_category
 
 CANVAS_SIZE = 1024
@@ -232,11 +233,71 @@ def plot_to_canvas_box(
     return x0, y0, box_w, box_h
 
 
+def _draw_plot_boundary(
+    draw: ImageDraw.ImageDraw,
+    x0: float, y0: float, x1: float, y1: float,
+    length: float, width: float,
+    scale_x: float, scale_y: float,
+    front_door_edge: dict | None,
+) -> None:
+    """Draws the plot's outer boundary as 4 separate line segments instead
+    of one closed rectangle, so a gap can be cut for the front entrance
+    (2026-09-19) when `facing` was given - reuses blueprint_svg.
+    _front_door_opening() directly, so this edge map, the PNG blueprint,
+    and the real DXF export can never disagree about where the entrance
+    is. Without this gap the AI Concept Layout model would trace a fully
+    closed boundary and never see the entrance at all, regardless of what
+    the deterministic renderers show."""
+
+    def gap_on(orientation: str, pos: float) -> tuple[float, float] | None:
+        if front_door_edge is None:
+            return None
+        if front_door_edge["orientation"] != orientation or abs(front_door_edge["pos"] - pos) > 1e-4:
+            return None
+        return front_door_edge["start"], front_door_edge["end"]
+
+    top_gap = gap_on("horizontal", 0.0)
+    if top_gap is None:
+        draw.line([(x0, y0), (x1, y0)], fill=255, width=LINE_WIDTH_PX)
+    else:
+        gx0, gx1 = x0 + top_gap[0] * scale_x, x0 + top_gap[1] * scale_x
+        draw.line([(x0, y0), (gx0, y0)], fill=255, width=LINE_WIDTH_PX)
+        draw.line([(gx1, y0), (x1, y0)], fill=255, width=LINE_WIDTH_PX)
+
+    bottom_gap = gap_on("horizontal", width)
+    if bottom_gap is None:
+        draw.line([(x0, y1), (x1, y1)], fill=255, width=LINE_WIDTH_PX)
+    else:
+        gx0, gx1 = x0 + bottom_gap[0] * scale_x, x0 + bottom_gap[1] * scale_x
+        draw.line([(x0, y1), (gx0, y1)], fill=255, width=LINE_WIDTH_PX)
+        draw.line([(gx1, y1), (x1, y1)], fill=255, width=LINE_WIDTH_PX)
+
+    left_gap = gap_on("vertical", 0.0)
+    if left_gap is None:
+        draw.line([(x0, y0), (x0, y1)], fill=255, width=LINE_WIDTH_PX)
+    else:
+        gy0, gy1 = y0 + left_gap[0] * scale_y, y0 + left_gap[1] * scale_y
+        draw.line([(x0, y0), (x0, gy0)], fill=255, width=LINE_WIDTH_PX)
+        draw.line([(x0, gy1), (x0, y1)], fill=255, width=LINE_WIDTH_PX)
+
+    right_gap = gap_on("vertical", length)
+    if right_gap is None:
+        draw.line([(x1, y0), (x1, y1)], fill=255, width=LINE_WIDTH_PX)
+    else:
+        gy0, gy1 = y0 + right_gap[0] * scale_y, y0 + right_gap[1] * scale_y
+        draw.line([(x1, y0), (x1, gy0)], fill=255, width=LINE_WIDTH_PX)
+        draw.line([(x1, gy1), (x1, y1)], fill=255, width=LINE_WIDTH_PX)
+
+
 def render_conditioning_edge_map(
-    rects: list[dict], dimensions: dict, canvas_size: int = CANVAS_SIZE
+    rects: list[dict], dimensions: dict, canvas_size: int = CANVAS_SIZE, facing: str | None = None
 ) -> bytes:
     """rects: layout_floor() output ([{"name","x","y","w","h"}, ...] in real
-    length/width units). dimensions: {"length","width","unit"}.
+    length/width units). dimensions: {"length","width","unit"}. facing
+    (2026-09-19): the same value passed to layout_floor() for this
+    room_layout - when given, cuts a real gap for the front entrance in the
+    boundary edge map (see _draw_plot_boundary()). None/unrecognized draws
+    a fully closed boundary, same as before this param existed.
 
     Returns PNG bytes: a black canvas with the plot boundary + every room's
     wall outline drawn as thin white lines, plus a simple per-room-type
@@ -259,7 +320,8 @@ def render_conditioning_edge_map(
         return (x0 + px * scale_x, y0 + py * scale_y)
 
     x1, y1 = to_canvas(length, width)
-    draw.rectangle([x0, y0, x1, y1], outline=255, width=LINE_WIDTH_PX)
+    front_door_edge = _front_door_opening(rects, length, width, facing)
+    _draw_plot_boundary(draw, x0, y0, x1, y1, length, width, scale_x, scale_y, front_door_edge)
 
     for rect in rects:
         rx0, ry0 = to_canvas(rect["x"], rect["y"])
