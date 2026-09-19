@@ -137,6 +137,34 @@ def test_render_floor_blueprint_dxf_draws_windows_on_exterior_walls():
     assert len(window_lines) > 0
 
 
+def test_render_floor_blueprint_dxf_living_room_gets_a_larger_window():
+    # 2026-09-19, real user request: mirrors blueprint_svg.py's living-room
+    # picture-window cap - the .dxf export must not disagree with the PNG
+    # about how wide a living-room window is.
+    dimensions = {"length": 60, "width": 40, "unit": "ft"}
+    rects = [
+        {"name": "Living Room", "x": 0, "y": 0, "w": 30, "h": 40},
+        {"name": "Bedroom 1", "x": 30, "y": 0, "w": 30, "h": 40},
+    ]
+
+    doc = _parse(render_floor_blueprint_dxf(1, rects, dimensions))
+    msp = doc.modelspace()
+    window_lines = [line for line in msp.query("LINE") if line.dxf.layer == "WINDOWS"]
+
+    def _line_length(line):
+        start, end = line.dxf.start, line.dxf.end
+        return ((start.x - end.x) ** 2 + (start.y - end.y) ** 2) ** 0.5
+
+    # Living Room's exterior edges are x=0 (left) and y=0/y=40 (top/bottom);
+    # Bedroom 1's exterior edges are x=60 (right) and y=0/y=40 - pick out
+    # each room's own window lines by which edge they sit on.
+    living_lengths = [_line_length(l) for l in window_lines if abs(l.dxf.start.x) < 1e-3 or l.dxf.start.x < 30]
+    bedroom_lengths = [_line_length(l) for l in window_lines if abs(l.dxf.start.x - 60) < 1e-3]
+
+    assert living_lengths and bedroom_lengths
+    assert max(living_lengths) > max(bedroom_lengths)
+
+
 def test_render_floor_blueprint_dxf_room_labels_include_name_and_dimensions():
     dimensions = {"length": 40, "width": 60, "unit": "ft"}
     rects = layout_floor([{"name": "Sunroom", "area": 1}], dimensions)

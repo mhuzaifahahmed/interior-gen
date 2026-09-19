@@ -60,7 +60,7 @@ from itertools import combinations
 from PIL import Image, ImageDraw, ImageFont
 
 from app.pipeline.floor_layout import _zone_key
-from app.pipeline.room_specs import classify_room_category
+from app.pipeline.room_specs import classify_room_category, to_plot_unit
 
 # ---- Canvas layout ----
 TARGET_PLOT_LONGEST_SIDE_PX = 780
@@ -100,6 +100,24 @@ INK_SOFT = (110, 108, 92)      # ~#6e6c5c on-surface-variant
 WALL_COLOR = INK
 DIM_LINE_COLOR = INK_SOFT
 WINDOW_COLOR = (143, 175, 158)  # ~#8faf9e tertiary sage
+
+# A real, absolute cap on window length (2026-09-19, real user report: on a
+# large house the proportional-only sizing below produced windows dozens of
+# feet wide - big enough to read as an unexplained gap/extra entrance in the
+# exterior wall rather than a window). A real residential window is a few
+# feet wide regardless of how big the room behind it is - capping here keeps
+# every window recognizably window-sized at any plot scale, while the
+# proportional/min-length logic below still applies for genuinely small
+# rooms whose exterior edge is shorter than this cap. Matches
+# blueprint_dxf.py's own WINDOW_WIDTH_M (~4ft) so the PNG blueprint and the
+# real .dxf export never disagree about how wide a window looks.
+WINDOW_MAX_LENGTH_M = 1.2
+
+# The living room gets a real, larger "picture window" cap instead of the
+# generic residential window size above (2026-09-19, real user request) -
+# a wide living-room window/window-wall is a genuine, common architectural
+# feature, not an oversight the generic cap should also apply to.
+WINDOW_MAX_LENGTH_LIVING_M = 2.4
 FURNITURE_COLOR = INK_SOFT  # softer than WALL_COLOR - visually secondary to structure
 
 
@@ -199,7 +217,7 @@ def render_floor_blueprint(
         _draw_front_door(draw, front_door_edge, facing_normalized, plot_x0, plot_y0, scale, door_len_px, small_font)
 
     for rect in rects:
-        _draw_windows(draw, rect, length, width, plot_x0, plot_y0, scale)
+        _draw_windows(draw, rect, length, width, plot_x0, plot_y0, scale, unit)
 
     for rect in rects:
         _draw_room_label(draw, rect, plot_x0, plot_y0, scale, unit, label_font, small_font)
@@ -577,12 +595,29 @@ def _draw_front_door(
 # ---- Windows ----
 
 
-def _draw_windows(draw: ImageDraw.ImageDraw, rect: dict, plot_length: float, plot_width: float, plot_x0: float, plot_y0: float, scale: float) -> None:
+def _draw_windows(
+    draw: ImageDraw.ImageDraw,
+    rect: dict,
+    plot_length: float,
+    plot_width: float,
+    plot_x0: float,
+    plot_y0: float,
+    scale: float,
+    unit: str = "ft",
+) -> None:
     """Marks a window on each of the room's edges that lie on the exterior
     plot boundary - cuts straight through the solid exterior wall band (back
     to PAPER, i.e. genuinely open to the outside, not just a color change)
-    with a colored glazing line centered on the cut."""
+    with a colored glazing line centered on the cut. Length is capped at
+    WINDOW_MAX_LENGTH_M regardless of room size (see that constant's
+    docstring) - without the cap, a large room's window scaled proportionally
+    could become dozens of feet wide, reading as an unexplained gap in the
+    wall rather than a window. The living room uses the larger
+    WINDOW_MAX_LENGTH_LIVING_M cap instead - a real, wider "picture window"
+    is a genuine architectural feature for that room type specifically."""
     x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
+    is_living = classify_room_category(rect.get("name") or "") == "living"
+    max_win_units = to_plot_unit(WINDOW_MAX_LENGTH_LIVING_M if is_living else WINDOW_MAX_LENGTH_M, unit)
     edges = []
     if abs(x) < _EDGE_TOL:
         edges.append(("left", y, y + h))
@@ -595,7 +630,7 @@ def _draw_windows(draw: ImageDraw.ImageDraw, rect: dict, plot_length: float, plo
 
     for side, start_units, end_units in edges:
         seg_len_units = end_units - start_units
-        win_len_units = min(seg_len_units * 0.4, seg_len_units - 0.2)
+        win_len_units = min(seg_len_units * 0.4, seg_len_units - 0.2, max_win_units)
         if win_len_units <= 0.3:
             continue
         mid = (start_units + end_units) / 2
@@ -832,8 +867,9 @@ def _furnish_bedroom(
     if "bottom" in door_walls and "top" not in door_walls:
         # Mirrored: touched wall is the TOP (y0) instead of the bottom -
         # every offset below is the vertical mirror of the bottom-anchored
-        # branch, keeping the same "pillows/nightstand near the head end,
-        # away from the touched wall" convention.
+        # branch, keeping the "head (pillows/nightstand) against the touched
+        # wall, foot (blanket) toward the room interior" convention (fixed
+        # 2026-09-19 - both branches previously had this backwards).
         label_ceiling = cy - _LABEL_CLEARANCE_PX
         if y0 + bed_h > label_ceiling:
             bed_h = label_ceiling - y0
@@ -847,13 +883,13 @@ def _furnish_bedroom(
         for i in range(2):
             px0 = bx0 + pillow_gap + i * (pillow_w + pillow_gap)
             draw.rounded_rectangle(
-                [px0, by1 - bed_h * 0.06 - pillow_h, px0 + pillow_w, by1 - bed_h * 0.06],
+                [px0, by0 + bed_h * 0.06, px0 + pillow_w, by0 + bed_h * 0.06 + pillow_h],
                 radius=min(pillow_w, pillow_h) * 0.3, outline=FURNITURE_COLOR, width=1,
             )
-        draw.line([(bx0, by1 - bed_h * 0.7), (bx1, by1 - bed_h * 0.7)], fill=FURNITURE_COLOR, width=1)
+        draw.line([(bx0, by0 + bed_h * 0.7), (bx1, by0 + bed_h * 0.7)], fill=FURNITURE_COLOR, width=1)
         nightstand = min(w, h) * 0.12
         if bx1 + nightstand + 4 <= x1:
-            draw.rectangle([bx1 + 4, by1 - nightstand, bx1 + 4 + nightstand, by1], outline=FURNITURE_COLOR, width=1)
+            draw.rectangle([bx1 + 4, by0, bx1 + 4 + nightstand, by0 + nightstand], outline=FURNITURE_COLOR, width=1)
         wardrobe_w = w * 0.32
         if y1 - h * 0.14 > cy + _LABEL_CLEARANCE_PX:  # skip if it would reach into the label's lower band
             draw.rectangle([x1 - wardrobe_w, y1 - h * 0.14, x1, y1], outline=FURNITURE_COLOR, width=1)
@@ -873,22 +909,26 @@ def _furnish_bedroom(
     draw.rectangle([bx0, by0, bx1, by1], outline=FURNITURE_COLOR, width=1)
     # Two pillows (rounded rectangles, side by side) instead of a plain
     # pillow line - reads as an actual made bed, not just a labeled box.
+    # Head (pillows) against the touched wall (by1, the bottom wall here),
+    # foot (blanket, below) toward the room interior (by0) - fixed
+    # 2026-09-19, real user report the bed was drawn upside down.
     pillow_h = bed_h * 0.18
     pillow_gap = bed_w * 0.06
     pillow_w = (bed_w - 3 * pillow_gap) / 2
     for i in range(2):
         px0 = bx0 + pillow_gap + i * (pillow_w + pillow_gap)
         draw.rounded_rectangle(
-            [px0, by0 + bed_h * 0.06, px0 + pillow_w, by0 + bed_h * 0.06 + pillow_h],
+            [px0, by1 - bed_h * 0.06 - pillow_h, px0 + pillow_w, by1 - bed_h * 0.06],
             radius=min(pillow_w, pillow_h) * 0.3, outline=FURNITURE_COLOR, width=1,
         )
-    # A folded-back blanket line near the foot of the bed.
+    # A folded-back blanket line near the foot of the bed (toward the
+    # interior, away from the head/wall).
     draw.line(
-        [(bx0, by0 + bed_h * 0.7), (bx1, by0 + bed_h * 0.7)], fill=FURNITURE_COLOR, width=1
+        [(bx0, by1 - bed_h * 0.7), (bx1, by1 - bed_h * 0.7)], fill=FURNITURE_COLOR, width=1
     )
     nightstand = min(w, h) * 0.12
     if bx1 + nightstand + 4 <= x1:
-        draw.rectangle([bx1 + 4, by0, bx1 + 4 + nightstand, by0 + nightstand], outline=FURNITURE_COLOR, width=1)
+        draw.rectangle([bx1 + 4, by1 - nightstand, bx1 + 4 + nightstand, by1], outline=FURNITURE_COLOR, width=1)
     wardrobe_w = w * 0.32
     if y0 + h * 0.14 < cy - _LABEL_CLEARANCE_PX:  # skip if it would reach into the label's upper band
         draw.rectangle([x1 - wardrobe_w, y0, x1, y0 + h * 0.14], outline=FURNITURE_COLOR, width=1)

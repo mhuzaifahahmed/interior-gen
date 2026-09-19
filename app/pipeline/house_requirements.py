@@ -33,6 +33,7 @@ correct real-world orientation - see future-plans if that's ever needed.
 import re
 
 _GARAGE_RE = re.compile(r"garage", re.IGNORECASE)
+_UTILITY_RE = re.compile(r"utility|laundry", re.IGNORECASE)
 _GARAGE_CAR_COUNT_RE = re.compile(r"(\d+)[\s-]*(?:car|vehicle)s?\s*garage|garage\s*(?:for)?\s*(\d+)", re.IGNORECASE)
 _FRONT_YARD_RE = re.compile(r"front[\s-]*yard", re.IGNORECASE)
 # The depth can be stated either before ("15ft front yard") or after
@@ -66,6 +67,18 @@ def parse_garage_cars(text: str) -> int:
         if count_str:
             return max(1, int(count_str))
     return 1
+
+
+def mentions_utility(text: str) -> bool:
+    """Same "real data, never guess" gate as mentions_garage() - whether the
+    user's own requirements text mentions a utility/laundry room at all.
+    (2026-09-19) Previously a utility/laundry room appeared purely at
+    Gemini's own probabilistic discretion (see generate_house.py's use of
+    this alongside classify_room_category("laundry")) - inconsistent, and
+    the room's own minimum size was too cramped to be useful when it did
+    show up. This gate mirrors the garage strip/inject pattern exactly:
+    strip an unrequested one, guarantee a requested one exists."""
+    return bool(_UTILITY_RE.search(text or ""))
 
 
 def mentions_front_yard(text: str) -> bool:

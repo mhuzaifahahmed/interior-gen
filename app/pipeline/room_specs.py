@@ -36,8 +36,17 @@ ROOM_SIZE_SPECS_M: dict[str, dict[str, float]] = {
     "dining": {"min_width": 2.7, "min_depth": 3.0},
     "living": {"min_width": 3.3, "min_depth": 3.6},
     "study": {"min_width": 2.4, "min_depth": 2.4},
-    "garage": {"min_width": 2.7, "min_depth": 5.4},  # per-car width, see garage_min_area_sqm()
-    "laundry": {"min_width": 1.8, "min_depth": 2.1},
+    # Bumped 2026-09-19 (real user report: "impractical", too tight for an
+    # actual car) - 2.7x5.4m (8.9x17.7ft) undersold real single-garage
+    # convention. 3.05x6.1m (~10x20ft) matches the commonly cited standard
+    # single-car garage footprint (enough width for the car itself plus
+    # real door-opening/walk-around clearance, not just the vehicle's own
+    # width). Per-car width, see garage_min_area_sqm()/garage_dimensions().
+    "garage": {"min_width": 3.05, "min_depth": 6.1},
+    # Bumped 2026-09-19 (real user report: too cramped) - a real utility/
+    # laundry room fitting a washer, dryer, sink, and some storage, not just
+    # a stacked-machine closet.
+    "laundry": {"min_width": 2.1, "min_depth": 2.4},
     "closet": {"min_width": 1.2, "min_depth": 1.5},
     "foyer": {"min_width": 1.5, "min_depth": 1.8},
     # A real reserved footprint for a compact stair run + landing (2026-08-29
@@ -177,9 +186,10 @@ def max_area_for_room(room_name: str, unit: str, cars: int | None = None) -> flo
 def garage_min_area_sqm(cars: int, unit: str) -> float:
     """A garage's minimum footprint scales with vehicle count - side-by-side
     parking bays, not one fixed size regardless of how many cars were asked
-    for. Width scales per car (2.7m/car is a standard single-bay clearance);
-    depth stays fixed (one car's length + door/pedestrian clearance) since
-    multiple cars are assumed side-by-side, not stacked front-to-back."""
+    for. Width scales per car (ROOM_SIZE_SPECS_M["garage"]["min_width"] is a
+    standard single-bay clearance); depth stays fixed (one car's length +
+    door/pedestrian clearance) since multiple cars are assumed side-by-side,
+    not stacked front-to-back."""
     cars = max(1, cars)
     spec = ROOM_SIZE_SPECS_M["garage"]
     width_m = spec["min_width"] * cars

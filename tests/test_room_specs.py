@@ -1,5 +1,6 @@
 from app.pipeline.room_specs import (
     classify_room_category,
+    garage_dimensions,
     garage_min_area_sqm,
     max_area_for_room,
     min_area_for_room,
@@ -32,6 +33,17 @@ def test_to_plot_unit_leaves_meters_unchanged():
 def test_min_area_for_room_is_positive_for_every_category():
     for name in ["Bedroom", "Bathroom", "Kitchen", "Living Room", "Garage", "Something Unrecognized"]:
         assert min_area_for_room(name, "ft") > 0
+
+
+def test_garage_dimensions_fit_a_real_car_with_clearance():
+    # 2026-09-19, real user report: the garage was "impractical" - too tight
+    # for an actual car. A real single garage needs meaningfully more than a
+    # car's own ~6ft width once door-opening/walk-around clearance is
+    # included - not asserting an exact number (would overfit to today's
+    # constant), just that it now comfortably clears a car's own width.
+    width, depth = garage_dimensions(1, "ft")
+    assert width > 9.0  # a car alone is ~6ft wide; real clearance needs more
+    assert depth > 18.0
 
 
 def test_garage_min_area_scales_with_car_count():
@@ -68,6 +80,15 @@ def test_master_bedroom_still_classifies_as_a_plain_bedroom():
     # pairing, feasibility, furniture dispatch) must keep treating master
     # and regular bedrooms identically; only the size numbers differ.
     assert classify_room_category("Master Bedroom") == "bedroom"
+
+
+def test_utility_room_has_a_real_usable_minimum_size():
+    # 2026-09-19: a real user report that the utility/laundry room was too
+    # cramped (~40 sq ft) to actually fit a washer, dryer, sink, and storage.
+    # Not asserting an exact number (that would overfit to today's constant)
+    # - just that it's now comfortably above a small bathroom's own minimum,
+    # a stable relative bar for "not cramped".
+    assert min_area_for_room("Utility Room", "ft") > min_area_for_room("Bathroom", "ft")
 
 
 def test_a_room_merely_containing_master_in_an_unrelated_context_is_unaffected():

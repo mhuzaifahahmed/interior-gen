@@ -1,4 +1,10 @@
-from app.pipeline.floor_layout import _zone_key, layout_floor
+from app.pipeline.floor_layout import (
+    HALLWAY_MAX_WIDTH_M,
+    HALLWAY_MIN_WIDTH_M,
+    _zone_key,
+    layout_floor,
+)
+from app.pipeline.room_specs import to_plot_unit
 
 
 def _area(rect):
@@ -259,6 +265,48 @@ def test_layout_floor_hallway_borders_the_front_zone():
     by_name = {r["name"]: r for r in rects}
     hallway = by_name["Hallway"]
     assert _touch(hallway, by_name["Living Room"]) or _touch(hallway, by_name["Kitchen"])
+
+
+def _hallway_thickness(rects):
+    hallway = next(r for r in rects if r["name"] == "Hallway")
+    return min(hallway["w"], hallway["h"])
+
+
+def test_layout_floor_hallway_width_scales_with_plot_size_but_stays_clamped():
+    # 2026-09-19, real user report: a fixed real-world hallway width looked
+    # like a thin thread on a large plot. The fix must be proportional (a
+    # bigger house's hallway should be wider) but bounded to realistic
+    # limits on both ends - not a value tuned to any one specific plot.
+    small_rects = layout_floor(_private_room_mix(), {"length": 40, "width": 60, "unit": "ft"})
+    large_rects = layout_floor(_private_room_mix(), {"length": 200, "width": 300, "unit": "ft"})
+
+    small_width = _hallway_thickness(small_rects)
+    large_width = _hallway_thickness(large_rects)
+
+    min_bound = to_plot_unit(HALLWAY_MIN_WIDTH_M, "ft")
+    max_bound = to_plot_unit(HALLWAY_MAX_WIDTH_M, "ft")
+
+    assert min_bound - 1e-6 <= small_width <= max_bound + 1e-6
+    assert min_bound - 1e-6 <= large_width <= max_bound + 1e-6
+    assert large_width >= small_width
+
+
+def test_layout_floor_hallway_keeps_scaling_on_a_genuinely_huge_plot():
+    # 2026-09-19, real user report: on a very large house the hallway
+    # "looked the same as before" - the previous max clamp was being hit
+    # well before the plot got anywhere near huge, so every large-to-huge
+    # plot rendered an identical capped width. A genuinely huge plot must
+    # produce a noticeably wider hallway than a merely-large one, not the
+    # same number both times (both still bounded by HALLWAY_MAX_WIDTH_M).
+    large_rects = layout_floor(_private_room_mix(), {"length": 45, "width": 50, "unit": "ft"})
+    huge_rects = layout_floor(_private_room_mix(), {"length": 200, "width": 300, "unit": "ft"})
+
+    large_width = _hallway_thickness(large_rects)
+    huge_width = _hallway_thickness(huge_rects)
+    max_bound = to_plot_unit(HALLWAY_MAX_WIDTH_M, "ft")
+
+    assert huge_width > large_width
+    assert huge_width <= max_bound + 1e-6
 
 
 def test_layout_floor_no_hallway_with_fewer_than_threshold_private_rooms():

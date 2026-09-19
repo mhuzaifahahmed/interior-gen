@@ -44,7 +44,7 @@ import ezdxf
 from ezdxf.enums import TextEntityAlignment
 
 from app.pipeline.blueprint_svg import _front_door_opening, _shared_edge, _should_suppress_direct_door
-from app.pipeline.room_specs import to_plot_unit
+from app.pipeline.room_specs import classify_room_category, to_plot_unit
 
 # DXF's $INSUNITS header field - only the two units this app's dimension
 # inputs ever use (see static/index.html's unit <select>). Falls back to
@@ -63,6 +63,11 @@ _TITLE_TEXT_HEIGHT_RATIO = 0.03  # relative to the plot's longer side
 WALL_THICKNESS_M = 0.15  # a standard residential interior wall (~6in)
 DOOR_WIDTH_M = 0.9  # a standard interior door leaf (~3ft)
 WINDOW_WIDTH_M = 1.2  # a reasonable default window width (~4ft)
+# The living room gets a real, larger "picture window" instead of the
+# generic residential width above (2026-09-19, real user request) - matches
+# blueprint_svg.py's WINDOW_MAX_LENGTH_LIVING_M so the PNG blueprint and the
+# real .dxf export never disagree about how wide a living-room window is.
+WINDOW_WIDTH_LIVING_M = 2.4
 
 _EDGE_TOL = 1e-4
 
@@ -87,6 +92,7 @@ def render_floor_blueprint_dxf(
     wall_thickness = to_plot_unit(WALL_THICKNESS_M, unit)
     door_width = to_plot_unit(DOOR_WIDTH_M, unit)
     window_width = to_plot_unit(WINDOW_WIDTH_M, unit)
+    window_width_living = to_plot_unit(WINDOW_WIDTH_LIVING_M, unit)
     front_door_edge = _front_door_opening(rects, length, width, facing)
 
     doc = ezdxf.new(dxfversion="R2010")
@@ -113,8 +119,19 @@ def render_floor_blueprint_dxf(
     # drawn twice.
     facing_normalized = (facing or "").strip().lower()
     for rect in rects:
+        room_window_width = (
+            window_width_living if classify_room_category(rect.get("name") or "") == "living" else window_width
+        )
         _draw_exterior_walls_for_room(
-            msp, rect, length, width, wall_thickness, window_width, door_width, front_door_edge, facing_normalized
+            msp,
+            rect,
+            length,
+            width,
+            wall_thickness,
+            room_window_width,
+            door_width,
+            front_door_edge,
+            facing_normalized,
         )
 
     # Interior walls (with real door gaps where a door isn't suppressed) -

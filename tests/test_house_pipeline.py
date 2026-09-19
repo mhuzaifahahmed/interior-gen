@@ -976,6 +976,85 @@ def test_run_house_pipeline_strips_an_unrequested_garage_gemini_invented(monkeyp
         assert "Garage" not in room_names
 
 
+def test_run_house_pipeline_injects_a_utility_room_when_requested_but_missing(monkeypatch):
+    # 2026-09-19: mirrors the garage injection test above exactly - FakeProvider's
+    # default room_layout has no utility/laundry room, so mentioning one in the
+    # requirements text must guarantee it exists on the ground floor.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hutility1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hutility1", status="queued", plot_image_key="hutility1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = FakeProvider()
+    run_house_pipeline(
+        "hutility1", provider, storage, {"length": 60, "width": 80, "unit": "ft"}, prompt="Extras: utility room"
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hutility1")
+        assert house_project.status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+        room_names = [r["name"] for r in room_layout["floors"][0]["rooms"]]
+        assert "Utility Room" in room_names
+
+
+class GeminiAddsUnrequestedUtilityProvider(FakeProvider):
+    """Returns a room_layout that already includes a laundry room the model
+    invented on its own initiative, mirroring GeminiAddsUnrequestedGarageProvider
+    above - used to verify an unrequested utility/laundry room is stripped."""
+
+    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+        return {
+            "floors": [
+                {
+                    "floor_number": 1,
+                    "rooms": [
+                        {"name": "Entry", "area": 1},
+                        {"name": "Living Room", "area": 3},
+                        {"name": "Kitchen", "area": 1.5},
+                        {"name": "Laundry Room", "area": 1},
+                    ],
+                }
+            ]
+        }
+
+
+def test_run_house_pipeline_strips_an_unrequested_utility_room_gemini_invented(monkeypatch):
+    # The user never mentioned "utility"/"laundry" anywhere in their
+    # requirements text, but Gemini's own room_layout included one anyway -
+    # it must be removed, same deterministic-overrides-probabilistic pattern
+    # already established for garage.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hnoutility1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hnoutility1", status="queued", plot_image_key="hnoutility1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = GeminiAddsUnrequestedUtilityProvider()
+    run_house_pipeline(
+        "hnoutility1", provider, storage, {"length": 60, "width": 40, "unit": "ft"}, prompt="2 floors"
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hnoutility1")
+        assert house_project.status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+        room_names = [r["name"] for r in room_layout["floors"][0]["rooms"]]
+        assert "Laundry Room" not in room_names
+
+
 class TwoFloorProvider(FakeProvider):
     """Returns a real 2-floor room_layout, neither floor including a
     staircase - used to verify the real per-floor staircase injection

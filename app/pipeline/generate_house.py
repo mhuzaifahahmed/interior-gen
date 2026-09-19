@@ -17,7 +17,12 @@ from app.pipeline.house_prompts import (
     color_palette_words,
     house_style_words,
 )
-from app.pipeline.house_requirements import mentions_garage, parse_front_yard_depth, parse_garage_cars
+from app.pipeline.house_requirements import (
+    mentions_garage,
+    mentions_utility,
+    parse_front_yard_depth,
+    parse_garage_cars,
+)
 from app.pipeline.room_specs import classify_room_category
 from app.providers.base import Provider
 from app.providers.session_errors import KaggleSessionUnavailableError
@@ -447,6 +452,21 @@ def run_house_pipeline(
                             if classify_room_category(str(r.get("name") or "")) != "garage"
                         ]
 
+                # Utility/laundry room - same deterministic gate as garage
+                # (2026-09-19, real user report: the room was both too small
+                # AND appeared purely at Gemini's own probabilistic
+                # discretion - see house_requirements.mentions_utility()'s
+                # docstring). Stripped from every floor when not requested;
+                # guaranteed on the ground floor when it was.
+                utility_requested = mentions_utility(requirements_text)
+                if not utility_requested:
+                    for floor in room_layout["floors"]:
+                        floor["rooms"] = [
+                            r
+                            for r in floor.get("rooms") or []
+                            if classify_room_category(str(r.get("name") or "")) != "laundry"
+                        ]
+
                 unit = dimensions.get("unit") or "ft"
                 front_yard_depth = parse_front_yard_depth(requirements_text, unit)
 
@@ -503,6 +523,25 @@ def run_house_pipeline(
                             else 1.0
                         )
                         ground_floor_rooms.append({"name": "Entry", "area": avg_weight})
+
+                # Ground floor only - guarantee a utility/laundry room exists
+                # if the user actually asked for one but Gemini's own room
+                # list didn't include it. Mirrors the garage injection above
+                # exactly (same "real data, don't leave it to chance"
+                # pattern) - only reachable when total_floors and rooms exist,
+                # same guard shape as garage's own block.
+                if utility_requested and total_floors:
+                    ground_floor_rooms = room_layout["floors"][0].setdefault("rooms", [])
+                    has_utility = any(
+                        classify_room_category(str(r.get("name") or "")) == "laundry" for r in ground_floor_rooms
+                    )
+                    if not has_utility:
+                        avg_weight = (
+                            sum(float(r.get("area") or 1) for r in ground_floor_rooms) / len(ground_floor_rooms)
+                            if ground_floor_rooms
+                            else 1.0
+                        )
+                        ground_floor_rooms.append({"name": "Utility Room", "area": avg_weight})
 
                 # Every floor of a multi-floor building - guarantee a REAL
                 # reserved staircase room exists (2026-08-29), not just a

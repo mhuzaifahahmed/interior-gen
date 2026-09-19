@@ -2,6 +2,7 @@ from app.pipeline.house_requirements import (
     DEFAULT_FRONT_YARD_DEPTH_M,
     mentions_front_yard,
     mentions_garage,
+    mentions_utility,
     parse_front_yard_depth,
     parse_garage_cars,
 )
@@ -16,6 +17,18 @@ def test_mentions_garage_false_when_absent():
     assert not mentions_garage("2 floors, 3 bedrooms. Extras: modern style")
     assert not mentions_garage("")
     assert not mentions_garage(None)
+
+
+def test_mentions_utility_true_for_utility_or_laundry():
+    assert mentions_utility("2 floors, 3 bedrooms. Extras: utility room, modern style")
+    assert mentions_utility("Extras: laundry room")
+    assert mentions_utility("Extras: a laundry area near the kitchen")
+
+
+def test_mentions_utility_false_when_absent():
+    assert not mentions_utility("2 floors, 3 bedrooms. Extras: modern style")
+    assert not mentions_utility("")
+    assert not mentions_utility(None)
 
 
 def test_parse_garage_cars_defaults_to_one():

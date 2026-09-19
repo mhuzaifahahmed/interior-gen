@@ -4,8 +4,12 @@ from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from app.pipeline.blueprint_svg import (
     PAPER,
+    WINDOW_COLOR,
+    WINDOW_MAX_LENGTH_LIVING_M,
+    WINDOW_MAX_LENGTH_M,
     _draw_furniture,
     _draw_room_label,
+    _draw_windows,
     _fit_room_name,
     _front_door_opening,
     _furnish_bedroom,
@@ -15,6 +19,54 @@ from app.pipeline.blueprint_svg import (
     render_floor_blueprint,
 )
 from app.pipeline.floor_layout import layout_floor
+from app.pipeline.room_specs import to_plot_unit
+
+
+def test_draw_windows_caps_length_regardless_of_room_size():
+    # 2026-09-19, real user report: on a large house, a window scaled
+    # proportionally to a huge room's own exterior edge became dozens of
+    # feet wide - big enough to read as an unexplained gap/extra entrance
+    # in the wall rather than a window. Render a very wide room's top edge
+    # at a simple 1px/ft scale and confirm the drawn window never exceeds
+    # WINDOW_MAX_LENGTH_M in real-world length, no matter how wide the room is.
+    scale = 1.0  # 1px per ft, so pixel counts are directly real-world feet
+    plot_length, plot_width = 400.0, 100.0
+    image = Image.new("RGB", (int(plot_length) + 1, int(plot_width) + 1), PAPER)
+    draw = ImageDraw.Draw(image)
+    # Deliberately not "Living Room" - that gets a real, larger picture-
+    # window cap (see test_draw_windows_gives_the_living_room_a_larger_
+    # picture_window_cap below); this test covers the generic residential cap.
+    rect = {"name": "Bedroom 1", "x": 0, "y": 0, "w": plot_length, "h": plot_width}
+
+    _draw_windows(draw, rect, plot_length, plot_width, 0.0, 0.0, scale, "ft")
+
+    top_row = [image.getpixel((px, 0)) for px in range(int(plot_length))]
+    window_px = sum(1 for p in top_row if p == WINDOW_COLOR)
+    max_len_px = to_plot_unit(WINDOW_MAX_LENGTH_M, "ft") * scale
+    assert window_px <= max_len_px + 2  # small tolerance for line-width rounding
+
+
+def test_draw_windows_gives_the_living_room_a_larger_picture_window_cap():
+    # 2026-09-19, real user request: the living room's window should be a
+    # bit bigger than a generic bedroom/kitchen window - a real "picture
+    # window" is a genuine architectural feature for that room specifically.
+    scale = 1.0
+    plot_length, plot_width = 400.0, 100.0
+
+    def _window_px(room_name):
+        image = Image.new("RGB", (int(plot_length) + 1, int(plot_width) + 1), PAPER)
+        draw = ImageDraw.Draw(image)
+        rect = {"name": room_name, "x": 0, "y": 0, "w": plot_length, "h": plot_width}
+        _draw_windows(draw, rect, plot_length, plot_width, 0.0, 0.0, scale, "ft")
+        top_row = [image.getpixel((px, 0)) for px in range(int(plot_length))]
+        return sum(1 for p in top_row if p == WINDOW_COLOR)
+
+    living_px = _window_px("Living Room")
+    bedroom_px = _window_px("Bedroom 1")
+
+    assert living_px > bedroom_px
+    assert living_px <= to_plot_unit(WINDOW_MAX_LENGTH_LIVING_M, "ft") * scale + 2
+    assert bedroom_px <= to_plot_unit(WINDOW_MAX_LENGTH_M, "ft") * scale + 2
 
 
 def test_render_floor_blueprint_returns_decodable_png():

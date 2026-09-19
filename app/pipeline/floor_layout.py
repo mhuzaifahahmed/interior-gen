@@ -177,10 +177,25 @@ from app.pipeline.room_specs import (
     to_plot_unit,
 )
 
-# A real, standard single-loaded corridor width - reserved along whichever
-# edge of the private zone's box borders the public/circulation zone, so the
-# hallway is actually reachable from there, not just present.
-HALLWAY_WIDTH_M = 1.1
+# The hallway's width scales with the private zone's own cross-dimension
+# (see _layout_private_zone()'s `cross_dim` - a proxy for "how big are the
+# rooms this hallway serves") instead of one fixed real-world width. A fixed
+# ~1.1m corridor reads fine next to small rooms but looks like a thin thread
+# next to a large house's big rooms, since it never grows with the plot.
+# Clamped to realistic bounds on both ends so it never becomes unrealistically
+# cramped (small plot) or wastefully wide (huge plot) - these numbers are a
+# starting point, meant to be visually re-checked across plot sizes whenever
+# touched, not tuned to any one specific dimension.
+HALLWAY_WIDTH_FRACTION = 0.14
+HALLWAY_MIN_WIDTH_M = 1.2
+# Bumped 2.0 -> 3.0 (2026-09-19, real user report: on a genuinely large
+# house the hallway "still looks the same" - the OLD 2.0m ceiling was being
+# hit well before the plot got anywhere near huge, so every large-to-huge
+# plot rendered the identical capped width regardless of how much bigger the
+# house got. 3.0m (~9.8ft) is still a real, bounded upper limit (a wide
+# double-loaded/gallery corridor, not an unbounded hallway) but gives large
+# houses real room to keep scaling before hitting it.
+HALLWAY_MAX_WIDTH_M = 3.0
 
 # Below this many private rooms, a corridor adds overhead without much real
 # benefit (a 1-2 room private zone can just connect directly) - falls back to
@@ -806,13 +821,19 @@ def _layout_private_zone(
     suites (_arrange_suites) so each bathroom lands next to its own bedroom
     with a shared suite tag, instead of all bathrooms clustering on one side.
     """
-    hallway_width = to_plot_unit(HALLWAY_WIDTH_M, unit)
     min_row_depth = to_plot_unit(MIN_ROW_DEPTH_M, unit)
     # The row's depth is the box's dimension PERPENDICULAR to the corridor's
     # run direction - that's h when the corridor runs along the width axis
     # (split_along_width True, box is wide/short relative to the front zone)
     # and w when it runs along the height axis.
     cross_dim = h if split_along_width else w
+    # Proportional-and-clamped hallway width (see HALLWAY_WIDTH_FRACTION's
+    # docstring) - a fraction of cross_dim is already in the plot's own unit
+    # (a ratio needs no unit conversion), only the min/max bounds do.
+    hallway_width = min(
+        max(cross_dim * HALLWAY_WIDTH_FRACTION, to_plot_unit(HALLWAY_MIN_WIDTH_M, unit)),
+        to_plot_unit(HALLWAY_MAX_WIDTH_M, unit),
+    )
 
     if len(names) < MIN_ROOMS_FOR_CORRIDOR or cross_dim - hallway_width < min_row_depth:
         # No real corridor here (too few rooms, or not enough depth) - but
