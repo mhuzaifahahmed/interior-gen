@@ -11,7 +11,19 @@ const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)
 // while a second, completely independent window-load timeout guarantees the
 // loader disappears even if the primary chain throws or never settles at
 // all - the loader must never be able to get stuck up over a live page.
-const PAGE_LOADER_MAX_WAIT_MS = 2500;
+// Bumped 2500 -> 4500 (real, reported bug): the mobile hamburger button's
+// Material Symbols icon (a ligature - the literal word "menu" renders as
+// plain fallback text until the icon font's glyph data finishes loading -
+// Google Fonts' own display=swap behavior) was still showing as raw "menu"
+// text after the loader faded, on a real mobile connection slow enough that
+// the icon font (a large variable-axis font file, not just Fraunces/
+// Poppins) hadn't finished loading by the old 2.5s cap. document.fonts.ready
+// alone doesn't reliably wait long enough for it either - it can resolve
+// before a not-yet-discovered @font-face finishes fetching. Fixed two ways:
+// explicitly request the icon font by name (forces the browser to treat it
+// as "currently loading" so document.fonts.ready actually waits on it) and
+// give the whole chain more real time before falling back to the hard cap.
+const PAGE_LOADER_MAX_WAIT_MS = 4500;
 const pageLoaderEl = document.getElementById("page-loader");
 let pageLoaderHidden = false;
 
@@ -34,6 +46,9 @@ function hidePageLoader() {
 
 Promise.race([
   Promise.all([
+    document.fonts
+      ? document.fonts.load('24px "Material Symbols Outlined"').catch(() => {})
+      : Promise.resolve(),
     document.fonts ? document.fonts.ready : Promise.resolve(),
     typeof clerkReady !== "undefined" ? clerkReady.catch(() => {}) : Promise.resolve(),
   ]),
