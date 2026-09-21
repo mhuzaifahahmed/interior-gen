@@ -686,12 +686,12 @@ async def create_project(
     # Defensive re-truncation (also enforced in build_prompt()) - the frontend's
     # <textarea maxlength> is trivially bypassable by anyone calling the API directly.
     additional_instructions = additional_instructions.strip()[:ADDITIONAL_INSTRUCTIONS_MAX_CHARS] or None
-    # 2026-09: the frontend no longer asks for a city at all (see
-    # app/pipeline/generate.py's run_pipeline docstring for why - a
-    # location-biased search never actually helped). city is kept accepted
-    # here only for backward-compat direct API callers; an empty/omitted
-    # value is NOT special-cased any more - materials/pricing always runs
-    # regardless of whether one is given.
+    # City is optional - materials/pricing runs regardless of whether one is
+    # given (an empty value just means pricing stays unlocalized/USD - see
+    # gemini.py's generate_materials currency_block). Re-added to the
+    # frontend (2026-09, restoring an earlier 2026-09 removal) after the
+    # no-city path was found to leave pricing showing US-market prices
+    # instead of the local market - see serpapi.search()'s location param.
     city = city.strip()[:CITY_MAX_CHARS] or None
 
     # Optional user-supplied room measurements - see _compute_room_dimensions()'s

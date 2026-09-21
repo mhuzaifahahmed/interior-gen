@@ -59,16 +59,19 @@ MATERIALS_GEMINI_FALLBACK_MODEL = "gemini-flash-latest"
 # an explicit, accepted tradeoff (the user chose real-per-item coverage over
 # more generations/month after seeing most items come back as guesses).
 #
-# 2026-09: city/location REMOVED from both the search bias and the prompt's
-# currency instruction. Real, user-reported reason: Karachi specifically has
-# too few real online local listings for a location-biased search to actually
-# surface local results - real searches kept coming back from global sites
-# (eBay etc.) regardless of the city typed in, so the localization was pure
-# theater. generate_materials() no longer requires (or asks the user for) a
-# city at all; {location_block}/{currency_block} below are always blank in
-# practice now but the template stays parameterized rather than hardcoded to
-# "no location", in case a future caller ever has a genuinely useful location
-# to pass again.
+# City/location: had a brief 2026-09 removal (location-biased search + the
+# city input field were both dropped, on the reasoning that Karachi has too
+# few real online local listings for a location bias to help). Reinstated the
+# same day after real-world testing showed the actual, bigger problem wasn't
+# "no local results" - it was that an UNBIASED search defaults to whichever
+# listing ranks globally for that item, which for interior materials is
+# almost always a US retailer at US prices, wildly different from Pakistani
+# market pricing. The `location` bias + city_suffix in the query text (see
+# generate_materials below) skew results toward the stated city; the
+# currency_block instruction (below) then forces the final price into that
+# city's real local currency regardless of what currency the underlying
+# source result was quoted in. city is optional - {location_block}/
+# {currency_block} degrade to a plain unlocalized/USD query when blank.
 MATERIALS_PROMPT_TEMPLATE = (
     "You are pricing renovation materials for a {tier_label} interior-renovation concept"
     "{location_block}.\n\n"
@@ -361,11 +364,15 @@ class GeminiProvider(Provider):
     ) -> dict:
         line_items = _tier_line_items(tier_spec)
 
-        # City is optional and, as of 2026-09, no longer biases the search at
-        # all (see the module docstring above _tier_line_items/
-        # MATERIALS_PROMPT_TEMPLATE for why) - it's only ever used, when given,
-        # to phrase the query text itself. A blank/None city means a plain,
-        # unlocalized query - not an error, not a degraded path.
+        # City is optional. When given, it both (a) biases the actual SerpApi
+        # search toward that location via the API's own `location` param (see
+        # serpapi.search()) and (b) is appended to the query text itself, so
+        # results genuinely skew toward that market instead of just the top
+        # globally-ranked listing for the search term - which, for something
+        # like interior materials, is usually a US retailer and can be an
+        # order of magnitude off from real local (e.g. Pakistani) pricing.
+        # A blank/None city means a plain, unlocalized, USD-default query -
+        # not an error, not a degraded path.
         city_suffix = f" in {city}" if city else ""
 
         # Each tier gets its own dedicated SerpApi key (mirrors
@@ -381,7 +388,9 @@ class GeminiProvider(Provider):
         item_results: dict[str, list[dict]] = {}
         for name, spec in line_items:
             try:
-                item_results[name] = serpapi.search(f"price of {spec}{city_suffix}", api_key=serpapi_key)
+                item_results[name] = serpapi.search(
+                    f"price of {spec}{city_suffix}", location=city, api_key=serpapi_key
+                )
             except Exception:
                 logger.exception("materials search failed for item %s, tier %s", name, tier)
                 item_results[name] = []
@@ -441,11 +450,16 @@ class GeminiProvider(Provider):
             )
         else:
             currency_block = (
-                "IMPORTANT - currency: express every price (and the total) in USD, unless a "
-                "specific item's own real search result quotes a different currency, in which "
-                "case report that price in the source's own original currency as found - do not "
-                "force-convert it. Every item's currency field should reflect whichever currency "
-                "its own price is actually expressed in.\n\n"
+                "IMPORTANT - currency: no buyer location was given, but every item's search "
+                "results may come back from different countries with wildly different real "
+                "prices for the same thing (e.g. USA vs Pakistan interior-materials pricing is "
+                "not remotely comparable) - so express EVERY price (and the total) in a single "
+                "consistent currency, USD, converting any source that quotes a different "
+                "currency using your best knowledge of exchange rates. Do not let different "
+                "items end up in different currencies just because their own source results "
+                "happened to quote different ones - this does NOT make a converted item an "
+                "estimate (is_estimate still only reflects whether a real reference price was "
+                "found).\n\n"
             )
 
         prompt = MATERIALS_PROMPT_TEMPLATE.format(

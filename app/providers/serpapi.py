@@ -66,14 +66,15 @@ def search(query: str, location: str | None = None, api_key: str | None = None) 
     (see _QuotaExhaustedError/_active_key_index above). With only one key
     configured this is a no-op single call, same as before that pool existed.
 
-    location used to bias results toward a geographic area (SerpApi's
-    `location` param) - REMOVED (2026-09): for Karachi specifically there
-    simply aren't enough real online local listings, so biasing by city was
-    never actually surfacing local results anyway - real searches came back
-    from global sites (eBay etc.) regardless of the location bias. This
-    parameter is kept (always None from every current caller) only so an
-    old positional/keyword call site doesn't immediately break; it's not
-    forwarded to SerpApi's request at all any more - see _search_with_key.
+    location biases results toward a geographic area (SerpApi's own
+    `location` param, e.g. "Karachi, Pakistan") - forwarded straight through
+    to the request when given (see _search_with_key). Briefly removed and
+    reinstated the same day (2026-09): the real problem an unbiased search
+    has isn't "no local results," it's that the top globally-ranked listing
+    for a given item is usually a US retailer at US prices - wildly
+    different from local (e.g. Pakistani) market pricing for the same
+    category of goods. None (the default, and every caller's value when no
+    city was given) means a plain, unbiased, global search.
     """
     global _active_key_index
 

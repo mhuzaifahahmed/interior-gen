@@ -446,12 +446,12 @@ def test_generate_materials_searches_once_per_item_not_once_per_tier(monkeypatch
     assert len(search_calls) == 5
 
 
-def test_generate_materials_no_longer_biases_search_by_location(monkeypatch):
-    # Location-biased search was removed (2026-09): Karachi in particular has
-    # too few real online local listings, so biasing by city was never
-    # actually returning local results anyway - real searches came back from
-    # global sites (eBay etc.) regardless. generate_materials must not pass a
-    # location to serpapi.search at all any more, for any city value.
+def test_generate_materials_biases_search_by_the_given_city(monkeypatch):
+    # Location-biased search (2026-09: briefly removed, reinstated same day -
+    # an unbiased search's real problem wasn't "no local results", it was
+    # defaulting to a globally-ranked US listing at US prices instead of the
+    # given city's local market). generate_materials must pass the city
+    # straight through to serpapi.search's location param when one is given.
     captured = {}
 
     class FakeResponse:
@@ -475,6 +475,34 @@ def test_generate_materials_no_longer_biases_search_by_location(monkeypatch):
 
     provider = GeminiProvider()
     provider.generate_materials("premium", {"label": "x", "paint": "marble"}, None, "Karachi")
+
+    assert captured["location"] == "Karachi"
+
+
+def test_generate_materials_does_not_bias_search_when_no_city_given(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        text = '{"items": [{"name": "Paint", "price": "$40"}], "total": "$40"}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    def fake_search(query, location=None, api_key=None):
+        captured["location"] = location
+        return []
+
+    monkeypatch.setattr(gemini_module.serpapi, "search", fake_search)
+
+    provider = GeminiProvider()
+    provider.generate_materials("premium", {"label": "x", "paint": "marble"}, None, None)
 
     assert captured["location"] is None
 

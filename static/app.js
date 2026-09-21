@@ -166,6 +166,7 @@ const removePhotoBtn = document.getElementById("remove-photo-btn");
 const interiorStyleSelect = document.getElementById("interior-style-select");
 const colorPaletteSelect = document.getElementById("color-palette-select");
 const additionalInstructionsInput = document.getElementById("additional-instructions");
+const cityInput = document.getElementById("city-input");
 const roomLengthInput = document.getElementById("room-length");
 const roomWidthInput = document.getElementById("room-width");
 const roomHeightInput = document.getElementById("room-height");
@@ -1283,6 +1284,7 @@ async function restorePendingGeneration() {
     interiorStyleDropdown.setValue(pending.interiorStyle || "");
     colorPaletteDropdown.setValue(pending.colorPalette || "");
     additionalInstructionsInput.value = pending.additionalInstructions || "";
+    cityInput.value = pending.city || "";
     roomLengthInput.value = pending.roomLength || "";
     roomWidthInput.value = pending.roomWidth || "";
     roomHeightInput.value = pending.roomHeight || "";
@@ -1578,11 +1580,18 @@ dropzone.addEventListener("drop", (e) => {
   if (file) setSelectedFile(file);
 });
 
+/* ---------- City persistence ---------- */
+/* City is asked once and remembered (localStorage) so returning users don't have to
+   retype it every time - the field only shows a placeholder ("e.g. Karachi") the very
+   first time; after that it stays filled with whatever was last entered/confirmed,
+   until the user changes it themselves. */
+
+const CITY_STORAGE_KEY = "interior-gen:city";
+
+const savedCity = localStorage.getItem(CITY_STORAGE_KEY);
+if (savedCity) cityInput.value = savedCity;
+
 /* ---------- Submit ---------- */
-// City is no longer asked for at all (2026-09) - materials/pricing now always
-// runs regardless (see CLAUDE.md/app/pipeline/generate.py): a location-biased
-// search never actually helped, since Karachi in particular has too few real
-// online local listings for it to surface local results anyway.
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1590,6 +1599,18 @@ form.addEventListener("submit", async (e) => {
   // form submits via Enter-key implicit submission even while the button itself
   // is disabled (browser behavior here is inconsistent).
   if (!selectedFile || !interiorStyleSelect.value || !colorPaletteSelect.value) return;
+
+  const city = cityInput.value.trim();
+
+  if (!city) {
+    const proceedWithoutCity = confirm(
+      "Without a city, pricing will show in USD and won't be localized to your local " +
+        "market - only the three redesign images will otherwise be fully tailored. Continue without a city?"
+    );
+    if (!proceedWithoutCity) return;
+  } else {
+    localStorage.setItem(CITY_STORAGE_KEY, city);
+  }
 
   generateBtn.disabled = true; // belt-and-suspenders against double-submit;
   // showState("progress") below already hides the whole upload view (button
@@ -1603,6 +1624,7 @@ form.addEventListener("submit", async (e) => {
   formData.append("interior_style", interiorStyleSelect.value);
   formData.append("color_palette", colorPaletteSelect.value);
   formData.append("additional_instructions", additionalInstructionsInput.value.trim());
+  formData.append("city", city);
   formData.append("display_name", await currentUserDisplayName());
   formData.append("email", await currentUserEmail());
   // Optional room measurements - improves material-cost accuracy when given;
@@ -1628,6 +1650,7 @@ form.addEventListener("submit", async (e) => {
         interiorStyle: interiorStyleSelect.value,
         colorPalette: colorPaletteSelect.value,
         additionalInstructions: additionalInstructionsInput.value,
+        city: cityInput.value,
         roomLength: roomLengthInput.value,
         roomWidth: roomWidthInput.value,
         roomHeight: roomHeightInput.value,
@@ -1915,6 +1938,29 @@ function escapeHtml(value) {
   return div.innerHTML;
 }
 
+// Materials pricing (item.price / tierMaterials.total) is a plain, free-form
+// STRING synthesized by Gemini from real search results - not a strictly
+// numeric field (see app/providers/gemini.py's generate_materials docstring:
+// "real-world listings mix currencies/formats freely"). Real generations
+// showed prices like "99.98"/"350.00" with cents that read as noisy/fake
+// precision for a "rough" renovation estimate - this reformats ANY plain
+// number found in the string to a whole, comma-separated value (e.g.
+// "99.98" -> "100", "2139.46" -> "2,139") purely for DISPLAY, without
+// touching the underlying data or the backend prompt (which still keeps
+// real, unrounded prices for accuracy). Strings that aren't a plain number
+// (e.g. the fallback "Not available - see search links above", or a range/
+// multi-number spec) are left completely untouched.
+function formatPriceForDisplay(raw) {
+  if (raw == null) return raw;
+  const str = String(raw);
+  const match = str.match(/^(\s*[^\d]*?)([\d,]*\d(?:\.\d+)?)(\s*[^\d]*)$/);
+  if (!match) return str;
+  const [, prefix, numberPart, suffix] = match;
+  const numeric = parseFloat(numberPart.replace(/,/g, ""));
+  if (Number.isNaN(numeric)) return str;
+  return `${prefix}${Math.round(numeric).toLocaleString("en-US")}${suffix}`;
+}
+
 /* Materials/pricing UI, one per tier card (not shown for "original" - see
    renderResults). Built from data.materials[tierKey] + data.materials_status.
    By the time results render, run_pipeline() has already joined the materials
@@ -1951,7 +1997,7 @@ function buildMaterialsModalBodyHTML(tierMaterials) {
             <p class="material-spec">${escapeHtml(item.spec)}</p>
           </td>
           <td class="material-price">
-            ${escapeHtml(item.price)}
+            ${item.currency ? `${escapeHtml(item.currency)} ` : ""}${escapeHtml(formatPriceForDisplay(item.price))}
             ${item.is_estimate ? '<span class="estimate-badge">Estimate</span>' : ""}
           </td>
           <td class="material-source">
@@ -1971,7 +2017,7 @@ function buildMaterialsModalBodyHTML(tierMaterials) {
       <thead><tr><th>Item</th><th>Price</th><th>Source</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <p class="materials-total">Rough total: <strong>${escapeHtml(tierMaterials.total)}</strong></p>
+    <p class="materials-total">Rough total: <strong>${tierMaterials.currency ? `${escapeHtml(tierMaterials.currency)} ` : ""}${escapeHtml(formatPriceForDisplay(tierMaterials.total))}</strong></p>
   `;
 }
 
