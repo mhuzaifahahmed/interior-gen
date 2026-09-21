@@ -62,6 +62,32 @@ class OpenAIImageProvider:
         input_fidelity = "high" if tier in HIGH_FIDELITY_TIERS else settings.openai_image_input_fidelity
         return self._edit_image(image_bytes, prompt, input_fidelity)
 
+    def supports_batch(self) -> bool:
+        # OpenAI has no real batched-inference endpoint (unlike Kaggle's
+        # /generate_batch) - it already parallelizes at the HTTP-request level
+        # via HybridProvider's own ThreadPoolExecutor fallback, so there's
+        # nothing extra to gain from a batch call here. Matches
+        # Provider.supports_batch()'s own default (False) - this class just
+        # doesn't inherit from Provider (see the class docstring), so it needs
+        # its own copy rather than getting it for free.
+        return False
+
+    def generate_images_batch(
+        self, image_bytes: bytes, tier_prompts: dict[str, str], preferred_backend: str | None = None
+    ) -> dict[str, bytes]:
+        # Real bug this fixes: when OpenAI is resolved as the PRIMARY room
+        # provider (e.g. the Kaggle/OpenAI model toggle set to OpenAI),
+        # HybridProvider.generate_images_batch() calls
+        # provider.generate_images_batch() unconditionally - this class had no
+        # such method at all (missing both this and supports_batch, and not
+        # inheriting Provider's default sequential fallback), so every
+        # OpenAI-primary batch generation crashed with
+        # "'OpenAIImageProvider' object has no attribute
+        # 'generate_images_batch'" instead of falling back to OpenAI as the
+        # fallback itself already re-raises there and has nothing further to
+        # try. Same default body as Provider.generate_images_batch().
+        return {tier: self.generate_image(image_bytes, prompt, tier) for tier, prompt in tier_prompts.items()}
+
     def generate_house_render(
         self,
         image_bytes: bytes,

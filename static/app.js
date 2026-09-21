@@ -1,5 +1,49 @@
 const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+// Full-page loading screen (see its markup + comment in index.html) - fades
+// out once fonts + Clerk are actually ready, so the real header is never
+// shown half-styled. HARD requirement (learned the hard way once already -
+// see CLAUDE.md's "Not every element should get a GSAP entrance animation"
+// on the pre-auth header pill that could stay invisible forever if GSAP's
+// CDN was slow/blocked): this must never depend solely on an async resource
+// resolving. Promise.race against a fixed timeout guarantees the "ready"
+// path fires quickly on a normal connection without waiting the full cap,
+// while a second, completely independent window-load timeout guarantees the
+// loader disappears even if the primary chain throws or never settles at
+// all - the loader must never be able to get stuck up over a live page.
+const PAGE_LOADER_MAX_WAIT_MS = 2500;
+const pageLoaderEl = document.getElementById("page-loader");
+let pageLoaderHidden = false;
+
+function hidePageLoader() {
+  if (pageLoaderHidden || !pageLoaderEl) return;
+  pageLoaderHidden = true;
+  if (typeof gsap === "undefined" || prefersReducedMotion) {
+    pageLoaderEl.style.display = "none";
+    return;
+  }
+  gsap.to(pageLoaderEl, {
+    opacity: 0,
+    duration: 0.45,
+    ease: "power2.out",
+    onComplete: () => {
+      pageLoaderEl.style.display = "none";
+    },
+  });
+}
+
+Promise.race([
+  Promise.all([
+    document.fonts ? document.fonts.ready : Promise.resolve(),
+    typeof clerkReady !== "undefined" ? clerkReady.catch(() => {}) : Promise.resolve(),
+  ]),
+  new Promise((resolve) => setTimeout(resolve, PAGE_LOADER_MAX_WAIT_MS)),
+]).then(hidePageLoader);
+
+// Absolute last-resort fallback - fires regardless of whether the chain
+// above ever resolves, so a bug in it can never leave the loader stuck.
+window.addEventListener("load", () => setTimeout(hidePageLoader, PAGE_LOADER_MAX_WAIT_MS + 1000));
+
 // All /api/... calls are always relative (same-origin), on both local dev
 // (single FastAPI server serves this file + the API together) and
 // production (vercel.json proxies /api/:path* to the real Render backend
@@ -2063,6 +2107,18 @@ function renderMaterialsModalBody(tierLabel, tierMaterials) {
     retryBtn.addEventListener("click", async () => {
       retryBtn.disabled = true;
       retryBtn.textContent = "Retrying…";
+      // Indeterminate bar, not a real percentage - a single retry call has no
+      // sub-stage signal to drive a determinate fill off of (unlike the main
+      // generation progress bar, which reads real poll-response fields), so
+      // this is purely "still working" reassurance plus a plain-language time
+      // expectation, not a promise of an exact duration.
+      const progressBar = document.createElement("div");
+      progressBar.className = "materials-retry-progress";
+      const hint = document.createElement("p");
+      hint.className = "materials-retry-hint";
+      hint.textContent = "Re-searching real prices - usually takes 10-30 seconds…";
+      retryBtn.insertAdjacentElement("afterend", hint);
+      retryBtn.insertAdjacentElement("afterend", progressBar);
       try {
         const body = new FormData();
         body.append("tier", ctx.tierKey);
@@ -2074,10 +2130,28 @@ function renderMaterialsModalBody(tierLabel, tierMaterials) {
         const updated = await res.json();
         ctx.retryUsed = updated.materials_retry_used;
         ctx.retryLimit = updated.materials_retry_limit;
+        // Real bug fixed here: this used to only update the in-memory modal
+        // context (ctx) and re-render the currently-open modal, but never
+        // touched the underlying results/history object those values were
+        // read from in the first place - so a later "View materials & cost"
+        // click (same tier, reopened from scratch) went straight back to
+        // openMaterialsModal() with the STALE pre-retry data/count, making
+        // the retry look like it had silently reverted. Mutating ctx.sourceRef
+        // in place (the same object reference the results grid/history cards'
+        // click handlers already close over) means every future open of this
+        // tier's modal - or any other tier's, for the retry-count part - sees
+        // the retried result, not the original one.
+        if (ctx.sourceRef) {
+          if (ctx.sourceRef.materials) ctx.sourceRef.materials[ctx.tierKey] = updated.materials[ctx.tierKey];
+          ctx.sourceRef.materials_retry_used = updated.materials_retry_used;
+          ctx.sourceRef.materials_retry_limit = updated.materials_retry_limit;
+        }
         renderMaterialsModalBody(tierLabel, updated.materials[ctx.tierKey]);
       } catch (err) {
         console.error("materials retry failed", err);
         alert(err.message || "Couldn't retry pricing right now - please try again shortly.");
+        progressBar.remove();
+        hint.remove();
         retryBtn.disabled = false;
         retryBtn.textContent = "Retry pricing";
       }
@@ -2085,12 +2159,13 @@ function renderMaterialsModalBody(tierLabel, tierMaterials) {
   }
 }
 
-function openMaterialsModal(tierLabel, tierMaterials, projectId, tierKey, retryUsed, retryLimit) {
+function openMaterialsModal(tierLabel, tierMaterials, projectId, tierKey, retryUsed, retryLimit, sourceRef) {
   materialsModalContext = {
     projectId: projectId || null,
     tierKey: tierKey || null,
     retryUsed: retryUsed || 0,
     retryLimit: retryLimit || 0,
+    sourceRef: sourceRef || null,
   };
   materialsModalTitle.textContent = `${tierLabel} — Materials & Cost`;
   renderMaterialsModalBody(tierLabel, tierMaterials);
@@ -2248,7 +2323,8 @@ function renderHistoryTabContent() {
         project.project_id,
         btn.dataset.tierKey,
         project.materials_retry_used,
-        project.materials_retry_limit
+        project.materials_retry_limit,
+        project
       );
     });
   });
@@ -2351,7 +2427,8 @@ function renderResults(data) {
             data.project_id,
             tier.key,
             data.materials_retry_used,
-            data.materials_retry_limit
+            data.materials_retry_limit,
+            data
           );
         }
       });

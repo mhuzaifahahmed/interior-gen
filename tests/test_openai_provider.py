@@ -159,6 +159,37 @@ def test_generate_house_render_shares_the_edit_call_shape(monkeypatch):
     assert captured["quality"] == "high"
 
 
+def test_generate_images_batch_falls_back_to_sequential_generate_image(monkeypatch):
+    # Real bug regression: OpenAIImageProvider previously had no
+    # generate_images_batch/supports_batch at all (and doesn't inherit
+    # Provider's default implementation - see the class docstring), so
+    # HybridProvider.generate_images_batch() crashed with an AttributeError
+    # whenever OpenAI was resolved as the PRIMARY room provider (e.g. the
+    # Kaggle/OpenAI model toggle set to OpenAI) instead of falling back
+    # sequentially per tier the way Provider's own default does.
+    calls = []
+
+    def fake_post(url, headers=None, data=None, files=None, timeout=None):
+        calls.append(data["prompt"])
+        encoded = base64.b64encode(f"bytes-for-{data['prompt']}".encode()).decode()
+        return FakeResponse(json_data={"data": [{"b64_json": encoded}]})
+
+    monkeypatch.setattr(openai_module.httpx, "post", fake_post)
+
+    provider = OpenAIImageProvider()
+    assert provider.supports_batch() is False
+
+    result = provider.generate_images_batch(
+        b"input-bytes", {"economical": "budget prompt", "premium": "luxury prompt"}
+    )
+
+    assert result == {
+        "economical": b"bytes-for-budget prompt",
+        "premium": b"bytes-for-luxury prompt",
+    }
+    assert set(calls) == {"budget prompt", "luxury prompt"}
+
+
 def test_generate_image_unexpected_response_shape_raises(monkeypatch):
     def fake_post(url, headers=None, data=None, files=None, timeout=None):
         return FakeResponse(json_data={"error": "something went wrong"})
