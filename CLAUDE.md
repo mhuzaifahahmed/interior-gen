@@ -2007,7 +2007,7 @@ aspirational). Real payment processing is **not** — see "Payments" below for t
   | Model access | Kaggle/our model only | Kaggle + OpenAI toggle | Kaggle + OpenAI toggle |
   | Room generations | 5/mo (Kaggle only) | Kaggle 150/mo fair-use; OpenAI 30/mo | Kaggle **unlimited** fair-use; OpenAI 100/mo |
   | House generations | 3/mo (Kaggle only) | Kaggle 60/mo fair-use; OpenAI 10/mo | Kaggle **unlimited** fair-use; OpenAI 40/mo |
-  | Free retries/generation | 0 (every retry counts) — **not built yet, see below** | 2 free (planned, not built) | 5 free (planned, not built) |
+  | Free retries/generation | 0 | 2 free | 5 free |
   | Premium features | — | Model toggle, priority queue, full History | + commercial-use license, HD house renders, bulk/export, priority support |
   | Est. worst-case OpenAI cost to us | $0 | ~$4.9/mo | ~$17.6/mo |
   | Margin at max usage | n/a | positive (~$4) | positive (~$7) |
@@ -2022,6 +2022,12 @@ aspirational). Real payment processing is **not** — see "Payments" below for t
   metered on every plan since it has a real per-image dollar cost regardless of plan (~$0.10/room
   generation, ~$0.19/house render — see "Provider split" above for the input-fidelity cost trap this
   pricing is based on).
+
+  **"Free retries/generation" is built, but narrower in scope than this row's name implies** — see
+  "Materials-only pricing retry" further below. It only covers re-running the free-text/pricing lookup
+  (`generate_materials()`) for one tier of an already-completed project, NOT regenerating the actual
+  (paid) images. A full "retry this exact generation, including images" concept is still deferred (see
+  `future-plans/subscription-and-access-roadmap.md`) — don't assume this row means image regeneration.
 - **`consume_quota(session, user_id, kind, backend)`** — the single gate every generator endpoint calls
   before accepting a request. Raises `QuotaExceededError` (carries `plan`/`quota_key`/`limit`, with a
   `user_message()` the frontend shows verbatim) rather than a bare 403 — increments happen at REQUEST
