@@ -58,27 +58,49 @@ Ran into an issue generating an image, or just want to talk about the product? R
 </div>
 </div>
 
-<a href="mailto:mhuzaifah282@gmail.com" class="contact-card flex items-center gap-4 p-6 rounded-xl bg-surface border border-outline-variant hover:border-primary hover:shadow-md transition-all duration-200 group">
+<div class="contact-card flex flex-col sm:flex-row sm:items-center gap-4 p-6 rounded-xl bg-surface border border-outline-variant">
+<div class="flex items-center gap-4 flex-1 min-w-0">
 <span class="w-11 h-11 shrink-0 rounded-full bg-primary-container flex items-center justify-center">
 <span class="material-symbols-outlined text-primary text-[22px]">mail</span>
 </span>
-<div class="min-w-0 flex-1">
+<div class="min-w-0">
 <p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Email</p>
 <p class="font-headline-sm text-headline-sm text-on-background truncate">mhuzaifah282@gmail.com</p>
 </div>
-<span class="material-symbols-outlined text-on-surface-variant text-[20px] shrink-0 group-hover:translate-x-1 group-hover:text-primary transition-all">arrow_forward</span>
+</div>
+<div class="flex items-center gap-2 shrink-0 self-stretch sm:self-auto">
+<button type="button" class="contact-copy-btn flex-1 sm:flex-initial flex items-center justify-center gap-1.5 h-10 px-3 sm:px-4 rounded-full border border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary transition-colors" data-copy-value="mhuzaifah282@gmail.com" aria-label="Copy email address">
+<span class="material-symbols-outlined text-[18px] contact-copy-icon">content_copy</span>
+<span class="font-label-caps text-label-caps contact-copy-label">Copy</span>
+</button>
+<a href="mailto:mhuzaifah282@gmail.com" class="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 h-10 px-3 sm:px-4 rounded-full bg-primary text-on-primary hover:bg-primary/90 transition-colors" aria-label="Open email app">
+<span class="material-symbols-outlined text-[18px]">mail</span>
+<span class="hidden sm:inline font-label-caps text-label-caps">Email</span>
 </a>
+</div>
+</div>
 
-<a href="tel:+923358222279" class="contact-card flex items-center gap-4 p-6 rounded-xl bg-surface border border-outline-variant hover:border-primary hover:shadow-md transition-all duration-200 group">
+<div class="contact-card flex flex-col sm:flex-row sm:items-center gap-4 p-6 rounded-xl bg-surface border border-outline-variant">
+<div class="flex items-center gap-4 flex-1 min-w-0">
 <span class="w-11 h-11 shrink-0 rounded-full bg-primary-container flex items-center justify-center">
 <span class="material-symbols-outlined text-primary text-[22px]">call</span>
 </span>
-<div class="min-w-0 flex-1">
+<div class="min-w-0">
 <p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Phone</p>
 <p class="font-headline-sm text-headline-sm text-on-background truncate">+92 335 8222279</p>
 </div>
-<span class="material-symbols-outlined text-on-surface-variant text-[20px] shrink-0 group-hover:translate-x-1 group-hover:text-primary transition-all">arrow_forward</span>
+</div>
+<div class="flex items-center gap-2 shrink-0 self-stretch sm:self-auto">
+<button type="button" class="contact-copy-btn flex-1 sm:flex-initial flex items-center justify-center gap-1.5 h-10 px-3 sm:px-4 rounded-full border border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary transition-colors" data-copy-value="+92 335 8222279" aria-label="Copy phone number">
+<span class="material-symbols-outlined text-[18px] contact-copy-icon">content_copy</span>
+<span class="font-label-caps text-label-caps contact-copy-label">Copy</span>
+</button>
+<a href="tel:+923358222279" class="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 h-10 px-3 sm:px-4 rounded-full bg-primary text-on-primary hover:bg-primary/90 transition-colors" aria-label="Call">
+<span class="material-symbols-outlined text-[18px]">call</span>
+<span class="hidden sm:inline font-label-caps text-label-caps">Call</span>
 </a>
+</div>
+</div>
 
 </div>
 
@@ -132,6 +154,59 @@ Interior&#8209;Gen
       .to(lede, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, "-=0.25")
       .to(cards, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out", stagger: 0.08 }, "-=0.2");
   })();
+
+  // Copy-to-clipboard for the email/phone cards' "Copy" button - separate
+  // from the adjacent mailto:/tel: link, which instead redirects into the
+  // user's actual mail/phone app. navigator.clipboard requires a secure
+  // context (fine here - this page is only ever served over https) and can
+  // still be undefined/rejected in older browsers or embedded webviews, so
+  // it falls back to the old execCommand("copy") trick via a throwaway
+  // textarea rather than silently doing nothing.
+  document.querySelectorAll(".contact-copy-btn").forEach(function (btn) {
+    var icon = btn.querySelector(".contact-copy-icon");
+    var label = btn.querySelector(".contact-copy-label");
+    var resetTimer = null;
+
+    function showCopied() {
+      if (resetTimer) clearTimeout(resetTimer);
+      icon.textContent = "check";
+      label.textContent = "Copied";
+      btn.classList.add("border-primary", "text-primary");
+      resetTimer = setTimeout(function () {
+        icon.textContent = "content_copy";
+        label.textContent = "Copy";
+        btn.classList.remove("border-primary", "text-primary");
+      }, 1600);
+    }
+
+    function fallbackCopy(text) {
+      var textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
+      } catch (err) {
+        console.error("copy fallback failed", err);
+      }
+      document.body.removeChild(textarea);
+    }
+
+    btn.addEventListener("click", function () {
+      var value = btn.dataset.copyValue;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(value).then(showCopied).catch(function () {
+          fallbackCopy(value);
+          showCopied();
+        });
+      } else {
+        fallbackCopy(value);
+        showCopied();
+      }
+    });
+  });
 </script>
 
 </body>
