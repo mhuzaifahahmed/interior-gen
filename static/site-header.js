@@ -39,6 +39,7 @@
     { label: "ROOM REDESIGN", href: "/?tab=room" },
     { label: "BUILD A HOUSE", href: "/?tab=house" },
     { label: "PLANS", href: "/?tab=pricing" },
+    { label: "CONTACT", href: "/contact" },
   ];
 
   const navLinksHtml = NAV_LINKS.map(
@@ -113,7 +114,6 @@
           <div class="mt-2 pt-2 border-t border-night-border">
             <a href="/static/privacy.html" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">PRIVACY POLICY</a>
             <a href="/static/terms.html" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">TERMS</a>
-            <a href="/contact" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">CONTACT</a>
           </div>
         </nav>
       </div>
