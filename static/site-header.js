@@ -39,7 +39,7 @@
     { label: "ROOM REDESIGN", href: "/?tab=room" },
     { label: "BUILD A HOUSE", href: "/?tab=house" },
     { label: "PLANS", href: "/?tab=pricing" },
-    { label: "CONTACT", href: "/contact" },
+    { label: "CONTACT", href: "/static/contact.html" },
   ];
 
   const navLinksHtml = NAV_LINKS.map(
