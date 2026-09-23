@@ -913,6 +913,13 @@ def test_privacy_page_serves():
         assert "Privacy" in res.text
 
 
+def test_contact_page_serves():
+    with TestClient(app) as client:
+        res = client.get("/contact")
+        assert res.status_code == 200
+        assert "Contact" in res.text
+
+
 def test_unknown_page_serves_styled_404():
     with TestClient(app) as client:
         res = client.get("/this-page-does-not-exist")

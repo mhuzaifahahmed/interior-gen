@@ -212,6 +212,7 @@ LOG OUT
 <div class="mt-2 pt-2 border-t border-night-border">
 <a href="/static/privacy.html" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">PRIVACY POLICY</a>
 <a href="/static/terms.html" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">TERMS</a>
+<a href="/contact" class="mobile-sidebar-link block px-5 py-3.5 font-label-caps text-label-caps text-on-night-variant hover:text-on-night hover:bg-white/5 transition-colors">CONTACT</a>
 </div>
 </nav>
 </div>
@@ -274,6 +275,21 @@ BUILD A NEW HOUSE
 </button>
 </div>
 </div>
+</div>
+</section>
+
+<!-- Short, static contact notice - not a dismissible/interactive component,
+     just a slim strip with the owner's direct contact info plus a pointer to
+     the full /contact page for anything more involved. Sits in normal flow
+     AFTER the hero (not above/inside it) specifically to avoid fighting the
+     hero's own -mt-28 full-bleed-under-the-header trick, which pulls the
+     hero section up by the header's height relative to whatever precedes it -
+     a banner placed before the hero would just get partially covered by it. -->
+<section class="bg-primary-container/40 border-y border-home-line">
+<div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop py-4 flex flex-col sm:flex-row items-center justify-center gap-1.5 sm:gap-2 text-center">
+<p class="font-body-md text-sm text-home-stone-dark">
+Having trouble with a generation? Email <a href="mailto:mhuzaifah282@gmail.com" class="text-home-gold-soft font-semibold underline underline-offset-2 hover:no-underline">mhuzaifah282@gmail.com</a> or call <a href="tel:+923358222279" class="text-home-gold-soft font-semibold underline underline-offset-2 hover:no-underline">+92 335 8222279</a> — or visit the <a href="/contact" class="text-home-gold-soft font-semibold underline underline-offset-2 hover:no-underline">Contact page</a>.
+</p>
 </div>
 </section>
 
@@ -997,6 +1013,8 @@ Interior&#8209;Gen
 <a href="/static/terms.html" class="hover:text-primary transition-colors">Terms</a>
 <span class="mx-2 opacity-40">&middot;</span>
 <a href="/static/privacy.html" class="hover:text-primary transition-colors">Privacy Policy</a>
+<span class="mx-2 opacity-40">&middot;</span>
+<a href="/contact" class="hover:text-primary transition-colors">Contact</a>
 </p>
 </div>
 </footer>

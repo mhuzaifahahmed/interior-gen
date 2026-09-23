@@ -131,6 +131,11 @@ def privacy():
     return FileResponse("static/privacy.html")
 
 
+@app.get("/contact")
+def contact():
+    return FileResponse("static/contact.html")
+
+
 @app.get("/admin")
 def admin_page():
     # Serves the page unauthenticated, same as /login /signup /terms /privacy

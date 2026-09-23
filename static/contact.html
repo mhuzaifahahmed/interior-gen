@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<link href="/static/logo.png" rel="icon" type="image/png"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Contact — Interior-Gen</title>
+<style>
+  @layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}}
+  ::-webkit-scrollbar{display:none;}
+  .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;}
+</style>
+<script src="https://cdn.tailwindcss.com"></script>
+<script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"primary-fixed-dim":"#C08A4E","on-background":"#33362e","on-primary-container":"#4A2F10","on-secondary-fixed-variant":"#6b6248","secondary":"#b7a88c","on-error-container":"#5c2119","on-primary-fixed-variant":"#5C3A12","inverse-surface":"#33362e","outline-variant":"#e2d9c3","on-tertiary-fixed-variant":"#3d5a4c","surface-container-lowest":"#ffffff","inverse-on-surface":"#f5efe2","tertiary-fixed":"#dceae2","surface-bright":"#ffffff","on-tertiary-container":"#1f3a31","error-container":"#f7deda","outline":"#c9bfa6","on-secondary":"#ffffff","surface-container-low":"#f5efe2","tertiary-container":"#dceae2","on-primary-fixed":"#2B1904","surface-tint":"#7A4712","secondary-container":"#efe4ce","on-primary":"#ffffff","on-secondary-fixed":"#2a2515","night":"#1c1815","night-container":"#242019","on-night":"#f5efe2","on-night-variant":"#c9bfa6","night-border":"rgba(245,239,226,0.14)","primary-fixed":"#F3E4CD","inverse-primary":"#C08A4E","secondary-fixed":"#efe4ce","on-surface":"#33362e","on-tertiary-fixed":"#12271f","on-surface-variant":"#6e6c5c","surface-dim":"#f1eadc","on-secondary-container":"#4a4230","on-tertiary":"#17352b","tertiary-fixed-dim":"#b7d2c4","surface-container":"#efe7d6","background":"#faf6ee","on-error":"#ffffff","primary-container":"#F3E4CD","error":"#b3544a","surface":"#ffffff","secondary-fixed-dim":"#d8c9a6","tertiary":"#8faf9e","surface-variant":"#efe7d6","primary":"#7A4712","surface-container-highest":"#dccfb0","surface-container-high":"#e6dcc5"},"borderRadius":{"DEFAULT":"14px","lg":"18px","xl":"22px","full":"9999px"},"spacing":{"unit":"8px","margin-mobile":"24px","container-max":"1440px","section-gap":"128px","margin-desktop":"64px","gutter":"32px"},"fontFamily":{"headline-md":["Fraunces"],"label-caps":["Poppins"],"body-md":["Poppins"],"display-lg-mobile":["Fraunces"],"body-lg":["Poppins"],"technical-data":["Poppins"],"headline-sm":["Fraunces"],"display-lg":["Fraunces"]},"fontSize":{"headline-md":["32px",{"lineHeight":"1.3","fontWeight":"600"}],"label-caps":["12px",{"lineHeight":"1.2","letterSpacing":"0.1em","fontWeight":"600"}],"body-md":["16px",{"lineHeight":"1.6","fontWeight":"400"}],"display-lg-mobile":["38px",{"lineHeight":"1.2","letterSpacing":"-0.01em","fontWeight":"700"}],"body-lg":["18px",{"lineHeight":"1.6","fontWeight":"400"}],"technical-data":["14px",{"lineHeight":"1.4","fontWeight":"500"}],"headline-sm":["24px",{"lineHeight":"1.4","fontWeight":"600"}],"display-lg":["60px",{"lineHeight":"1.12","letterSpacing":"-0.01em","fontWeight":"700"}]}}}}</script>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+</head>
+<body class="bg-background font-body-md text-on-surface">
+
+<div id="site-header"></div>
+<script src="/static/site-header.js"></script>
+
+<main class="pt-28 min-h-screen flex items-center justify-center p-margin-mobile md:p-margin-desktop">
+<div class="flex flex-col w-full items-center justify-center">
+<div class="fixed inset-0 z-0 opacity-10 pointer-events-none overflow-hidden">
+<svg height="100%" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><pattern height="100" id="grid" patternUnits="userSpaceOnUse" width="100"><path d="M 100 0 L 0 0 0 100" fill="none" stroke="#7A4712" stroke-width="0.5"></path></pattern></defs>
+<rect fill="url(#grid)" height="100%" width="100%"></rect>
+</svg>
+<div class="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-background via-transparent to-background"></div>
+</div>
+
+<div class="relative z-10 w-full max-w-[640px] px-gutter py-section-gap">
+<div class="mb-12 text-center" id="contact-intro">
+<a href="/" class="inline-block mb-8">
+<div class="w-16 h-16 border border-primary flex items-center justify-center transform rotate-45 group hover:rotate-90 transition-transform duration-700">
+<img src="/static/logo.png" alt="Interior-Gen" class="w-9 h-9 object-contain -rotate-45 group-hover:scale-110 transition-transform"/>
+</div>
+</a>
+<h1 class="font-display-lg text-display-lg-mobile md:text-display-lg text-on-background mb-4">Get in Touch</h1>
+<p class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-[0.3em]">Questions, issues, or feedback</p>
+</div>
+
+<p class="font-body-lg text-body-lg text-on-surface-variant text-center max-w-md mx-auto mb-10" id="contact-lede">
+Ran into an issue generating an image, or just want to talk about the product? Reach out directly — I read every message myself.
+</p>
+
+<div class="flex flex-col gap-4" id="contact-cards">
+
+<div class="contact-card flex items-center gap-4 p-6 rounded-xl bg-surface border border-outline-variant">
+<span class="w-11 h-11 shrink-0 rounded-full bg-primary-container flex items-center justify-center">
+<span class="material-symbols-outlined text-primary text-[22px]">person</span>
+</span>
+<div class="min-w-0">
+<p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Owner</p>
+<p class="font-headline-sm text-headline-sm text-on-background truncate">Muhammad Huzaifah Ahmed</p>
+</div>
+</div>
+
+<a href="mailto:mhuzaifah282@gmail.com" class="contact-card flex items-center gap-4 p-6 rounded-xl bg-surface border border-outline-variant hover:border-primary hover:shadow-md transition-all duration-200 group">
+<span class="w-11 h-11 shrink-0 rounded-full bg-primary-container flex items-center justify-center">
+<span class="material-symbols-outlined text-primary text-[22px]">mail</span>
+</span>
+<div class="min-w-0 flex-1">
+<p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Email</p>
+<p class="font-headline-sm text-headline-sm text-on-background truncate">mhuzaifah282@gmail.com</p>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant text-[20px] shrink-0 group-hover:translate-x-1 group-hover:text-primary transition-all">arrow_forward</span>
+</a>
+
+<a href="tel:+923358222279" class="contact-card flex items-center gap-4 p-6 rounded-xl bg-surface border border-outline-variant hover:border-primary hover:shadow-md transition-all duration-200 group">
+<span class="w-11 h-11 shrink-0 rounded-full bg-primary-container flex items-center justify-center">
+<span class="material-symbols-outlined text-primary text-[22px]">call</span>
+</span>
+<div class="min-w-0 flex-1">
+<p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Phone</p>
+<p class="font-headline-sm text-headline-sm text-on-background truncate">+92 335 8222279</p>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant text-[20px] shrink-0 group-hover:translate-x-1 group-hover:text-primary transition-all">arrow_forward</span>
+</a>
+
+</div>
+
+<p class="font-body-md text-on-surface-variant text-sm text-center mt-10">
+For anything else, <a href="/" class="text-primary hover:underline underline-offset-4">head back to Interior&#8209;Gen</a>.
+</p>
+</div>
+
+</div>
+</main>
+
+<footer class="bg-surface-container border-t border-outline-variant/70 py-14 relative z-10">
+<div class="max-w-container-max mx-auto px-margin-mobile lg:px-margin-desktop flex flex-col md:flex-row justify-between items-center gap-4">
+<div class="flex items-center gap-2 font-headline-sm text-headline-sm text-on-surface-variant">
+<img src="/static/logo.png" alt="Interior-Gen" class="w-6 h-6 object-contain shrink-0"/>
+Interior&#8209;Gen
+</div>
+<p class="font-body-md text-on-surface-variant text-sm">AI&#8209;generated visualizations for planning purposes.</p>
+<p class="font-label-caps text-label-caps text-on-surface-variant">
+<a href="/terms" class="hover:text-primary hover:underline underline-offset-4 transition-colors">Terms</a>
+<span class="mx-2 opacity-40">&middot;</span>
+<a href="/privacy" class="hover:text-primary hover:underline underline-offset-4 transition-colors">Privacy Policy</a>
+<span class="mx-2 opacity-40">&middot;</span>
+<a href="/contact" class="hover:text-primary hover:underline underline-offset-4 transition-colors">Contact</a>
+</p>
+</div>
+</footer>
+
+<script>
+  // Entrance animation only - never gates the content's actual visibility.
+  // Same house rule as every other GSAP interaction in this project: guard
+  // with typeof gsap === "undefined" || prefersReducedMotion, and use
+  // gsap.set() (start state) + .to() (end state), never .from() + stagger
+  // (observed elsewhere in this project to silently freeze at its start
+  // values - see the gsap-transitions skill). If GSAP fails to load, the
+  // page is already fully visible via plain HTML/CSS - this script can only
+  // ever add motion on top of that, never take it away.
+  (function () {
+    var prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (typeof gsap === "undefined" || prefersReducedMotion) return;
+
+    var intro = document.getElementById("contact-intro");
+    var lede = document.getElementById("contact-lede");
+    var cards = document.querySelectorAll("#contact-cards .contact-card");
+
+    gsap.set([intro, lede], { opacity: 0, y: 16 });
+    gsap.set(cards, { opacity: 0, y: 20 });
+
+    var tl = gsap.timeline();
+    tl.to(intro, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" })
+      .to(lede, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, "-=0.25")
+      .to(cards, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out", stagger: 0.08 }, "-=0.2");
+  })();
+</script>
+
+</body>
+</html>
