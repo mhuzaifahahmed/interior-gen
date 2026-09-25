@@ -159,16 +159,27 @@ ROOM_LAYOUT_PROMPT_TEMPLATE = (
 # diagram) was still sent straight through to the paid image-edit model,
 # which had nothing real to preserve/edit and just hallucinated an unrelated
 # generic room per tier. Folded into describe_room()'s existing prompt/call
-# (not a separate validation call - see git history for an earlier version
-# that used one) as a single leading instruction: if Gemini decides the image
-# isn't something it can work with, it responds with ONLY this exact marker
-# instead of a description. run_pipeline() (app/pipeline/generate.py) checks
-# for the marker and, if present, rejects the project with a fixed, generic
-# message before any paid step runs - never revealing what the image
-# actually was (not "this looks like a logo"), since a bad upload could be
-# any number of things, not just that one case. A highly-unlikely-to-
-# naturally-occur token, so a real room description accidentally containing
-# it is not a realistic concern.
+# (not a separate validation call). run_pipeline() (app/pipeline/generate.py)
+# checks describe_room()'s return value for this marker and, if present,
+# rejects the project with a fixed, generic message before any paid step
+# runs - never revealing what the image actually was, since a bad upload
+# could be any number of things, not just one case.
+#
+# Real, live-observed reliability bug in an earlier version of this fix
+# (2026-09-21): the prompt asked Gemini to "respond with EXACTLY
+# UNWORKABLE_IMAGE and nothing else" in plain free text as one branch of a
+# combined instruction - a real test upload (a brand logo) was NOT caught,
+# because Gemini answered with a normal-looking description instead of the
+# literal marker string, despite correctly having enough information to
+# classify the image. Free-text "respond with exactly this token" framing is
+# unreliable compared to this project's own established pattern for every
+# OTHER structured Gemini call (materials, room layout, tier notes) - a
+# simple JSON boolean field. describe_room() below now asks for
+# {"workable": true/false, "description": "..."} instead of raw text, and
+# _parse_describe_room_response() turns workable=false into this marker in
+# code (Python, not the model) - a boolean decision is dramatically more
+# reliable for an LLM to honor than an exact free-text echo, matching every
+# other classification/extraction call in this file.
 UNWORKABLE_IMAGE_MARKER = "UNWORKABLE_IMAGE"
 
 TIER_NOTES_PROMPT = (
@@ -239,29 +250,30 @@ class GeminiProvider(Provider):
 
         image = Image.open(BytesIO(image_bytes))
         prompt = (
-            "First, decide whether this image is something you can actually work with here: "
-            "an actual PHOTOGRAPH of a real, physical room interior - a space with real walls, "
-            "floor, and/or ceiling that genuinely exists, captured by a camera - as opposed to "
-            "anything else, such as a drawing, illustration, graphic, icon, logo, diagram, "
-            "chart, screenshot, digital rendering, text document, a blank or solid-color "
-            f"image, or a photo of something that is not a room interior at all. If it is NOT "
-            f"something you can work with, respond with EXACTLY this and nothing else: "
-            f"{UNWORKABLE_IMAGE_MARKER}\n\n"
-            "Otherwise, in two short sentences, describe this room for an AI image-editing "
-            "model. First: state what TYPE of space this actually is, based only on what's "
-            "visibly there (e.g. hallway, corridor, entryway, bedroom, living room, "
-            "kitchen, dining room, bathroom, office) - use your own judgement, don't "
-            "default to a generic guess, and don't call it a 'room' if a more specific "
-            "type is visible. Second: describe its fixed structure - window/door "
-            "positions, room shape, and its approximate depth/proportions (e.g. 'a long "
-            "narrow hallway extending several meters back' vs 'a compact, roughly "
-            "square room'). Do not mention furniture, decor, or colors. Be concise."
+            "First, decide whether this image is WORKABLE for a room-renovation visualization "
+            "tool: an actual PHOTOGRAPH of a real, physical room interior - a space with real "
+            "walls, floor, and/or ceiling that genuinely exists, captured by a camera - as "
+            "opposed to anything else, such as a drawing, illustration, graphic, icon, logo, "
+            "diagram, chart, screenshot, digital rendering, text document, a blank or "
+            "solid-color image, or a photo of something that is not a room interior at all.\n\n"
+            "If it IS workable, in two short sentences describe this room for an AI "
+            "image-editing model: first state what TYPE of space this actually is, based only "
+            "on what's visibly there (e.g. hallway, corridor, entryway, bedroom, living room, "
+            "kitchen, dining room, bathroom, office) - use your own judgement, don't default "
+            "to a generic guess, and don't call it a 'room' if a more specific type is "
+            "visible. Second, describe its fixed structure - window/door positions, room "
+            "shape, and its approximate depth/proportions (e.g. 'a long narrow hallway "
+            "extending several meters back' vs 'a compact, roughly square room'). Do not "
+            "mention furniture, decor, or colors. Be concise. If it is NOT workable, leave "
+            "the description empty.\n\n"
+            'Respond with ONLY raw JSON, no markdown fences, in this exact shape: '
+            '{"workable": true or false, "description": "..."}'
         )
         response = self.client.models.generate_content(
             model=settings.gemini_text_model,
             contents=[prompt, image],
         )
-        result = (response.text or "").strip()
+        result = _parse_describe_room_response(response.text or "")
         analysis_cache.set("describe_room", image_bytes, result)
         return result
 
@@ -707,6 +719,42 @@ def _strip_json_fences(raw_text: str) -> str:
             text = text[4:]
         text = text.strip()
     return text
+
+
+def _parse_describe_room_response(raw_text: str) -> str:
+    """Parses describe_room()'s {"workable": bool, "description": str} JSON
+    response into the plain string every caller expects - either a real room
+    description, or UNWORKABLE_IMAGE_MARKER when Gemini classified the image
+    as not workable (see that constant's own docstring for why a structured
+    boolean replaced an earlier "respond with this exact string" free-text
+    design).
+
+    Fails open on any parse problem (missing/malformed JSON, wrong types):
+    falls back to treating the raw response text itself AS the description,
+    same tolerant behavior describe_room() always had before this structured
+    format existed - a malformed response must never be mistaken for a
+    confident "unworkable" classification, since that's a hard gate that
+    blocks the whole generation (see run_pipeline()).
+    """
+    try:
+        data = json.loads(_strip_json_fences(raw_text))
+    except (json.JSONDecodeError, ValueError):
+        return raw_text.strip()
+
+    if not isinstance(data, dict):
+        return raw_text.strip()
+
+    if data.get("workable") is False:
+        return UNWORKABLE_IMAGE_MARKER
+
+    description = data.get("description")
+    if isinstance(description, str) and description.strip():
+        return description.strip()
+
+    # workable wasn't explicitly False and no usable description came back -
+    # an unexpected shape, not a confident classification either way. Fall
+    # back to the raw text rather than silently returning an empty string.
+    return raw_text.strip()
 
 
 def parse_tier_notes(raw_text: str) -> dict[str, str]:

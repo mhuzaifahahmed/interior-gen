@@ -1,10 +1,11 @@
 import io
+import json
 
 from PIL import Image
 
 import app.providers.gemini as gemini_module
 from app.providers import analysis_cache
-from app.providers.gemini import UNWORKABLE_IMAGE_MARKER, GeminiProvider
+from app.providers.gemini import UNWORKABLE_IMAGE_MARKER, GeminiProvider, _parse_describe_room_response
 
 
 def _sample_image_bytes(seed: int = 0) -> bytes:
@@ -32,18 +33,63 @@ def _fake_client_returning(text: str):
     return FakeClient
 
 
-def test_describe_room_prompt_asks_gemini_to_return_the_marker_when_unworkable(monkeypatch):
-    # Not asserting exact prompt wording (that's brittle), just that the
-    # marker Gemini is told to respond with is actually present in the
-    # instruction it's given. The classifier prompt is allowed to give
-    # Gemini illustrative examples (logo, diagram, screenshot, etc.) - the
-    # "never say what the upload actually was" requirement applies to the
-    # USER-FACING rejection message (see run_pipeline's fixed generic
-    # string), not to Gemini's own internal classification instructions.
+# ---- _parse_describe_room_response() - the pure parsing logic ----
+
+
+def test_parse_describe_room_response_returns_marker_when_workable_is_false():
+    raw = json.dumps({"workable": False, "description": ""})
+    assert _parse_describe_room_response(raw) == UNWORKABLE_IMAGE_MARKER
+
+
+def test_parse_describe_room_response_returns_description_when_workable_is_true():
+    raw = json.dumps({"workable": True, "description": "A bedroom with one window."})
+    assert _parse_describe_room_response(raw) == "A bedroom with one window."
+
+
+def test_parse_describe_room_response_strips_markdown_fences():
+    raw = '```json\n{"workable": true, "description": "A kitchen."}\n```'
+    assert _parse_describe_room_response(raw) == "A kitchen."
+
+
+def test_parse_describe_room_response_falls_back_to_raw_text_on_invalid_json():
+    # Fail-open: unparseable output must never be mistaken for a confident
+    # "unworkable" classification (a hard gate) - it degrades to being
+    # treated as a plain description instead, same as describe_room's
+    # pre-JSON behavior.
+    raw = "just a plain sentence, not JSON at all"
+    assert _parse_describe_room_response(raw) == raw
+    assert _parse_describe_room_response(raw) != UNWORKABLE_IMAGE_MARKER
+
+
+def test_parse_describe_room_response_falls_back_when_workable_is_missing():
+    raw = json.dumps({"description": "A hallway."})
+    assert _parse_describe_room_response(raw) == "A hallway."
+
+
+def test_parse_describe_room_response_falls_back_to_raw_text_when_shape_is_unexpected():
+    raw = json.dumps({"workable": True, "description": ""})
+    # No usable description and workable isn't explicitly False - falls back
+    # to the raw text rather than returning an empty string.
+    assert _parse_describe_room_response(raw) == raw
+
+
+def test_parse_describe_room_response_non_dict_json_falls_back_to_raw_text():
+    raw = "[1, 2, 3]"
+    assert _parse_describe_room_response(raw) == raw
+
+
+# ---- GeminiProvider.describe_room() - the real call site ----
+
+
+def test_describe_room_prompt_asks_for_structured_workable_json(monkeypatch):
+    # Not asserting exact prompt wording (that's brittle) - just that the
+    # prompt asks for the structured "workable" JSON field this parser
+    # depends on, and requests JSON explicitly (this project's established
+    # pattern for every other classification/extraction Gemini call).
     captured = {}
 
     class FakeResponse:
-        text = "A rectangular room."
+        text = '{"workable": true, "description": "A rectangular room."}'
 
     class FakeModels:
         def generate_content(self, model, contents):
@@ -60,27 +106,21 @@ def test_describe_room_prompt_asks_gemini_to_return_the_marker_when_unworkable(m
     provider = GeminiProvider()
     provider.describe_room(_sample_image_bytes(0))
 
-    assert UNWORKABLE_IMAGE_MARKER in captured["prompt"]
+    assert "workable" in captured["prompt"]
+    assert "JSON" in captured["prompt"]
 
 
 def test_describe_room_returns_marker_when_gemini_flags_it_unworkable(monkeypatch):
     analysis_cache.clear()
-    monkeypatch.setattr(gemini_module.genai, "Client", _fake_client_returning(UNWORKABLE_IMAGE_MARKER))
-
-    provider = GeminiProvider()
-    result = provider.describe_room(_sample_image_bytes(1))
-    assert UNWORKABLE_IMAGE_MARKER in result
-
-
-def test_describe_room_tolerates_stray_formatting_around_the_marker(monkeypatch):
-    analysis_cache.clear()
     monkeypatch.setattr(
-        gemini_module.genai, "Client", _fake_client_returning(f"  {UNWORKABLE_IMAGE_MARKER}.\n")
+        gemini_module.genai,
+        "Client",
+        _fake_client_returning('{"workable": false, "description": ""}'),
     )
 
     provider = GeminiProvider()
-    result = provider.describe_room(_sample_image_bytes(2))
-    assert UNWORKABLE_IMAGE_MARKER in result
+    result = provider.describe_room(_sample_image_bytes(1))
+    assert result == UNWORKABLE_IMAGE_MARKER
 
 
 def test_describe_room_returns_real_description_for_a_workable_photo(monkeypatch):
@@ -88,13 +128,32 @@ def test_describe_room_returns_real_description_for_a_workable_photo(monkeypatch
     monkeypatch.setattr(
         gemini_module.genai,
         "Client",
-        _fake_client_returning("A bedroom with one window on the left wall."),
+        _fake_client_returning('{"workable": true, "description": "A bedroom with one window on the left wall."}'),
+    )
+
+    provider = GeminiProvider()
+    result = provider.describe_room(_sample_image_bytes(2))
+    assert result != UNWORKABLE_IMAGE_MARKER
+    assert "bedroom" in result
+
+
+def test_describe_room_still_fails_open_when_gemini_ignores_the_json_format(monkeypatch):
+    # Real, live-observed failure this whole structured-format change fixes:
+    # an earlier free-text "respond with EXACTLY <marker>" design let Gemini
+    # answer in a normal-sounding sentence instead of the literal marker for
+    # a real non-room upload, silently letting it through. With a plain-text
+    # (non-JSON) response now, the parser must still fail open rather than
+    # ever synthesizing UNWORKABLE_IMAGE_MARKER on its own.
+    analysis_cache.clear()
+    monkeypatch.setattr(
+        gemini_module.genai,
+        "Client",
+        _fake_client_returning("A red and yellow circular design."),
     )
 
     provider = GeminiProvider()
     result = provider.describe_room(_sample_image_bytes(3))
-    assert UNWORKABLE_IMAGE_MARKER not in result
-    assert "bedroom" in result
+    assert result != UNWORKABLE_IMAGE_MARKER
 
 
 def test_describe_room_caches_the_marker_result_per_image(monkeypatch):
@@ -102,7 +161,7 @@ def test_describe_room_caches_the_marker_result_per_image(monkeypatch):
     call_count = 0
 
     class FakeResponse:
-        text = UNWORKABLE_IMAGE_MARKER
+        text = '{"workable": false, "description": ""}'
 
     class FakeModels:
         def generate_content(self, model, contents):
@@ -118,6 +177,6 @@ def test_describe_room_caches_the_marker_result_per_image(monkeypatch):
 
     provider = GeminiProvider()
     image_bytes = _sample_image_bytes(4)
-    assert UNWORKABLE_IMAGE_MARKER in provider.describe_room(image_bytes)
-    assert UNWORKABLE_IMAGE_MARKER in provider.describe_room(image_bytes)
+    assert provider.describe_room(image_bytes) == UNWORKABLE_IMAGE_MARKER
+    assert provider.describe_room(image_bytes) == UNWORKABLE_IMAGE_MARKER
     assert call_count == 1

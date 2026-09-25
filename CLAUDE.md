@@ -306,11 +306,23 @@ hallucinated 3 unrelated generic bedroom photos per tier instead of editing the 
 earlier version of this fix added a dedicated `Provider.validate_room_photo()` method/call; replaced
 same-day with a simpler one-call design per explicit user request.
 
-- **`UNWORKABLE_IMAGE_MARKER`** (`app/providers/gemini.py`, currently `"UNWORKABLE_IMAGE"`) - a single
-  leading instruction is prepended to `describe_room()`'s existing prompt: if Gemini decides the image
-  isn't something it can work with (not an actual photographed room interior - the prompt gives
-  illustrative examples like drawing/logo/diagram/screenshot/document, but is not limited to those),
-  respond with EXACTLY this marker and nothing else, instead of a description.
+- **`UNWORKABLE_IMAGE_MARKER`** (`app/providers/gemini.py`, currently `"UNWORKABLE_IMAGE"`) - a sentinel
+  string `describe_room()` returns in place of a description when the upload isn't workable. Constructed
+  in PYTHON code, not asked of Gemini directly as free text - see the reliability fix below.
+- **Real, live-observed reliability bug, fixed same day (2026-09-21)**: the first version of this gate
+  asked Gemini to "respond with EXACTLY `UNWORKABLE_IMAGE` and nothing else" as one branch of a combined
+  free-text instruction. A real test upload (a brand logo) was NOT caught - Gemini answered with an
+  ordinary-looking description instead of the literal marker, despite having enough information to
+  classify the image correctly. Free-text "echo this exact token" framing turned out to be unreliable
+  compared to this codebase's own established pattern for every other extraction/classification Gemini
+  call (materials pricing, room layout, tier notes) - a simple JSON field. Fixed by changing the prompt to
+  request `{"workable": true or false, "description": "..."}` instead of raw text -
+  `_parse_describe_room_response()` (`app/providers/gemini.py`) turns `workable: false` into
+  `UNWORKABLE_IMAGE_MARKER` in code. A plain boolean decision is dramatically more reliable for an LLM to
+  honor than a free-text exact-string echo. **Still fails open on any parse problem** (malformed/missing
+  JSON, unexpected shape) - falls back to treating the raw response text itself as the description, same
+  tolerant behavior `describe_room()` always had; a malformed response must never be mistaken for a
+  confident "unworkable" classification, since that's what triggers the hard gate below.
 - **`run_pipeline()`** (`app/pipeline/generate.py`) checks `describe_room()`'s return value for the marker
   (substring check, right after the existing best-effort `describe_room` try/except, BEFORE
   `project.room_description` is ever set) - a match rejects the project (`status="failed"`) before
