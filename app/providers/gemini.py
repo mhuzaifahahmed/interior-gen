@@ -250,24 +250,35 @@ class GeminiProvider(Provider):
 
         image = Image.open(BytesIO(image_bytes))
         prompt = (
-            "First, decide whether this image is WORKABLE for a room-renovation visualization "
-            "tool: an actual PHOTOGRAPH of a real, physical room interior - a space with real "
-            "walls, floor, and/or ceiling that genuinely exists, captured by a camera - as "
-            "opposed to anything else, such as a drawing, illustration, graphic, icon, logo, "
-            "diagram, chart, screenshot, digital rendering, text document, a blank or "
-            "solid-color image, or a photo of something that is not a room interior at all.\n\n"
-            "If it IS workable, in two short sentences describe this room for an AI "
-            "image-editing model: first state what TYPE of space this actually is, based only "
-            "on what's visibly there (e.g. hallway, corridor, entryway, bedroom, living room, "
-            "kitchen, dining room, bathroom, office) - use your own judgement, don't default "
-            "to a generic guess, and don't call it a 'room' if a more specific type is "
-            "visible. Second, describe its fixed structure - window/door positions, room "
-            "shape, and its approximate depth/proportions (e.g. 'a long narrow hallway "
-            "extending several meters back' vs 'a compact, roughly square room'). Do not "
-            "mention furniture, decor, or colors. Be concise. If it is NOT workable, leave "
-            "the description empty.\n\n"
+            "You are screening an upload for a room-renovation visualization tool. Answer three "
+            "separate yes/no questions about this image, then decide if it's workable. Be "
+            "STRICT - when genuinely unsure, answer NO. Getting this wrong lets an unusable image "
+            "through, so require real, concrete evidence for a YES rather than a general "
+            "impression.\n\n"
+            "1. is_real_photograph: is this a genuine, unedited PHOTOGRAPH captured by a real "
+            "camera - NOT a drawing, painting, illustration, cartoon, 3D render, digital "
+            "artwork, stylized graphic, logo, icon, diagram, chart, screenshot, or any other "
+            "non-photographic image? If the image looks illustrated, stylized, artistic, or "
+            "computer-generated in ANY way (even if it depicts a scene that resembles a room), "
+            "answer NO.\n"
+            "2. shows_room_interior: does it show the INSIDE of a real, physical room or "
+            "interior space (not outdoors, not a building exterior, not an object/person/animal "
+            "shown on its own with no real room around it)?\n"
+            "3. structure_visible: can you clearly see at least two of: a real wall, a real "
+            "floor, a real ceiling, belonging to that same space?\n\n"
+            "It is WORKABLE only if all three answers are YES. If it is workable, ALSO write a "
+            "two-sentence description of the room for an AI image-editing model: first state "
+            "what TYPE of space this actually is, based only on what's visibly there (e.g. "
+            "hallway, corridor, entryway, bedroom, living room, kitchen, dining room, bathroom, "
+            "office) - use your own judgement, don't default to a generic guess, and don't call "
+            "it a 'room' if a more specific type is visible. Second, describe its fixed "
+            "structure - window/door positions, room shape, and its approximate depth/"
+            "proportions (e.g. 'a long narrow hallway extending several meters back' vs 'a "
+            "compact, roughly square room'). Do not mention furniture, decor, or colors. Be "
+            "concise. If it is NOT workable, leave the description empty.\n\n"
             'Respond with ONLY raw JSON, no markdown fences, in this exact shape: '
-            '{"workable": true or false, "description": "..."}'
+            '{"is_real_photograph": true or false, "shows_room_interior": true or false, '
+            '"structure_visible": true or false, "workable": true or false, "description": "..."}'
         )
         response = self.client.models.generate_content(
             model=settings.gemini_text_model,
@@ -721,20 +732,42 @@ def _strip_json_fences(raw_text: str) -> str:
     return text
 
 
+# Real, live-observed reliability gap (2026-09-21, same day as the JSON
+# format fix): even with structured JSON, Gemini's own single "workable"
+# judgment call still let through a clearly-not-a-room image (a stylized
+# astronaut illustration) - a real accuracy problem, not a parsing bug (the
+# JSON came back well-formed, "workable": true was just the wrong answer).
+# Fixed by asking THREE separate, concrete yes/no sub-questions
+# (is_real_photograph/shows_room_interior/structure_visible) instead of one
+# holistic verdict - breaking a judgment call into specific evidence
+# questions is a standard way to improve LLM classification reliability, and
+# it gives this parser a defense-in-depth check: an explicit False on ANY
+# sub-question rejects the image even if "workable" itself came back True
+# (a self-contradictory response is treated as evidence the image is
+# unworkable, not as noise to ignore).
+_UNWORKABLE_SUB_SIGNALS = ("is_real_photograph", "shows_room_interior", "structure_visible")
+
+
 def _parse_describe_room_response(raw_text: str) -> str:
-    """Parses describe_room()'s {"workable": bool, "description": str} JSON
-    response into the plain string every caller expects - either a real room
+    """Parses describe_room()'s structured JSON response ({"is_real_photograph",
+    "shows_room_interior", "structure_visible", "workable", "description"})
+    into the plain string every caller expects - either a real room
     description, or UNWORKABLE_IMAGE_MARKER when Gemini classified the image
-    as not workable (see that constant's own docstring for why a structured
-    boolean replaced an earlier "respond with this exact string" free-text
-    design).
+    as not workable (see UNWORKABLE_IMAGE_MARKER's own docstring for why a
+    structured boolean replaced an earlier "respond with this exact string"
+    free-text design, and _UNWORKABLE_SUB_SIGNALS above for why a single
+    "workable" field wasn't reliable enough on its own).
 
     Fails open on any parse problem (missing/malformed JSON, wrong types):
     falls back to treating the raw response text itself AS the description,
     same tolerant behavior describe_room() always had before this structured
     format existed - a malformed response must never be mistaken for a
     confident "unworkable" classification, since that's a hard gate that
-    blocks the whole generation (see run_pipeline()).
+    blocks the whole generation (see run_pipeline()). Missing/absent
+    sub-signal fields (e.g. an older response shape) never block on their
+    own - only an EXPLICIT False on a present field does, keeping this
+    fail-open for anything genuinely ambiguous rather than newly stricter by
+    accident.
     """
     try:
         data = json.loads(_strip_json_fences(raw_text))
@@ -745,6 +778,9 @@ def _parse_describe_room_response(raw_text: str) -> str:
         return raw_text.strip()
 
     if data.get("workable") is False:
+        return UNWORKABLE_IMAGE_MARKER
+
+    if any(data.get(signal) is False for signal in _UNWORKABLE_SUB_SIGNALS):
         return UNWORKABLE_IMAGE_MARKER
 
     description = data.get("description")

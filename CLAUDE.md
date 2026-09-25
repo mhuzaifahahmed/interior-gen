@@ -366,6 +366,20 @@ same-day with a simpler one-call design per explicit user request.
   JSON, unexpected shape) - falls back to treating the raw response text itself as the description, same
   tolerant behavior `describe_room()` always had; a malformed response must never be mistaken for a
   confident "unworkable" classification, since that's what triggers the hard gate below.
+- **Second real reliability gap, same day, after the JSON fix above**: a stylized astronaut-on-a-rock
+  illustration STILL got generated into fake room tiers - the JSON came back well-formed, Gemini's single
+  `"workable": true` verdict was just the wrong answer, a genuine classification-accuracy miss, not a
+  parsing bug. Fixed by replacing one holistic judgment with THREE separate, concrete yes/no sub-questions
+  (`is_real_photograph`, `shows_room_interior`, `structure_visible` - "can you see a real wall, floor, or
+  ceiling") - breaking a single judgment call into specific evidence questions is a standard way to
+  improve LLM classification reliability. `_parse_describe_room_response()`'s `_UNWORKABLE_SUB_SIGNALS`
+  check rejects the image if ANY sub-question comes back explicitly `False`, even if `workable` itself
+  said `True` - a self-contradictory response is treated as real evidence the image is unworkable, not
+  noise to ignore. Missing sub-fields (an older/simpler response shape) never block on their own - only an
+  explicit `False` on a present field does, so this stays fail-open for genuinely ambiguous responses
+  rather than becoming stricter by accident. **Still not a hard guarantee** - this reduces false negatives
+  through redundant evidence-gathering, it doesn't make LLM vision classification perfect; if another
+  failure mode surfaces, the fix is likely another concrete sub-question, not a full rewrite.
 - **`run_pipeline()`** (`app/pipeline/generate.py`) checks `describe_room()`'s return value for the marker
   (substring check, right after the existing best-effort `describe_room` try/except, BEFORE
   `project.room_description` is ever set) - a match rejects the project (`status="failed"`) before

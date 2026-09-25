@@ -78,6 +78,61 @@ def test_parse_describe_room_response_non_dict_json_falls_back_to_raw_text():
     assert _parse_describe_room_response(raw) == raw
 
 
+# ---- defense-in-depth: an explicit False sub-signal overrides a possibly- ----
+# ---- wrong "workable: true" verdict (the real astronaut-illustration bug) ----
+
+
+def test_parse_describe_room_response_rejects_when_not_a_real_photograph_even_if_workable_true():
+    # Real, live-observed bug this guards: Gemini's own "workable" verdict
+    # alone let a stylized illustration through as true. A self-contradictory
+    # response (workable=true but is_real_photograph=false) must be treated
+    # as unworkable, not as noise to ignore.
+    raw = json.dumps(
+        {
+            "is_real_photograph": False,
+            "shows_room_interior": True,
+            "structure_visible": True,
+            "workable": True,
+            "description": "A stylized illustration of a figure on a rock.",
+        }
+    )
+    assert _parse_describe_room_response(raw) == UNWORKABLE_IMAGE_MARKER
+
+
+def test_parse_describe_room_response_rejects_when_no_room_interior_shown():
+    raw = json.dumps(
+        {"is_real_photograph": True, "shows_room_interior": False, "structure_visible": True, "workable": True}
+    )
+    assert _parse_describe_room_response(raw) == UNWORKABLE_IMAGE_MARKER
+
+
+def test_parse_describe_room_response_rejects_when_no_structure_visible():
+    raw = json.dumps(
+        {"is_real_photograph": True, "shows_room_interior": True, "structure_visible": False, "workable": True}
+    )
+    assert _parse_describe_room_response(raw) == UNWORKABLE_IMAGE_MARKER
+
+
+def test_parse_describe_room_response_accepts_when_all_sub_signals_are_true():
+    raw = json.dumps(
+        {
+            "is_real_photograph": True,
+            "shows_room_interior": True,
+            "structure_visible": True,
+            "workable": True,
+            "description": "A bedroom with one window.",
+        }
+    )
+    assert _parse_describe_room_response(raw) == "A bedroom with one window."
+
+
+def test_parse_describe_room_response_missing_sub_signals_does_not_block():
+    # An older/simpler response shape with no sub-signal fields at all must
+    # stay fail-open, not newly stricter by accident.
+    raw = json.dumps({"workable": True, "description": "A kitchen."})
+    assert _parse_describe_room_response(raw) == "A kitchen."
+
+
 # ---- GeminiProvider.describe_room() - the real call site ----
 
 
@@ -108,6 +163,11 @@ def test_describe_room_prompt_asks_for_structured_workable_json(monkeypatch):
 
     assert "workable" in captured["prompt"]
     assert "JSON" in captured["prompt"]
+    # The 3 defense-in-depth sub-questions must actually be asked, not just
+    # accepted if present - see _UNWORKABLE_SUB_SIGNALS.
+    assert "is_real_photograph" in captured["prompt"]
+    assert "shows_room_interior" in captured["prompt"]
+    assert "structure_visible" in captured["prompt"]
 
 
 def test_describe_room_returns_marker_when_gemini_flags_it_unworkable(monkeypatch):
@@ -154,6 +214,33 @@ def test_describe_room_still_fails_open_when_gemini_ignores_the_json_format(monk
     provider = GeminiProvider()
     result = provider.describe_room(_sample_image_bytes(3))
     assert result != UNWORKABLE_IMAGE_MARKER
+
+
+def test_describe_room_rejects_a_stylized_illustration_flagged_via_sub_signals(monkeypatch):
+    # Real regression case: a stylized astronaut-on-a-rock illustration was
+    # generated into fake "room" tiers because Gemini's single "workable"
+    # verdict alone said true. Simulates the corrected behavior once Gemini
+    # honestly flags is_real_photograph=false for a non-photographic image.
+    analysis_cache.clear()
+    monkeypatch.setattr(
+        gemini_module.genai,
+        "Client",
+        _fake_client_returning(
+            json.dumps(
+                {
+                    "is_real_photograph": False,
+                    "shows_room_interior": False,
+                    "structure_visible": False,
+                    "workable": False,
+                    "description": "",
+                }
+            )
+        ),
+    )
+
+    provider = GeminiProvider()
+    result = provider.describe_room(_sample_image_bytes(5))
+    assert result == UNWORKABLE_IMAGE_MARKER
 
 
 def test_describe_room_caches_the_marker_result_per_image(monkeypatch):
