@@ -154,6 +154,27 @@ ROOM_LAYOUT_PROMPT_TEMPLATE = (
     '{{"floors": [{{"floor_number": 1, "rooms": [{{"name": "...", "area": 1}}]}}]}}'
 )
 
+# Real, user-reported bug this exists to fix: an uploaded image that isn't
+# actually a photograph of a real room (e.g. a graphic, a logo, an icon, a
+# diagram) was still sent straight through to the paid image-edit model,
+# which had nothing real to preserve/edit and just hallucinated an unrelated
+# generic room per tier. Deliberately generic/content-agnostic wording below
+# (not "is this a logo") since a bad upload could be any number of things,
+# not just that one case - and see validate_room_photo()'s own docstring for
+# why this must fail OPEN (never block a real room photo over a transient
+# Gemini error) and never leak what the image actually was.
+ROOM_PHOTO_VALIDATION_PROMPT = (
+    "Look at this image and decide whether it is an actual PHOTOGRAPH of a real, "
+    "physical room interior - a space with real walls, floor, and/or ceiling that "
+    "genuinely exists, captured by a camera - as opposed to anything else, such as "
+    "a drawing, illustration, graphic, icon, logo, diagram, chart, screenshot, "
+    "digital rendering, text document, a blank or solid-color image, or a photo "
+    "of something that is not a room interior at all (a person, an object, an "
+    "animal, outdoor scenery, a building exterior, etc).\n\n"
+    "Respond with ONLY one word: VALID if it is a real photographed room interior, "
+    "or INVALID if it is not."
+)
+
 TIER_NOTES_PROMPT = (
     "You are analyzing a room photo for a 3-tier renovation visualization tool. The "
     "three tiers are: ECONOMICAL (paint only, cheapest materials, minimal fixtures), "
@@ -238,6 +259,36 @@ class GeminiProvider(Provider):
         )
         result = (response.text or "").strip()
         analysis_cache.set("describe_room", image_bytes, result)
+        return result
+
+    def validate_room_photo(self, image_bytes: bytes) -> bool:
+        # Cached on a hash of the exact bytes, same convention as
+        # describe_room/estimate_room_area - a retry on the same upload never
+        # re-pays for or re-waits on an identical classification.
+        cached = analysis_cache.get("validate_room_photo", image_bytes)
+        if cached is not analysis_cache.MISS:
+            logger.info("validate_room_photo cache hit")
+            return cached
+
+        try:
+            image = Image.open(BytesIO(image_bytes))
+            response = self.client.models.generate_content(
+                model=settings.gemini_text_model,
+                contents=[ROOM_PHOTO_VALIDATION_PROMPT, image],
+            )
+            text = (response.text or "").strip().upper()
+            # Fail-open parsing: only an explicit "INVALID" in the response
+            # blocks the upload. Since "INVALID" contains "VALID" as a
+            # substring but not vice versa, checking for the longer word is
+            # what actually distinguishes the two answers; anything
+            # unexpected (empty response, stray wording) is treated as valid
+            # rather than risk blocking a real room photo.
+            result = "INVALID" not in text
+        except Exception:
+            logger.exception("validate_room_photo failed; treating as valid (fail open)")
+            return True
+
+        analysis_cache.set("validate_room_photo", image_bytes, result)
         return result
 
     def estimate_room_area(self, image_bytes: bytes) -> float | None:

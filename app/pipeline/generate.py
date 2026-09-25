@@ -142,6 +142,40 @@ def run_pipeline(
             with timer.stage("storage.get(original)"):
                 original_bytes = storage.get(project.original_key)
 
+            # Hard gate, before any paid step: reject an upload that isn't
+            # actually a photo of a real room, instead of letting it reach
+            # the image model, which has nothing real to preserve and just
+            # hallucinates an unrelated generic room per tier (a real,
+            # user-reported failure mode). Fail-open by design (see
+            # Provider.validate_room_photo's docstring) - a failure to even
+            # run the check must never block a legitimate upload, so both an
+            # explicit exception here AND validate_room_photo() itself
+            # default to allowing generation to continue. The rejection
+            # message is a fixed, generic string - deliberately never built
+            # from what the image actually contains, so nothing about the
+            # upload is echoed back to the user.
+            try:
+                with timer.stage("validate_room_photo"):
+                    is_valid_room_photo = provider.validate_room_photo(original_bytes)
+            except Exception:
+                logger.exception(
+                    "validate_room_photo failed for project %s; continuing (fail open)", project_id
+                )
+                is_valid_room_photo = True
+
+            if not is_valid_room_photo:
+                logger.info(
+                    "project %s rejected: uploaded image is not a photo of a room", project_id
+                )
+                project.status = "failed"
+                project.error = (
+                    "We couldn't detect a room in this photo. Please upload a clear photo of "
+                    "an actual room and try again."
+                )
+                session.add(project)
+                session.commit()
+                return
+
             try:
                 with timer.stage("describe_room"):
                     room_description = provider.describe_room(original_bytes)

@@ -70,6 +70,28 @@ class Provider(ABC):
         ...
 
     @abstractmethod
+    def validate_room_photo(self, image_bytes: bytes) -> bool:
+        """Hard gate, checked BEFORE any paid image generation runs (see
+        app/pipeline/generate.py's run_pipeline) - unlike describe_room/
+        generate_tier_notes, this is NOT best-effort in how it's used: a
+        confident False here stops the whole generation with a plain,
+        generic rejection message, before a single dollar is spent.
+
+        The check itself, however, IS best-effort/fail-open: any failure to
+        even complete the underlying analysis (network error, quota, an
+        unparseable response) must return True, never raise and never
+        default to False - a transient provider hiccup must never block a
+        real, legitimate room photo. Only a positive, confident "this is not
+        a real photographed room interior" classification should return
+        False. Deliberately content-agnostic - implementations must not
+        describe or leak WHAT the image actually contains anywhere a caller
+        might surface it to the end user (the pipeline's own rejection
+        message is a fixed, generic string, never built from this method's
+        internal reasoning).
+        """
+        ...
+
+    @abstractmethod
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         """Analyze the room photo and return a short, room-specific renovation
         instruction per tier (keys: economical/mid/premium), e.g. noting visible

@@ -145,6 +145,9 @@ class HybridProvider(Provider):
     def describe_room(self, image_bytes: bytes) -> str:
         return self._gemini.describe_room(image_bytes)
 
+    def validate_room_photo(self, image_bytes: bytes) -> bool:
+        return self._gemini.validate_room_photo(image_bytes)
+
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         return self._gemini.generate_tier_notes(image_bytes)
 

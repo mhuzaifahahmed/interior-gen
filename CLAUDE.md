@@ -261,6 +261,42 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
   `USER_NOTES_MAX_CHARS` (150) - enforced in **both** `build_prompt()` and `main.py`'s endpoint, since the
   frontend's `maxlength` is trivially bypassable by anyone calling the API directly.
 
+## Room-photo validation gate (2026-09-21)
+
+Real, user-reported bug: uploading an image that wasn't actually a photo of a room (e.g. a flat
+graphic/logo) still went straight through the full pipeline - `describe_room()` correctly recognized it
+as a non-photographic graphic in its own output text, but nothing acted on that signal, so
+`gpt-image-1`/Kaggle got handed an image with no real walls/floor/furniture to preserve and just
+hallucinated 3 unrelated generic bedroom photos per tier instead of editing the input.
+
+- **`Provider.validate_room_photo(image_bytes) -> bool`** (new abstract method, `app/providers/base.py`) -
+  a HARD gate `run_pipeline()` (`app/pipeline/generate.py`) checks immediately after fetching the
+  original bytes, before `describe_room`/`generate_tier_notes`/any paid image call. A confident `False`
+  stops the whole generation right there (`status="failed"`) with **zero** OpenAI/Kaggle spend - unlike
+  every other Gemini-vision call in this pipeline (`describe_room`, `generate_tier_notes`,
+  `estimate_room_area`), which are best-effort and degrade silently on failure.
+- **The check itself is fail-OPEN, not fail-closed** - the one deliberate exception to "hard gate" above.
+  `GeminiProvider.validate_room_photo()` (`app/providers/gemini.py`) returns `True` (allow generation) on
+  ANY exception (network/quota/parse error) - only an explicit, parsed `"INVALID"` in Gemini's response
+  returns `False`. `run_pipeline()` wraps the call in its own `try/except` too, same default-to-`True`
+  behavior, so a transient provider hiccup can never block a legitimate room photo - only a genuinely
+  confident "this is not a real photographed room interior" classification blocks anything. Cached on a
+  sha256 of the image bytes (`analysis_cache`), same convention as `describe_room`/`estimate_room_area`.
+- **Deliberately content-agnostic wording, both in the Gemini prompt and the rejection message** -
+  explicit user instruction: never call out what the bad upload specifically was (not "this looks like a
+  logo", not any description of the actual content) since the failure mode isn't limited to logos -
+  anybody could upload anything. `ROOM_PHOTO_VALIDATION_PROMPT` asks Gemini to classify broadly (photo of
+  a real room interior vs. "a drawing, illustration, graphic, icon, logo, diagram, screenshot, rendering,
+  text document, blank/solid-color image, or a photo of something that is not a room interior") and
+  respond with only `VALID`/`INVALID` - no reasoning is ever parsed out or surfaced. The user-facing
+  message is a fixed, generic string ("We couldn't detect a room in this photo. Please upload a clear
+  photo of an actual room and try again.") built without any reference to Gemini's actual classification
+  reasoning - nothing about what the image contained is ever echoed back to the user.
+- Delegated through `HybridProvider.validate_room_photo()` straight to the underlying `GeminiProvider`,
+  same pattern as `describe_room`/`generate_tier_notes`. Scoped to Room Redesign only (not Build a House -
+  that feature already has its own optional-photo/best-effort `analyze_plot` handling, a different shape
+  of problem).
+
 ## Materials & pricing feature
 
 After the 3 tiers are generated, each tier (except the original) can show an itemized materials list

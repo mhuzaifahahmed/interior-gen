@@ -17,6 +17,9 @@ class FakeProvider:
     def describe_room(self, image_bytes: bytes) -> str:
         return "A rectangular room with one window and one door."
 
+    def validate_room_photo(self, image_bytes: bytes) -> bool:
+        return True
+
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         return {"economical": "repaint over visible stains", "mid": "replace damaged flooring"}
 
@@ -95,6 +98,67 @@ def test_run_pipeline_success(monkeypatch):
 
     economical_prompt = next(p for p in provider.image_calls if "budget renovation" in p)
     assert "repaint over visible stains" in economical_prompt
+
+
+def test_run_pipeline_rejects_a_non_room_photo_before_any_paid_step(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["p1v/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="p1v", status="queued", original_key="p1v/original.png")
+        session.add(project)
+        session.commit()
+
+    class RejectingProvider(FakeProvider):
+        def validate_room_photo(self, image_bytes: bytes) -> bool:
+            return False
+
+    provider = RejectingProvider()
+    run_pipeline("p1v", provider, storage, "Modern", "Neutral")
+
+    with Session(engine) as session:
+        project = session.get(Project, "p1v")
+        assert project.status == "failed"
+        assert project.error
+        # The rejection message must stay generic - never echo back what the
+        # image actually was (see Provider.validate_room_photo's docstring).
+        assert "room" in project.error.lower()
+
+    # No paid image generation (or anything downstream of the gate) ran.
+    assert provider.image_calls == []
+    assert provider.materials_calls == []
+
+
+def test_run_pipeline_continues_when_validate_room_photo_itself_fails(monkeypatch):
+    # Fail-open: a provider error while just RUNNING the check (not a
+    # confident "this isn't a room" classification) must never block a
+    # legitimate upload.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["p1w/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="p1w", status="queued", original_key="p1w/original.png")
+        session.add(project)
+        session.commit()
+
+    class BrokenValidationProvider(FakeProvider):
+        def validate_room_photo(self, image_bytes: bytes) -> bool:
+            raise RuntimeError("transient Gemini error")
+
+    provider = BrokenValidationProvider()
+    run_pipeline("p1w", provider, storage, "Modern", "Neutral")
+
+    with Session(engine) as session:
+        project = session.get(Project, "p1w")
+        assert project.status == "done"
+
+    assert len(provider.image_calls) == 3
 
 
 def test_run_pipeline_stores_image_model_label_when_provider_supports_it(monkeypatch):
