@@ -280,10 +280,23 @@ class GeminiProvider(Provider):
             '{"is_real_photograph": true or false, "shows_room_interior": true or false, '
             '"structure_visible": true or false, "workable": true or false, "description": "..."}'
         )
-        response = self.client.models.generate_content(
-            model=settings.gemini_text_model,
-            contents=[prompt, image],
-        )
+        # Real, live-reproduced gap (2026-09-25): this call used to be a bare
+        # client.models.generate_content() with no retry, while
+        # generate_materials()/generate_room_layout() both already retry
+        # transient Gemini errors via _generate_content_with_retry(). A live
+        # 503 "high demand" (reproduced directly against the real API while
+        # investigating this) makes describe_room() raise, and
+        # run_pipeline()'s outer try/except deliberately treats ANY exception
+        # here as fail-open (room_description=None, so a transient hiccup
+        # never blocks a legitimate upload) - but that same fail-open also
+        # means the entire room-photo gate silently disables itself on the
+        # exact kind of transient error Gemini is known to throw, letting an
+        # unvalidated image straight through to the paid image model. Using
+        # the same shared retry+fallback-model helper the other two callers
+        # already use closes that gap without changing the fail-open
+        # contract itself - only a genuine double failure (retries exhausted
+        # AND the fallback model) still reaches run_pipeline()'s fail-open path.
+        response = _generate_content_with_retry(self.client, settings.gemini_text_model, [prompt, image])
         result = _parse_describe_room_response(response.text or "")
         analysis_cache.set("describe_room", image_bytes, result)
         return result
@@ -586,11 +599,17 @@ def _is_retryable(exc: Exception) -> bool:
 
 
 def _generate_content_with_retry(client: genai.Client, model: str, contents: list) -> object:
-    """Retries the materials-synthesis Gemini call on transient errors - 5xx
+    """Retries a Gemini generate_content() call on transient errors - 5xx
     server overload (the original 503 "high demand" this was built for) AND
     429 rate-limit/quota-exceeded (see _is_retryable). Deliberately narrow
     otherwise: does not retry e.g. auth/bad-request errors that would just
     fail identically again.
+
+    Originally built for generate_materials() only (hence
+    MATERIALS_GEMINI_MAX_ATTEMPTS/_FALLBACK_MODEL's naming), then reused
+    as-is by generate_room_layout() and describe_room() once each hit the
+    same transient-503 failure mode live - genuinely generic despite the
+    materials-flavored constant names, not copy-pasted per caller.
 
     If every attempt on `model` still fails, makes one final attempt against
     MATERIALS_GEMINI_FALLBACK_MODEL - a different model has independent

@@ -1093,6 +1093,34 @@ def test_set_kaggle_url_with_empty_string_clears_the_override(monkeypatch, _clea
         assert body["kaggle_api_url"]["source"] == "env"
 
 
+def test_clear_analysis_cache_endpoint_rejects_a_non_admin_user():
+    with TestClient(app) as client:
+        login_as(client)
+        res = client.post("/api/admin/clear-analysis-cache")
+        assert res.status_code == 403
+
+
+def test_clear_analysis_cache_endpoint_rejects_an_unauthenticated_caller():
+    with TestClient(app) as client:
+        res = client.post("/api/admin/clear-analysis-cache")
+        assert res.status_code == 401
+
+
+def test_clear_analysis_cache_endpoint_actually_wipes_the_cache(monkeypatch):
+    from app.providers import analysis_cache
+
+    analysis_cache.set("describe_room", b"some-test-image-bytes", "a cached description")
+    with TestClient(app) as client:
+        admin_id = login_as(client)
+        monkeypatch.setattr(main_module.settings, "admin_user_ids", admin_id)
+
+        res = client.post("/api/admin/clear-analysis-cache")
+        assert res.status_code == 200
+        assert res.json()["cleared"] >= 1
+
+    assert analysis_cache.get("describe_room", b"some-test-image-bytes") is analysis_cache.MISS
+
+
 def _sign_clerk_webhook(secret: str, body: bytes) -> dict:
     """Builds real, valid Svix headers for a test webhook delivery - Clerk
     webhooks are signed via Svix, and there's no way to construct a

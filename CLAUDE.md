@@ -261,6 +261,31 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
   `USER_NOTES_MAX_CHARS` (150) - enforced in **both** `build_prompt()` and `main.py`'s endpoint, since the
   frontend's `maxlength` is trivially bypassable by anyone calling the API directly.
 
+## Admin "Clear Analysis Cache" button (2026-09-21)
+
+Direct follow-up to the room-photo gate reliability fixes above. Real, live-diagnosed bug: the SAME test
+upload (a clearly non-room image) kept generating fake room tiers identically across two different
+devices, even after the sub-question prompt fix shipped - traced to `describe_room()`'s own cache
+(`app/providers/analysis_cache.py`), keyed purely on a sha256 hash of the uploaded bytes. Once Gemini
+returns a verdict for a given file (right or wrong), that exact verdict is served forever to anyone who
+re-uploads byte-identical content - a wrong "workable: true" from before a prompt fix shipped stays wrong
+for every future upload of that same file, since a code/prompt change doesn't retroactively invalidate an
+already-cached result. Previously the only way to bust a stuck entry was a full redeploy (which restarts
+the process and wipes the in-memory cache) - not something to do just to re-test one image.
+
+- **`analysis_cache.clear()`** (previously docstring'd as "test-only") now also returns the real count of
+  entries removed (`int`, was `None`) - existing test callers were unaffected (none checked the return
+  value). New **`analysis_cache.size()`** reports the current entry count.
+- **`POST /api/admin/clear-analysis-cache`** (`app/main.py`, gated by the same `require_admin()` as every
+  other admin endpoint) wipes the whole cache and returns `{"cleared": N}`.
+- **Admin panel** (`static/admin.html`): a new "Analysis Cache" section with a single "Clear Analysis
+  Cache" button, right below the Kaggle URLs section - explains in plain language why this exists (a bad
+  upload once misjudged keeps returning the same cached answer until cleared).
+- **Real workflow this enables**: after tightening `describe_room()`'s classification prompt, clear the
+  cache from `/admin` before re-testing a previously-misjudged image - otherwise the OLD cached verdict
+  (from before the fix) would keep being served regardless of how good the new prompt is, making it look
+  like the fix didn't work when it's actually just serving stale cached state.
+
 ## Kaggle tunnel URLs editable from /admin, no redeploy needed (2026-09-21)
 
 Direct follow-up to the room OpenAI-fallback change below (chronologically this happened right after it,
@@ -396,6 +421,30 @@ same-day with a simpler one-call design per explicit user request.
   Gemini's own description text was shown directly to the user).
 - Cached on a sha256 of the image bytes via the existing `describe_room` cache key (`analysis_cache`) -
   unchanged from before this feature, since it's the same call, not a new one.
+- **Third real reliability gap, found 2026-09-25 via a live production report**: the user reported the
+  exact astronaut-illustration failure mode STILL happening live on `interiorgen.site`, after the
+  sub-signals fix above was already deployed on `main`. Investigated by (1) confirming `main`/`origin/main`
+  genuinely had the sub-signals commit with no drift, then (2) live-testing today's exact prompt against a
+  synthetic reproduction of the reported image (an illustrated astronaut-on-a-cliff-at-sunset) - Gemini
+  correctly flagged it (`is_real_photograph: false` etc.) when it actually responded, so the classification
+  logic itself was never the problem. While running that live test, Gemini itself threw a real `503 "high
+  demand"` error - which is the actual root cause: `describe_room()` was a bare, unretried
+  `client.models.generate_content()` call, unlike `generate_materials()`/`generate_room_layout()`, which
+  both already retry transient Gemini errors via the shared `_generate_content_with_retry()` helper (see
+  "Materials & pricing feature" above for the original 503 incident that helper was built for). Because
+  `run_pipeline()`'s outer `try/except` around `describe_room()` deliberately treats ANY exception as
+  fail-open (`room_description=None`, so a Gemini hiccup never blocks a legitimate upload - see above), a
+  transient 503 didn't just fail one call, it silently disabled the entire room-photo gate for that
+  request, letting an unvalidated image straight through to the paid image model. **Fixed by routing
+  `describe_room()` through the same `_generate_content_with_retry()` helper** (3 attempts + a fallback
+  model on exhaustion, unchanged from its existing behavior) - `describe_room()` is now its third caller,
+  not a new implementation; its docstring was updated to note it's genuinely generic despite the
+  materials-flavored constant names (`MATERIALS_GEMINI_MAX_ATTEMPTS`/`_FALLBACK_MODEL`), not something
+  copy-pasted per caller. The fail-open contract itself is unchanged - a transient hiccup is now retried
+  instead of silently disabling the gate, and only a genuine double failure (retries exhausted AND the
+  fallback model) still reaches the pre-existing fail-open path. Regression-guarded by
+  `test_describe_room_retries_on_transient_server_error` (`tests/test_gemini_room_validation.py`), mirroring
+  the existing `test_generate_materials_retries_on_transient_server_error` pattern.
 - Scoped to Room Redesign only (not Build a House - that feature already has its own optional-photo/
   best-effort `analyze_plot` handling, a different shape of problem).
 

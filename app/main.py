@@ -41,7 +41,7 @@ from app.plans import (
     set_plan,
 )
 from app.plans import VALID_PLANS
-from app.providers import get_provider
+from app.providers import analysis_cache, get_provider
 from app.providers.gemini import fallback_materials
 from app.schemas import (
     AdminSetPlanRequest,
@@ -397,6 +397,20 @@ def _kaggle_urls_response() -> KaggleUrlsResponse:
     }
     raw = dynamic_settings.get_all_effective_urls(env_fallbacks)
     return KaggleUrlsResponse(urls={key: KaggleUrlEntry(**entry) for key, entry in raw.items()})
+
+
+@app.post("/api/admin/clear-analysis-cache")
+def admin_clear_analysis_cache(_admin: AuthUser = Depends(require_admin)):
+    """Wipes the in-memory describe_room/estimate_room_area/generate_tier_notes
+    cache (app/providers/analysis_cache.py) - a real operational need: a wrong
+    describe_room() classification (e.g. a non-room image once misjudged as
+    "workable") gets cached per image-hash indefinitely, so re-uploading that
+    exact same file keeps serving the same wrong verdict to every user/device
+    that uploads it, even after a prompt fix ships - previously the only way
+    to clear it was a full redeploy (which restarts the process). Returns how
+    many entries were actually removed."""
+    removed = analysis_cache.clear()
+    return {"cleared": removed}
 
 
 @app.get("/api/admin/kaggle-urls", response_model=KaggleUrlsResponse)

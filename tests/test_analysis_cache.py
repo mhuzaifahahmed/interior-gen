@@ -65,3 +65,18 @@ def test_clear_empties_the_cache():
     analysis_cache.set("describe_room", b"abc", "value")
     analysis_cache.clear()
     assert analysis_cache.get("describe_room", b"abc") is analysis_cache.MISS
+
+
+def test_clear_returns_the_number_of_entries_removed():
+    analysis_cache.clear()
+    analysis_cache.set("describe_room", b"abc", "value")
+    analysis_cache.set("describe_room", b"def", "value2")
+    removed = analysis_cache.clear()
+    assert removed == 2
+
+
+def test_size_reports_the_real_entry_count():
+    analysis_cache.clear()
+    assert analysis_cache.size() == 0
+    analysis_cache.set("describe_room", b"abc", "value")
+    assert analysis_cache.size() == 1

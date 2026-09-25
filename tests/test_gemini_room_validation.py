@@ -1,6 +1,7 @@
 import io
 import json
 
+from google.genai import errors as genai_errors
 from PIL import Image
 
 import app.providers.gemini as gemini_module
@@ -240,6 +241,44 @@ def test_describe_room_rejects_a_stylized_illustration_flagged_via_sub_signals(m
 
     provider = GeminiProvider()
     result = provider.describe_room(_sample_image_bytes(5))
+    assert result == UNWORKABLE_IMAGE_MARKER
+
+
+def test_describe_room_retries_on_transient_server_error(monkeypatch):
+    # Real, live-reproduced gap (2026-09-25): describe_room() used to be a
+    # bare, unretried Gemini call while generate_materials()/
+    # generate_room_layout() already retried transient errors - a live 503
+    # "high demand" (reproduced directly against the real API while
+    # investigating a real non-room upload that slipped through) made
+    # describe_room() raise, and run_pipeline()'s deliberate fail-open
+    # (any exception -> room_description=None, so a hiccup never blocks a
+    # legitimate upload) also silently skipped the entire room-photo gate on
+    # that exact kind of transient error. This guards that a single 503 is
+    # now retried, not treated as a reason to skip validation.
+    analysis_cache.clear()
+    call_count = {"n": 0}
+
+    class FakeResponse:
+        text = '{"workable": false, "description": ""}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            call_count["n"] += 1
+            if call_count["n"] < 2:
+                raise genai_errors.ServerError(503, {"error": {"message": "high demand"}})
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini_module.time, "sleep", lambda seconds: None)
+
+    provider = GeminiProvider()
+    result = provider.describe_room(_sample_image_bytes(6))
+
+    assert call_count["n"] == 2
     assert result == UNWORKABLE_IMAGE_MARKER
 
 

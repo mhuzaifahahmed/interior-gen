@@ -118,6 +118,22 @@
     </div>
   </div>
 
+  <div class="mb-10">
+    <h2 class="font-headline-md text-headline-md text-on-surface">Analysis Cache</h2>
+    <p class="font-body-md text-on-surface-variant text-sm mt-1 mb-4">
+      Room-photo classifications are cached per uploaded file. If a bad upload was once misjudged as
+      "workable" (or vice versa), re-uploading that exact same file keeps returning the same cached
+      answer, even after a fix ships - clear it below to force a fresh re-check instead of waiting for
+      the next deploy.
+    </p>
+    <div class="flex items-center gap-3">
+      <button id="clear-analysis-cache-btn" class="px-5 py-2.5 rounded-full border border-outline-variant text-on-surface font-label-caps text-label-caps">
+        Clear Analysis Cache
+      </button>
+      <span id="clear-analysis-cache-status" class="text-sm text-on-surface-variant"></span>
+    </div>
+  </div>
+
   <div class="flex items-center justify-between gap-4 mb-6 flex-wrap">
     <div>
       <h1 class="font-headline-md text-headline-md text-on-surface">Users &amp; Plans</h1>
@@ -344,6 +360,26 @@
       kaggleUrlsStatus.textContent = "Failed to save - see console for details.";
     } finally {
       kaggleUrlsSaveBtn.disabled = false;
+    }
+  });
+
+  const clearAnalysisCacheBtn = document.getElementById("clear-analysis-cache-btn");
+  const clearAnalysisCacheStatus = document.getElementById("clear-analysis-cache-status");
+
+  clearAnalysisCacheBtn.addEventListener("click", async () => {
+    clearAnalysisCacheBtn.disabled = true;
+    clearAnalysisCacheStatus.textContent = "Clearing…";
+    try {
+      const res = await adminFetch("/api/admin/clear-analysis-cache", { method: "POST" });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      clearAnalysisCacheStatus.textContent = `Cleared ${data.cleared} cached entr${data.cleared === 1 ? "y" : "ies"}.`;
+      setTimeout(() => { clearAnalysisCacheStatus.textContent = ""; }, 5000);
+    } catch (err) {
+      console.error(err);
+      clearAnalysisCacheStatus.textContent = "Failed to clear cache - see console for details.";
+    } finally {
+      clearAnalysisCacheBtn.disabled = false;
     }
   });
 
