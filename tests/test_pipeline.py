@@ -7,6 +7,7 @@ from sqlmodel import Session, SQLModel, create_engine
 from app.models import Project
 from app.pipeline import generate as generate_module
 from app.pipeline.generate import TIERS, run_pipeline
+from app.providers.session_errors import KaggleSessionUnavailableError
 
 
 class FakeProvider:
@@ -95,6 +96,44 @@ def test_run_pipeline_success(monkeypatch):
 
     economical_prompt = next(p for p in provider.image_calls if "budget renovation" in p)
     assert "repaint over visible stains" in economical_prompt
+
+
+def test_run_pipeline_shows_a_friendly_message_when_self_hosted_model_is_offline(monkeypatch):
+    # room_openai_fallback_enabled defaults to False (see app/config.py) -
+    # a KaggleSessionUnavailableError now genuinely fails the project instead
+    # of silently retrying via OpenAI. This asserts the raw, operator-facing
+    # exception message ("start/restart the Kaggle notebook...") never reaches
+    # project.error - only the plain, branded message the frontend's own
+    # room-model-status note already uses.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["p1x/original.png"] = b"original-bytes"
+
+    with Session(engine) as session:
+        project = Project(id="p1x", status="queued", original_key="p1x/original.png")
+        session.add(project)
+        session.commit()
+
+    class OfflineModelProvider(FakeProvider):
+        def generate_image(self, image_bytes: bytes, prompt: str, tier: str | None = None) -> bytes:
+            raise KaggleSessionUnavailableError(
+                "The room-redesign Kaggle session appears to be offline (couldn't connect "
+                "at all). Start/restart the Kaggle notebook, update the tunnel URL if it "
+                "changed, and try again."
+            )
+
+    provider = OfflineModelProvider()
+    run_pipeline("p1x", provider, storage, "Modern", "Neutral")
+
+    with Session(engine) as session:
+        project = session.get(Project, "p1x")
+        assert project.status == "failed"
+        assert project.error
+        assert "notebook" not in project.error.lower()
+        assert "start/restart" not in project.error.lower()
+        assert "connected" in project.error.lower()
 
 
 def test_run_pipeline_rejects_a_non_room_photo_before_any_paid_step(monkeypatch):

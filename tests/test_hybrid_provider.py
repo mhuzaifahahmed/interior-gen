@@ -233,6 +233,10 @@ def test_generate_image_falls_back_to_openai_not_to_the_house_provider_when_room
     # backend (e.g. both set to "modal"), a failing room provider must still
     # fall back to the guaranteed-real OpenAI instance, not to whatever
     # (possibly also-failing) backend house rendering happens to be using.
+    # room_openai_fallback_enabled defaults to False now (see app/config.py) -
+    # explicitly enabled here since this test exercises the fallback CODE
+    # PATH itself, which still exists, just gated behind that setting.
+    monkeypatch.setattr(hybrid_module.settings, "room_openai_fallback_enabled", True)
     monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
     monkeypatch.setattr(hybrid_module.settings, "house_image_provider", "modal")
     monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: FailingImageProvider("kaggle"))
@@ -263,6 +267,7 @@ def test_explicit_room_image_provider_overrides_the_settings_toggle(monkeypatch)
 
 
 def test_generate_image_falls_back_to_openai_when_room_provider_fails(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "room_openai_fallback_enabled", True)
     monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
     failing_kaggle = FailingImageProvider("kaggle")
     monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: failing_kaggle)
@@ -287,6 +292,7 @@ def test_generate_image_passes_the_original_prompt_unmodified_to_the_fallback(mo
             captured["prompt"] = prompt
             return super().generate_image(image_bytes, prompt, tier)
 
+    monkeypatch.setattr(hybrid_module.settings, "room_openai_fallback_enabled", True)
     monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
     monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: FailingImageProvider("kaggle"))
 
@@ -308,10 +314,67 @@ def test_generate_image_raises_directly_when_no_fallback_is_configured(monkeypat
     with pytest.raises(RuntimeError, match="openai is unreachable"):
         provider.generate_image(b"x", "prompt")
 
-    assert failing.calls == 1
+
+# ---- room_openai_fallback_enabled defaults to False (2026-09): a failed ----
+# ---- self-hosted attempt must raise, never silently spend OpenAI credits ----
+
+
+def test_generate_image_does_not_fall_back_to_openai_by_default(monkeypatch):
+    # The real cost problem this guards: without this default, a flaky/
+    # offline self-hosted backend silently spent real OpenAI credits on
+    # every request - including for a user who explicitly chose the free
+    # model. room_openai_fallback_enabled is NOT set here, so this exercises
+    # the actual default (False).
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
+    failing_kaggle = FailingImageProvider("kaggle")
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: failing_kaggle)
+    openai_fake = FakeImageProvider("openai")
+
+    provider = HybridProvider(image_provider=openai_fake)
+
+    with pytest.raises(RuntimeError, match="kaggle is unreachable"):
+        provider.generate_image(b"x", "prompt", tier="mid")
+
+    # The self-hosted provider was tried exactly once - OpenAI was never
+    # touched at all (not even attempted and discarded).
+    assert failing_kaggle.calls == 1
+
+
+def test_generate_images_batch_does_not_fall_back_to_openai_by_default(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
+
+    class FailingBatchKaggle:
+        def generate_images_batch(self, image_bytes, tier_prompts):
+            raise RuntimeError("kaggle batch is unreachable")
+
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", FailingBatchKaggle)
+    openai_fake = FakeImageProvider("openai")
+
+    provider = HybridProvider(image_provider=openai_fake)
+
+    with pytest.raises(RuntimeError, match="kaggle batch is unreachable"):
+        provider.generate_images_batch(b"x", {"economical": "p1", "mid": "p2", "premium": "p3"})
+
+
+def test_generate_image_still_falls_back_when_explicitly_enabled(monkeypatch):
+    # Confirms the toggle actually restores the old behavior end-to-end (not
+    # just that the gated tests above pass with it set) - a single .env line
+    # (ROOM_OPENAI_FALLBACK_ENABLED=true) should be all that's needed.
+    monkeypatch.setattr(hybrid_module.settings, "room_openai_fallback_enabled", True)
+    monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
+    failing_kaggle = FailingImageProvider("kaggle")
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: failing_kaggle)
+    openai_fake = FakeImageProvider("openai")
+
+    provider = HybridProvider(image_provider=openai_fake)
+
+    result = provider.generate_image(b"x", "prompt", tier="mid")
+
+    assert result == b"openai:image"
 
 
 def test_generate_image_raises_if_both_room_provider_and_fallback_fail(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "room_openai_fallback_enabled", True)
     monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
     monkeypatch.setattr(
         hybrid_module, "KaggleImageProvider", lambda: FailingImageProvider("kaggle", RuntimeError("kaggle down"))
@@ -328,6 +391,7 @@ def test_each_tier_falls_back_independently(monkeypatch):
     # Simulates the real per-tier concurrency in app/pipeline/generate.py -
     # a transient failure on one tier's Kaggle call must not affect another
     # tier's call, which might genuinely succeed.
+    monkeypatch.setattr(hybrid_module.settings, "room_openai_fallback_enabled", True)
     monkeypatch.setattr(hybrid_module.settings, "image_provider", "kaggle")
 
     class FlakyKaggle:
@@ -421,6 +485,7 @@ def test_get_image_model_label_openai_when_room_provider_falls_back(monkeypatch)
     # Real regression guard for the "no fallback wording" requirement: even
     # though this exercises the fallback code path, the label must be the
     # plain "OpenAI" string - never mention fallback/backup.
+    monkeypatch.setattr(hybrid_module.settings, "room_openai_fallback_enabled", True)
     _register_fake_labels(monkeypatch)
     provider = HybridProvider(
         image_provider=FakeOpenAIProvider(), room_image_provider=FailingFakeOurModelProvider()
@@ -435,6 +500,7 @@ def test_get_image_model_label_openai_when_room_provider_falls_back(monkeypatch)
 
 
 def test_get_image_model_label_mixed_when_tiers_diverge(monkeypatch):
+    monkeypatch.setattr(hybrid_module.settings, "room_openai_fallback_enabled", True)
     _register_fake_labels(monkeypatch)
 
     class SometimesFailingProvider:
@@ -507,6 +573,7 @@ def test_get_image_model_label_uniform_openai_when_batch_fails(monkeypatch):
     # Real regression guard: a failed batch call falls back to OpenAI for
     # ALL tiers at once (all-or-nothing, unlike the per-tier path) - the
     # label must reflect that uniformly, never mentioning fallback/backup.
+    monkeypatch.setattr(hybrid_module.settings, "room_openai_fallback_enabled", True)
     _register_fake_labels(monkeypatch)
 
     class FailingBatchProvider:

@@ -100,21 +100,35 @@ class HybridProvider(Provider):
       or "openai") via _default_room_image_provider() - used for
       generate_image()/generate_images_batch() (room-redesign).
 
-    RUNTIME FALLBACK: generate_image() automatically retries via _openai if
-    _room_image_provider raises for any reason - a dead Kaggle tunnel, a
-    Modal error, a timeout, a malformed response, anything. This matters
-    specifically because both Kaggle and Modal room backends are
+    RUNTIME FALLBACK (gated behind settings.room_openai_fallback_enabled,
+    default False as of 2026-09): when ENABLED, generate_image() automatically
+    retries via _openai if _room_image_provider raises for any reason - a dead
+    Kaggle tunnel, a Modal error, a timeout, a malformed response, anything.
+    This existed specifically because both Kaggle and Modal room backends are
     experimental/self-hosted (Kaggle's Cloudflare tunnel has gone offline
-    mid-testing in the past) - without this, one dead backend fails the
-    whole generation instead of degrading to the paid-but-reliable one. Each
-    of the 3 tiers' generate_image() calls falls back independently (see
+    mid-testing in the past) - without it, one dead backend fails the whole
+    generation instead of degrading to the paid-but-reliable one. Each of the
+    3 tiers' generate_image() calls falls back independently (see
     app/pipeline/generate.py's per-tier ThreadPoolExecutor), so a transient
-    failure on only one tier doesn't drag the other two down with it. No
-    fallback loop when IMAGE_PROVIDER=openai (the default toggle value for
-    this specific setting is "modal", but explicitly setting it to "openai"
-    still works this way) - in that case _room_image_provider IS _openai
-    (the same object), so there's nothing further to fall back to and a
-    failure just raises directly.
+    failure on only one tier doesn't drag the other two down with it.
+
+    Real cost problem this toggle now guards against: with the fallback
+    unconditionally on, a flaky/offline self-hosted backend silently spent
+    real OpenAI credits on every request - including when a user explicitly
+    chose the free/self-hosted model via the frontend's room-model toggle,
+    which is exactly the case that should never cost anything. Default is now
+    DISABLED - a failed self-hosted attempt raises straight through instead,
+    failing the project with a real, visible error rather than a costly,
+    invisible substitution. The frontend's room-model-status note (see
+    GET /api/room-model-status) already warns upfront when the self-hosted
+    model is known offline, for the common case where the failure was already
+    predictable before the user even clicked Generate.
+
+    No fallback loop regardless of this toggle when IMAGE_PROVIDER=openai (the
+    default toggle value for this specific setting is "kaggle", but explicitly
+    setting it to "openai" still works this way) - in that case
+    _room_image_provider IS _openai (the same object), so there's nothing
+    further to fall back to and a failure just raises directly either way.
 
     floor_plan_provider defaults to the app.providers.idealhouse MODULE itself
     (not an instance - its generate_floor_plan is a plain function, same style
@@ -182,6 +196,20 @@ class HybridProvider(Provider):
         except Exception:
             if provider is self._openai:
                 raise  # already OpenAI (the fallback itself) - nothing left to try
+            if not settings.room_openai_fallback_enabled:
+                # Real cost problem this avoids: silently retrying via paid
+                # OpenAI credits whenever the self-hosted backend fails - see
+                # Settings.room_openai_fallback_enabled's docstring. Just
+                # re-raise so the failure is real and visible (the pipeline
+                # fails the project with a clear error) instead of a costly,
+                # invisible substitution.
+                logger.exception(
+                    "room image provider %s failed for tier %s - OpenAI fallback is "
+                    "disabled (ROOM_OPENAI_FALLBACK_ENABLED=false), failing generation",
+                    type(provider).__name__,
+                    tier,
+                )
+                raise
             logger.exception(
                 "room image provider %s failed for tier %s - falling back to OpenAI "
                 "for this generation",
@@ -215,6 +243,13 @@ class HybridProvider(Provider):
         except Exception:
             if provider is self._openai:
                 raise  # already OpenAI (the fallback itself) - nothing left to try
+            if not settings.room_openai_fallback_enabled:
+                logger.exception(
+                    "room image provider %s batch generation failed - OpenAI fallback is "
+                    "disabled (ROOM_OPENAI_FALLBACK_ENABLED=false), failing generation",
+                    type(provider).__name__,
+                )
+                raise
             logger.exception(
                 "room image provider %s batch generation failed - falling back to OpenAI "
                 "(per-tier concurrent, not batched)",

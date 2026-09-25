@@ -151,6 +151,27 @@ class Settings(BaseSettings):
     # T4-VRAM-driven, not platform-driven.
     image_provider: str = "kaggle"
 
+    # Real cost problem this fixes (2026-09): HybridProvider.generate_image()/
+    # generate_images_batch() used to ALWAYS silently retry via the paid
+    # OpenAI provider whenever the self-hosted room backend (Kaggle/Modal)
+    # failed - including when a user on the frontend's room-model toggle
+    # explicitly chose the free/self-hosted model. That meant "our model" was
+    # never actually a hard guarantee against OpenAI spend - a flaky/offline
+    # Kaggle session quietly burned real OpenAI credits on every request
+    # instead. Default False (no fallback): a failed self-hosted attempt now
+    # fails the generation outright instead of spending OpenAI credits behind
+    # the user's back - the frontend's existing room-model-status note (see
+    # GET /api/room-model-status, static/app.js's applyRoomModelStatusNote())
+    # already warns upfront when the self-hosted model is known to be
+    # offline, and a mid-generation failure now surfaces as a real error
+    # instead of a silent, costly substitution.
+    #
+    # Deliberately a config TOGGLE, not a deletion - the actual fallback code
+    # in hybrid.py is untouched, just gated behind this flag, so restoring the
+    # old behavior later (e.g. once real per-plan cost accounting exists) is a
+    # single .env line, no code change needed.
+    room_openai_fallback_enabled: bool = False
+
     # KaggleImageProvider's endpoint - a Cloudflare quick-tunnel URL pointing at
     # a live Kaggle notebook session running the user's own fine-tuned SD-style
     # img2img model. Only used when image_provider == "kaggle". Ephemeral by

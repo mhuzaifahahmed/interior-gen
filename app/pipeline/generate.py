@@ -11,6 +11,7 @@ from app.pipeline.prompts import PROMPT_VERSION, build_prompt, build_tier_spec
 from app.pipeline.timing import PipelineTimer
 from app.providers.base import Provider
 from app.providers.gemini import UNWORKABLE_IMAGE_MARKER, fallback_materials
+from app.providers.session_errors import KaggleSessionUnavailableError
 from app.storage.base import Storage
 
 logger = logging.getLogger(__name__)
@@ -419,7 +420,24 @@ def run_pipeline(
         except Exception as exc:
             logger.exception("pipeline failed for project %s", project_id)
             project.status = "failed"
-            project.error = str(exc)
+            if isinstance(exc, KaggleSessionUnavailableError):
+                # Same classification that flips the frontend's proactive
+                # room-model-status note off (see is_room_kaggle_connected())
+                # - now also the failure path itself, since
+                # ROOM_OPENAI_FALLBACK_ENABLED defaults to false (no more
+                # silent, costly OpenAI substitution - see Settings.
+                # room_openai_fallback_enabled). The raw exception message is
+                # written for an operator ("start/restart the Kaggle
+                # notebook") - swapped here for the same plain, branded
+                # wording the upfront note already uses, so a mid-generation
+                # failure reads consistently with what the user may have
+                # already seen before clicking Generate.
+                project.error = (
+                    "Our self-hosted model isn't connected right now, so we couldn't "
+                    "complete this generation. Please try again shortly."
+                )
+            else:
+                project.error = str(exc)
             session.add(project)
             session.commit()
 

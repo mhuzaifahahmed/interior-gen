@@ -261,6 +261,39 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
   `USER_NOTES_MAX_CHARS` (150) - enforced in **both** `build_prompt()` and `main.py`'s endpoint, since the
   frontend's `maxlength` is trivially bypassable by anyone calling the API directly.
 
+## Room OpenAI-fallback disabled by default (2026-09-21)
+
+Real, user-reported cost problem: `HybridProvider.generate_image()`/`generate_images_batch()` used to
+ALWAYS silently retry via paid OpenAI whenever the self-hosted room backend (Kaggle/Modal) failed - so
+"our model" was never actually a hard guarantee against OpenAI spend, and a flaky/offline Kaggle session
+quietly burned real credits on every request, including when a user explicitly chose the free model via
+the frontend's room-model toggle.
+
+- **`Settings.room_openai_fallback_enabled`** (`app/config.py`, env `ROOM_OPENAI_FALLBACK_ENABLED`) -
+  new toggle, default `False`. A **config gate, not a deletion** - the actual fallback code in
+  `hybrid.py` is untouched, just wrapped in an `if not settings.room_openai_fallback_enabled: raise` -
+  restoring the old always-fall-back behavior later is a single `.env`/Render dashboard line, no code
+  change needed. Applies to both `generate_image()` (per-tier) and `generate_images_batch()` (Kaggle's
+  batched path).
+- **When disabled (now the default), a failed self-hosted attempt fails the whole project outright**
+  instead of spending OpenAI credits behind the user's back. `run_pipeline()` (`app/pipeline/generate.py`)
+  special-cases `KaggleSessionUnavailableError` (the "session appears offline" classification - see
+  `session_errors.py`) in its outer exception handler: the raw, operator-facing exception message ("start/
+  restart the Kaggle notebook...") is swapped for the same plain, branded wording the frontend's proactive
+  room-model-status note already uses ("Our self-hosted model isn't connected right now, so we couldn't
+  complete this generation. Please try again shortly.") - never surfaced to the end user. Any other,
+  unclassified failure keeps its raw message, unchanged from before this feature.
+- **`static/index.html`'s room-model-status note** (`#room-model-status-note`, `GET /api/room-model-status`)
+  copy and styling updated to match the new reality - now says generation is "temporarily unavailable"
+  instead of "you'll get OpenAI-generated results instead" (no longer true with the fallback off), and
+  restyled with the same error-toned treatment (`border-error/30 bg-error-container/10`) Build a House's
+  blocking feasibility banner already uses, since this is now a real "won't work right now" warning, not
+  an FYI.
+- Deploys with zero Render dashboard changes needed - the new setting's Python default (`False`) takes
+  effect immediately on any instance that doesn't explicitly set `ROOM_OPENAI_FALLBACK_ENABLED`, unlike
+  most other settings in this project (see "Deployment" above's "two separate environment-variable stores"
+  warning) - there's nothing to forget to mirror to Render for this one to take effect.
+
 ## Room-photo validation gate (2026-09-21)
 
 Real, user-reported bug: uploading an image that wasn't actually a photo of a room (e.g. a flat

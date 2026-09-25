@@ -640,14 +640,18 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <p class="font-body-md text-on-surface-variant/70 text-xs" id="room-quota-note" hidden></p>
 <!-- Live Kaggle-connectivity note (GET /api/room-model-status) - only ever
      shown when our self-hosted model is actually unreachable right now, so a
-     user knows upfront their generation will run on OpenAI (with our own
-     prompt tuning) instead of quietly finding out only after results land.
-     Hidden by default; populated + revealed with a GSAP fade-up by
-     applyRoomModelStatusNote() in app.js, matching this app's other GSAP
-     entrance conventions (guarded fallback, gsap.set + .to). -->
-<div class="flex items-start gap-3 rounded-xl border border-primary/25 bg-primary-container/40 px-4 py-3" id="room-model-status-note" hidden>
-<span class="material-symbols-outlined text-primary text-[20px] shrink-0 mt-0.5">bolt</span>
-<p class="font-body-md text-sm text-on-background">Our self-hosted model isn't connected right now &mdash; you'll get OpenAI-generated results instead, with our own structure-preservation tuning applied.</p>
+     user knows upfront that generation will fail, instead of quietly
+     finding out only after clicking Generate. Since ROOM_OPENAI_FALLBACK_ENABLED
+     defaults to false (no automatic, costly OpenAI substitution - see
+     app/config.py), this is a real "generation won't work right now"
+     warning, not just an FYI - styled with the same error-toned treatment as
+     Build a House's blocking feasibility banner. Hidden by default; populated
+     + revealed with a GSAP fade-up by applyRoomModelStatusNote() in app.js,
+     matching this app's other GSAP entrance conventions (guarded fallback,
+     gsap.set + .to). -->
+<div class="flex items-start gap-3 rounded-xl border border-error/30 bg-error-container/10 px-4 py-3" id="room-model-status-note" hidden>
+<span class="material-symbols-outlined text-error text-[20px] shrink-0 mt-0.5">error</span>
+<p class="font-body-md text-sm text-on-background">Our self-hosted model isn't connected right now, so generation is temporarily unavailable. Please try again shortly.</p>
 </div>
 <div class="pt-2">
 <button type="submit" id="generate-btn" disabled class="group relative w-full bg-primary text-on-primary py-5 px-8 flex items-center justify-center gap-3 overflow-hidden disabled:opacity-35 disabled:cursor-not-allowed enabled:hover:-translate-y-0.5 enabled:hover:shadow-[0_8px_28px_rgba(122,71,18,0.35)] transition-all duration-300 shadow-md">
