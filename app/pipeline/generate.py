@@ -143,12 +143,41 @@ def run_pipeline(
             with timer.stage("storage.get(original)"):
                 original_bytes = storage.get(project.original_key)
 
+            # describe_room() now doubles as the room-photo validation gate
+            # (see UNWORKABLE_IMAGE_MARKER below), so a failure here can no
+            # longer degrade to "continue without it" the way it did when
+            # this call was purely descriptive - a real, live-reproduced
+            # incident (2026-09-26): Gemini's free-tier quota (20 req/day for
+            # gemini-3.5-flash) was exhausted from repeated testing, and once
+            # BOTH the primary model and _generate_content_with_retry()'s
+            # fallback model are exhausted, describe_room() raises with
+            # nothing left to try - the old fail-open behavior here silently
+            # disabled the ENTIRE gate for that request, letting an
+            # unvalidated image straight through to paid generation. Fixed
+            # per explicit user decision: reject the generation instead of
+            # silently skipping validation - the small risk of blocking a
+            # legitimate upload during a genuine Gemini outage is worth it to
+            # keep the gate's guarantee real. Every OTHER Gemini call in this
+            # pipeline (generate_tier_notes, estimate_room_area) stays
+            # fail-open below, unchanged - only describe_room() carries this
+            # stricter contract now, because only it gates paid spend.
             try:
                 with timer.stage("describe_room"):
                     room_description = provider.describe_room(original_bytes)
             except Exception:
-                logger.exception("describe_room failed for project %s; continuing without it", project_id)
-                room_description = None
+                logger.exception(
+                    "describe_room failed for project %s - rejecting rather than skipping "
+                    "the room-photo validation gate",
+                    project_id,
+                )
+                project.status = "failed"
+                project.error = (
+                    "We couldn't verify this photo right now due to a temporary issue on our "
+                    "end. Please try again in a moment."
+                )
+                session.add(project)
+                session.commit()
+                return
 
             # Hard gate, before any paid step: describe_room() doubles as the
             # "is this even a usable room photo" check (see
@@ -159,13 +188,14 @@ def run_pipeline(
             # preserve and just hallucinated an unrelated generic room per
             # tier. Checked as a substring, not an exact match, so minor
             # formatting Gemini adds around the marker (trailing punctuation,
-            # a stray newline) still counts. Fail-open by construction: this
-            # only fires on a genuine, successfully-parsed marker match -
-            # describe_room() raising already degraded room_description to
-            # None above, which never matches. The rejection message is a
-            # fixed, generic string, and the marker text itself is never
-            # written to project.room_description - nothing about the actual
-            # upload is ever echoed back to the user.
+            # a stray newline) still counts. describe_room() raising is no
+            # longer possible to reach this point at all (see the try/except
+            # above - it now rejects the project directly), so `room_description`
+            # here is always either a real description or the marker, never
+            # None from a failure. The rejection message is a fixed, generic
+            # string, and the marker text itself is never written to
+            # project.room_description - nothing about the actual upload is
+            # ever echoed back to the user.
             if room_description and UNWORKABLE_IMAGE_MARKER in room_description:
                 logger.info(
                     "project %s rejected: uploaded image is not a usable room photo", project_id

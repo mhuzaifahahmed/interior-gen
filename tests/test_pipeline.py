@@ -173,11 +173,15 @@ def test_run_pipeline_rejects_a_non_room_photo_before_any_paid_step(monkeypatch)
     assert provider.materials_calls == []
 
 
-def test_run_pipeline_continues_when_describe_room_itself_fails(monkeypatch):
-    # Fail-open: a provider error while just RUNNING describe_room (not a
-    # confident "this isn't a room" marker) must never block a legitimate
-    # upload - it already degrades to room_description=None, same as before
-    # this gate existed.
+def test_run_pipeline_rejects_when_describe_room_itself_fails(monkeypatch):
+    # Real, live-reproduced incident (2026-09-26): describe_room() now
+    # doubles as the room-photo validation gate, so a failure here can no
+    # longer degrade to "continue without it" - a genuine Gemini quota
+    # exhaustion (both the primary AND retry-fallback model exhausted) was
+    # observed live, and the OLD fail-open behavior silently disabled the
+    # whole gate for that request, letting an unvalidated image straight
+    # through to paid generation. Per explicit user decision, this now
+    # rejects the project instead - no paid image call ever runs.
     engine = make_test_engine()
     monkeypatch.setattr(generate_module, "engine", engine)
 
@@ -191,17 +195,19 @@ def test_run_pipeline_continues_when_describe_room_itself_fails(monkeypatch):
 
     class BrokenDescribeProvider(FakeProvider):
         def describe_room(self, image_bytes: bytes) -> str:
-            raise RuntimeError("transient Gemini error")
+            raise RuntimeError("Gemini quota exhausted on both models")
 
     provider = BrokenDescribeProvider()
     run_pipeline("p1w", provider, storage, "Modern", "Neutral")
 
     with Session(engine) as session:
         project = session.get(Project, "p1w")
-        assert project.status == "done"
+        assert project.status == "failed"
+        assert project.error
+        assert "try again" in project.error.lower()
         assert project.room_description is None
 
-    assert len(provider.image_calls) == 3
+    assert provider.image_calls == []
 
 
 def test_run_pipeline_stores_image_model_label_when_provider_supports_it(monkeypatch):
