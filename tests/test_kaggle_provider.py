@@ -104,6 +104,45 @@ def test_generate_url_strips_a_trailing_slash():
     assert _generate_url("https://example.trycloudflare.com/") == "https://example.trycloudflare.com/generate"
 
 
+def test_check_connection_true_on_any_real_response(monkeypatch):
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+
+    def fake_get(url, timeout=None):
+        # Even a 404 (no route at "/") proves the tunnel + notebook server
+        # are both up - check_connection() doesn't inspect the status code.
+        assert url == "https://example.trycloudflare.com"
+        return httpx.Response(404, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+    assert kaggle_module.check_connection() is True
+
+
+def test_check_connection_false_on_connection_failure(monkeypatch):
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+
+    def fake_get(url, timeout=None):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
+    assert kaggle_module.check_connection() is False
+
+
+def test_check_connection_false_when_no_url_configured(monkeypatch):
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "")
+    assert kaggle_module.check_connection() is False
+
+
+def test_room_base_strips_known_suffixes():
+    from app.providers.kaggle import _room_base
+
+    assert _room_base("https://example.trycloudflare.com") == "https://example.trycloudflare.com"
+    assert _room_base("https://example.trycloudflare.com/") == "https://example.trycloudflare.com"
+    assert _room_base("https://example.trycloudflare.com/generate") == "https://example.trycloudflare.com"
+    assert (
+        _room_base("https://example.trycloudflare.com/generate_batch") == "https://example.trycloudflare.com"
+    )
+
+
 def test_concurrent_calls_are_serialized_not_sent_in_parallel(monkeypatch):
     # Regression guard for a real, live-observed failure: the room-redesign
     # pipeline fires all 3 tiers concurrently, which crashed a real Kaggle

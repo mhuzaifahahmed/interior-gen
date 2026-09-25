@@ -402,6 +402,7 @@ const roomModelToggleWrap = document.getElementById("room-model-toggle-wrap");
 const roomModelToggle = document.getElementById("room-model-toggle");
 const roomModelSelect = document.getElementById("room-model-select");
 const roomQuotaNote = document.getElementById("room-quota-note");
+const roomModelStatusNote = document.getElementById("room-model-status-note");
 
 const houseModelToggleWrap = document.getElementById("house-model-toggle-wrap");
 const houseModelToggle = document.getElementById("house-model-toggle");
@@ -572,6 +573,56 @@ setModelToggleValue(roomModelToggle, roomModelSelect, "kaggle");
 wireModelToggle(houseModelToggle, houseModelSelect);
 setModelToggleValue(houseModelToggle, houseModelSelect, "kaggle");
 
+// Live check of whether our self-hosted Kaggle room-redesign model is
+// actually reachable right now (GET /api/room-model-status) - shown as a
+// themed note above the Generate button so a user knows upfront their
+// generation will run on OpenAI (with our own prompt tuning) instead of
+// "Our Model" if the session isn't connected, rather than only finding out
+// after results land (see the "Generated using ..." line under results).
+// Runs independently of login/plan state (every visitor, not just Pro/
+// Studio) since the underlying fallback affects everyone identically.
+// GSAP fade-up on reveal/dismiss, same guarded-fallback + gsap.set()+.to()
+// convention as every other entrance in this file - never .from()+stagger.
+let roomModelStatusNoteVisible = false;
+
+async function applyRoomModelStatusNote() {
+  if (!roomModelStatusNote) return;
+  let data = null;
+  try {
+    const res = await fetch(apiUrl("/api/room-model-status"));
+    data = res.ok ? await res.json() : null;
+  } catch {
+    data = null;
+  }
+
+  const shouldShow = !!(data && data.configured && !data.connected);
+  if (shouldShow === roomModelStatusNoteVisible) return;
+  roomModelStatusNoteVisible = shouldShow;
+
+  if (typeof gsap === "undefined" || prefersReducedMotion) {
+    roomModelStatusNote.hidden = !shouldShow;
+    return;
+  }
+
+  gsap.killTweensOf(roomModelStatusNote);
+  if (shouldShow) {
+    roomModelStatusNote.hidden = false;
+    gsap.set(roomModelStatusNote, { opacity: 0, y: 10 });
+    gsap.to(roomModelStatusNote, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" });
+  } else {
+    gsap.to(roomModelStatusNote, {
+      opacity: 0,
+      y: 10,
+      duration: 0.25,
+      ease: "power1.in",
+      onComplete: () => {
+        roomModelStatusNote.hidden = true;
+        gsap.set(roomModelStatusNote, { clearProps: "opacity,transform" });
+      },
+    });
+  }
+}
+
 // Decides whether Room Redesign's Kaggle/OpenAI toggle is shown at all, and
 // what the quota note under it says. Only logged-in Pro/Studio users get a
 // real choice - see app/plans.py's resolve_preferred_backend(), which
@@ -579,6 +630,7 @@ setModelToggleValue(houseModelToggle, houseModelSelect, "kaggle");
 // what's sent, so showing the toggle to them would just be a control that
 // does nothing.
 async function applyRoomPlanUI() {
+  applyRoomModelStatusNote(); // independent of plan/login state - fire and forget
   const Clerk = await clerkReady;
   if (!Clerk.user) {
     // No generation is possible before logging in at all (POST /api/projects

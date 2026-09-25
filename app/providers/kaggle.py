@@ -61,6 +61,48 @@ def _generate_batch_url(base_url: str) -> str:
     return f"{trimmed}/generate_batch"
 
 
+def _room_base(base_url: str) -> str:
+    # Same bare-root-vs-full-URL ambiguity as _generate_url/_generate_batch_url
+    # above - strip whichever known suffix (if any) got pasted onto the raw
+    # tunnel root, so the health check below always probes the bare root
+    # regardless of how KAGGLE_API_URL happens to be set.
+    trimmed = base_url.rstrip("/")
+    for suffix in ("/generate_batch", "/generate"):
+        if trimmed.endswith(suffix):
+            return trimmed[: -len(suffix)]
+    return trimmed
+
+
+# Lightweight "is anything listening" probe, not a real generation call - a
+# slow/hanging response here already answers the question (effectively
+# offline for a user waiting on it), so this stays short.
+HEALTH_CHECK_TIMEOUT_SECONDS = 6
+
+
+def check_connection() -> bool:
+    """Best-effort liveness probe for the Kaggle room-redesign tunnel - used
+    by GET /api/room-model-status (app/main.py) to tell the user upfront
+    whether "Our Model" is actually reachable right now, before they submit
+    a generation that would otherwise silently fall back to OpenAI (see
+    HybridProvider's runtime fallback + get_image_model_label(), which only
+    ever reveals this AFTER results land). Any real HTTP response (even an
+    error status - the notebook has no route at "/") means the tunnel and
+    the notebook's own FastAPI server are both up; only a connection-level
+    failure (refused, timed out, DNS failure, Cloudflare edge error) means
+    the session is actually offline - the same "session offline" failure
+    shape session_errors.classify_kaggle_failure() distinguishes elsewhere,
+    reused here via a plain try/except rather than importing that
+    exception-classification helper for a boolean this simple.
+    """
+    if not settings.kaggle_api_url:
+        return False
+    try:
+        httpx.get(_room_base(settings.kaggle_api_url), timeout=HEALTH_CHECK_TIMEOUT_SECONDS)
+        return True
+    except Exception:
+        return False
+
+
 def _generate_batch_status_url(base_url: str, job_id: str) -> str:
     trimmed = base_url.rstrip("/")
     if trimmed.endswith("/generate_batch"):

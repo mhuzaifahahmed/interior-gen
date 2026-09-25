@@ -285,6 +285,42 @@ def test_get_plan_requires_login():
     assert res.status_code == 401
 
 
+def test_room_model_status_not_configured_when_image_provider_is_openai(monkeypatch):
+    monkeypatch.setattr(main_module.settings, "image_provider", "openai")
+    with TestClient(app) as client:
+        res = client.get("/api/room-model-status")
+    assert res.status_code == 200
+    assert res.json() == {"configured": False, "connected": False}
+
+
+def test_room_model_status_reports_connected(monkeypatch):
+    import app.providers.kaggle as kaggle_module
+
+    monkeypatch.setattr(main_module.settings, "image_provider", "kaggle")
+    monkeypatch.setattr(kaggle_module, "check_connection", lambda: True)
+    with TestClient(app) as client:
+        res = client.get("/api/room-model-status")
+    assert res.status_code == 200
+    assert res.json() == {"configured": True, "connected": True}
+
+
+def test_room_model_status_reports_not_connected(monkeypatch):
+    import app.providers.kaggle as kaggle_module
+
+    monkeypatch.setattr(main_module.settings, "image_provider", "kaggle")
+    monkeypatch.setattr(kaggle_module, "check_connection", lambda: False)
+    with TestClient(app) as client:
+        res = client.get("/api/room-model-status")
+    assert res.status_code == 200
+    assert res.json() == {"configured": True, "connected": False}
+
+
+def test_room_model_status_requires_no_login():
+    with TestClient(app) as client:
+        res = client.get("/api/room-model-status")
+    assert res.status_code == 200
+
+
 def test_input_metadata_json_written_to_storage(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
