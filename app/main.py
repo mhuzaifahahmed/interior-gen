@@ -269,23 +269,29 @@ def get_plan(
 
 @app.get("/api/room-model-status")
 def room_model_status():
-    """Live reachability check for the self-hosted Kaggle room-redesign
-    model, shown on the Room Redesign tab (see static/app.js's
+    """Whether the self-hosted Kaggle room-redesign model is actually usable
+    right now, shown on the Room Redesign tab (see static/app.js's
     applyRoomModelStatusNote()) BEFORE a user generates, so they know upfront
     a request will actually run on OpenAI (with this app's own prompt
-    tuning) instead of "Our Model" if the Kaggle session isn't currently
-    connected - rather than only discovering that after results land (see
-    get_image_model_label()). Public/unauthenticated (purely informational,
-    no per-user state - same low-stakes posture as GET /terms) and
-    deliberately best-effort: `configured` is False whenever the app isn't
-    even set up to try Kaggle first (settings.image_provider != "kaggle"),
-    in which case `connected` is always False too and meaningless to check -
-    the frontend should treat `configured=False` as "don't show this note at
-    all", not "Kaggle is offline"."""
-    from app.providers.kaggle import check_connection
+    tuning) instead of "Our Model" if the Kaggle session is down - rather
+    than only discovering that after results land (see
+    get_image_model_label()). NOT a synthetic ping - reflects real,
+    tracked generation traffic (app/providers/kaggle.py's
+    is_room_kaggle_connected(), updated directly by generate_image()/
+    generate_images_batch() on a real success or a classified "session
+    offline" failure) - a real bug this replaced: pinging the tunnel's bare
+    root came back "connected" or "not connected" in ways that didn't
+    actually track whether the model itself was usable. Public/
+    unauthenticated (purely informational, no per-user state - same
+    low-stakes posture as GET /terms). `configured` is False whenever the
+    app isn't even set up to try Kaggle first (settings.image_provider !=
+    "kaggle"), in which case `connected` is always False too and meaningless
+    to check - the frontend should treat `configured=False` as "don't show
+    this note at all", not "Kaggle is offline"."""
+    from app.providers.kaggle import is_room_kaggle_connected
 
     configured = settings.image_provider == "kaggle"
-    return {"configured": configured, "connected": check_connection() if configured else False}
+    return {"configured": configured, "connected": is_room_kaggle_connected() if configured else False}
 
 
 @app.post("/api/plan/cancel", response_model=PlanStatusResponse)

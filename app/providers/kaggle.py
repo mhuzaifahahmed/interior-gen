@@ -61,46 +61,39 @@ def _generate_batch_url(base_url: str) -> str:
     return f"{trimmed}/generate_batch"
 
 
-def _room_base(base_url: str) -> str:
-    # Same bare-root-vs-full-URL ambiguity as _generate_url/_generate_batch_url
-    # above - strip whichever known suffix (if any) got pasted onto the raw
-    # tunnel root, so the health check below always probes the bare root
-    # regardless of how KAGGLE_API_URL happens to be set.
-    trimmed = base_url.rstrip("/")
-    for suffix in ("/generate_batch", "/generate"):
-        if trimmed.endswith(suffix):
-            return trimmed[: -len(suffix)]
-    return trimmed
+# Real, tracked status of the room-redesign Kaggle session - NOT a synthetic
+# health-check ping. A real, reported bug: an earlier version of this pinged
+# the tunnel's bare root and reported "connected" on any HTTP response at
+# all - but that came back a false "not connected" while the notebook was
+# genuinely up and generating real images, because a plain GET "/" doesn't
+# reliably reflect whether the model itself is usable (server load, routing,
+# tunnel quirks unrelated to actual generation capability). Ground truth
+# instead: _mark_room_kaggle_status() is called directly from
+# generate_image()/generate_images_batch() below, exactly when a real
+# request to Kaggle succeeds or hits a classified "session offline" failure
+# (session_errors.classify_kaggle_failure) - the literal "the notebook tells
+# us it's shut down" signal this is meant to reflect, per the user's own
+# framing. Starts optimistic (True): a fresh process has no evidence either
+# way, and a false "offline" warning before any real attempt is worse than a
+# missed one for that rare first-request window.
+_room_kaggle_connected = True
+_room_kaggle_status_lock = threading.Lock()
 
 
-# Lightweight "is anything listening" probe, not a real generation call - a
-# slow/hanging response here already answers the question (effectively
-# offline for a user waiting on it), so this stays short.
-HEALTH_CHECK_TIMEOUT_SECONDS = 6
+def _mark_room_kaggle_status(connected: bool) -> None:
+    global _room_kaggle_connected
+    with _room_kaggle_status_lock:
+        _room_kaggle_connected = connected
 
 
-def check_connection() -> bool:
-    """Best-effort liveness probe for the Kaggle room-redesign tunnel - used
-    by GET /api/room-model-status (app/main.py) to tell the user upfront
-    whether "Our Model" is actually reachable right now, before they submit
-    a generation that would otherwise silently fall back to OpenAI (see
-    HybridProvider's runtime fallback + get_image_model_label(), which only
-    ever reveals this AFTER results land). Any real HTTP response (even an
-    error status - the notebook has no route at "/") means the tunnel and
-    the notebook's own FastAPI server are both up; only a connection-level
-    failure (refused, timed out, DNS failure, Cloudflare edge error) means
-    the session is actually offline - the same "session offline" failure
-    shape session_errors.classify_kaggle_failure() distinguishes elsewhere,
-    reused here via a plain try/except rather than importing that
-    exception-classification helper for a boolean this simple.
-    """
-    if not settings.kaggle_api_url:
-        return False
-    try:
-        httpx.get(_room_base(settings.kaggle_api_url), timeout=HEALTH_CHECK_TIMEOUT_SECONDS)
-        return True
-    except Exception:
-        return False
+def is_room_kaggle_connected() -> bool:
+    """Read by GET /api/room-model-status (app/main.py) to tell the user
+    upfront whether "Our Model" is actually usable right now, before they
+    submit a generation that would otherwise silently fall back to OpenAI
+    (see HybridProvider's runtime fallback + get_image_model_label(), which
+    only ever reveals this AFTER results land)."""
+    with _room_kaggle_status_lock:
+        return _room_kaggle_connected
 
 
 def _generate_batch_status_url(base_url: str, job_id: str) -> str:
@@ -230,9 +223,11 @@ class KaggleImageProvider:
             # offline" instead of a generic connection traceback.
             session_error = classify_kaggle_failure(exc, "room-redesign")
             if session_error:
+                _mark_room_kaggle_status(False)
                 raise session_error from exc
             raise
 
+        _mark_room_kaggle_status(True)
         data = response.json()
         image_b64_out = data.get("generated_image_base64")
         if not image_b64_out:
@@ -312,6 +307,7 @@ class KaggleImageProvider:
         except Exception as exc:
             session_error = classify_kaggle_failure(exc, "room-redesign")
             if session_error:
+                _mark_room_kaggle_status(False)
                 raise session_error from exc
             raise
 
@@ -338,6 +334,7 @@ class KaggleImageProvider:
             except Exception as exc:
                 session_error = classify_kaggle_failure(exc, "room-redesign")
                 if session_error:
+                    _mark_room_kaggle_status(False)
                     raise session_error from exc
                 raise
             job = poll_response.json()
@@ -353,6 +350,7 @@ class KaggleImageProvider:
                         len(tiers),
                     )
                     raise RuntimeError(f"unexpected Kaggle batch job result shape: {job}")
+                _mark_room_kaggle_status(True)
                 return {tier: base64.b64decode(b64) for tier, b64 in zip(tiers, images_b64_out)}
 
             if status == "failed":

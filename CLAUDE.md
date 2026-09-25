@@ -1185,6 +1185,27 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     `test_generate_floor_plan_raises_session_unavailable_on_connection_error` (asserts the new `raises`
     behavior) plus a new `test_generate_floor_plan_returns_none_on_unclassified_exception` (confirms
     genuinely unrelated errors still degrade silently, unchanged).
+- **Room-redesign model-status note (2026-09), `GET /api/room-model-status` + `static/app.js`'s
+  `applyRoomModelStatusNote()`** - shown on the Room Redesign tab, above the Generate button, warning the
+  user upfront that a generation will actually run on OpenAI instead of "Our Model" if the Kaggle session
+  is down, per the user's explicit request ("show this once the kaggle notebook tells us it gives the
+  error of notebook being shut down" - i.e. reactive, not proactive). **First version was wrong, fixed the
+  same day**: a `check_connection()` helper pinged the tunnel's bare root and reported "connected" on any
+  HTTP response - a real, reported bug, since this came back `connected: false` while the notebook was
+  genuinely up and generating real images (a plain `GET /` doesn't reliably reflect whether the model
+  itself is usable - server load/routing/tunnel quirks unrelated to actual generation capability).
+  Replaced with **real, tracked status** instead of a synthetic probe: `app/providers/kaggle.py`'s
+  `_mark_room_kaggle_status(bool)`/`is_room_kaggle_connected()` (module-level state, thread-safe via a
+  lock) are updated directly from `generate_image()`/`generate_images_batch()` - `True` on a real success,
+  `False` only when the failure is classified as "session offline" by `session_errors.classify_kaggle_failure()`
+  (the exact same classification `KaggleSessionUnavailableError` already uses elsewhere - see above), never
+  for an ordinary/unrelated error (a plain 500, an unexpected response shape) misleadingly blaming the
+  session for a different bug. Starts optimistic (`True`) so a fresh process with no traffic yet doesn't
+  show a false warning. `/api/room-model-status` returns `{"configured", "connected"}` -
+  `configured=False` whenever `settings.image_provider != "kaggle"` (the frontend treats that as "don't
+  show this note at all", not "Kaggle is offline"). Frontend note uses this project's standard GSAP
+  entrance convention (guarded no-GSAP/reduced-motion fallback, `gsap.set()`+`.to()`, never `.from()`+
+  stagger) and is hidden entirely whenever the session is actually connected.
 - **Real circulation corridor for the private zone (2026-09-02)** - real user feedback: "I don't want
   crisp, I want an intelligent one which doesn't just make boxes and lines but adds some true meaning to
   the map." Diagnosis: the Kaggle Concept Layout AI model can't add this on its own - it's forced to

@@ -9,6 +9,7 @@ import pytest
 import app.providers.kaggle as kaggle_module
 from app.pipeline.prompts import KAGGLE_PROMPT_MAX_WORDS, build_prompt
 from app.providers.kaggle import KaggleImageProvider, _generate_url, _prepare_kaggle_prompt
+from app.providers.session_errors import KaggleSessionUnavailableError
 
 
 class FakeResponse:
@@ -104,43 +105,104 @@ def test_generate_url_strips_a_trailing_slash():
     assert _generate_url("https://example.trycloudflare.com/") == "https://example.trycloudflare.com/generate"
 
 
-def test_check_connection_true_on_any_real_response(monkeypatch):
+# ---- Real, tracked room-model status - NOT a synthetic ping.
+# is_room_kaggle_connected() reflects actual generate_image()/
+# generate_images_batch() traffic: marked True on a real success, False
+# only when the failure is classified as "session offline"
+# (session_errors.classify_kaggle_failure) - an ordinary/unrelated error
+# (e.g. a plain 500, or an unexpected response shape) must NOT flip it,
+# since that's a different bug, not evidence the session is down. Reset
+# before/after each test since the tracked state is real module-level
+# global state, shared across the whole test process. ----
+
+
+@pytest.fixture(autouse=True)
+def _reset_room_kaggle_status():
+    kaggle_module._mark_room_kaggle_status(True)
+    yield
+    kaggle_module._mark_room_kaggle_status(True)
+
+
+def test_generate_image_marks_connected_on_success(monkeypatch):
+    encoded = base64.b64encode(b"png-bytes").decode("ascii")
+    monkeypatch.setattr(
+        kaggle_module.httpx,
+        "post",
+        lambda url, json=None, timeout=None: FakeResponse(
+            json_data={"status": "success", "generated_image_base64": encoded}
+        ),
+    )
     monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+    kaggle_module._mark_room_kaggle_status(False)
 
-    def fake_get(url, timeout=None):
-        # Even a 404 (no route at "/") proves the tunnel + notebook server
-        # are both up - check_connection() doesn't inspect the status code.
-        assert url == "https://example.trycloudflare.com"
-        return httpx.Response(404, request=httpx.Request("GET", url))
+    KaggleImageProvider().generate_image(b"input-bytes", "prompt")
 
-    monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
-    assert kaggle_module.check_connection() is True
+    assert kaggle_module.is_room_kaggle_connected() is True
 
 
-def test_check_connection_false_on_connection_failure(monkeypatch):
-    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
-
-    def fake_get(url, timeout=None):
+def test_generate_image_marks_disconnected_on_session_offline_failure(monkeypatch):
+    def fake_post(url, json=None, timeout=None):
         raise httpx.ConnectError("connection refused")
 
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+
+    with pytest.raises(KaggleSessionUnavailableError):
+        KaggleImageProvider().generate_image(b"input-bytes", "prompt")
+
+    assert kaggle_module.is_room_kaggle_connected() is False
+
+
+def test_generate_image_ordinary_failure_does_not_mark_disconnected(monkeypatch):
+    # A plain 500 (a bug inside a running notebook) is deliberately NOT
+    # classified as "session offline" - marking the model disconnected here
+    # would misleadingly blame the session for an unrelated bug.
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(json_data={}, status_code=500)
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        KaggleImageProvider().generate_image(b"input-bytes", "prompt")
+
+    assert kaggle_module.is_room_kaggle_connected() is True
+
+
+def test_generate_images_batch_marks_disconnected_on_submit_failure(monkeypatch):
+    def fake_post(url, json=None, timeout=None):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+
+    with pytest.raises(KaggleSessionUnavailableError):
+        KaggleImageProvider().generate_images_batch(b"input-bytes", {"economical": "p1"})
+
+    assert kaggle_module.is_room_kaggle_connected() is False
+
+
+def test_generate_images_batch_marks_connected_on_success(monkeypatch):
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_module.settings, "kaggle_batch_resolution", 768)
+    monkeypatch.setattr(kaggle_module, "BATCH_POLL_INTERVAL_SECONDS", 0)
+    kaggle_module._mark_room_kaggle_status(False)
+
+    encoded = base64.b64encode(b"png-bytes").decode("ascii")
+
+    def fake_post(url, json=None, timeout=None):
+        return FakeResponse(json_data={"status": "started", "job_id": "job-1"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(json_data={"status": "done", "generated_images_base64": [encoded]})
+
+    monkeypatch.setattr(kaggle_module.httpx, "post", fake_post)
     monkeypatch.setattr(kaggle_module.httpx, "get", fake_get)
-    assert kaggle_module.check_connection() is False
 
+    result = KaggleImageProvider().generate_images_batch(b"input-bytes", {"economical": "p1"})
 
-def test_check_connection_false_when_no_url_configured(monkeypatch):
-    monkeypatch.setattr(kaggle_module.settings, "kaggle_api_url", "")
-    assert kaggle_module.check_connection() is False
-
-
-def test_room_base_strips_known_suffixes():
-    from app.providers.kaggle import _room_base
-
-    assert _room_base("https://example.trycloudflare.com") == "https://example.trycloudflare.com"
-    assert _room_base("https://example.trycloudflare.com/") == "https://example.trycloudflare.com"
-    assert _room_base("https://example.trycloudflare.com/generate") == "https://example.trycloudflare.com"
-    assert (
-        _room_base("https://example.trycloudflare.com/generate_batch") == "https://example.trycloudflare.com"
-    )
+    assert result == {"economical": b"png-bytes"}
+    assert kaggle_module.is_room_kaggle_connected() is True
 
 
 def test_concurrent_calls_are_serialized_not_sent_in_parallel(monkeypatch):

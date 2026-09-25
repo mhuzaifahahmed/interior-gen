@@ -297,7 +297,7 @@ def test_room_model_status_reports_connected(monkeypatch):
     import app.providers.kaggle as kaggle_module
 
     monkeypatch.setattr(main_module.settings, "image_provider", "kaggle")
-    monkeypatch.setattr(kaggle_module, "check_connection", lambda: True)
+    monkeypatch.setattr(kaggle_module, "is_room_kaggle_connected", lambda: True)
     with TestClient(app) as client:
         res = client.get("/api/room-model-status")
     assert res.status_code == 200
@@ -308,7 +308,7 @@ def test_room_model_status_reports_not_connected(monkeypatch):
     import app.providers.kaggle as kaggle_module
 
     monkeypatch.setattr(main_module.settings, "image_provider", "kaggle")
-    monkeypatch.setattr(kaggle_module, "check_connection", lambda: False)
+    monkeypatch.setattr(kaggle_module, "is_room_kaggle_connected", lambda: False)
     with TestClient(app) as client:
         res = client.get("/api/room-model-status")
     assert res.status_code == 200
