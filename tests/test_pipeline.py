@@ -17,9 +17,6 @@ class FakeProvider:
     def describe_room(self, image_bytes: bytes) -> str:
         return "A rectangular room with one window and one door."
 
-    def validate_room_photo(self, image_bytes: bytes) -> bool:
-        return True
-
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         return {"economical": "repaint over visible stains", "mid": "replace damaged flooring"}
 
@@ -101,6 +98,8 @@ def test_run_pipeline_success(monkeypatch):
 
 
 def test_run_pipeline_rejects_a_non_room_photo_before_any_paid_step(monkeypatch):
+    from app.providers.gemini import UNWORKABLE_IMAGE_MARKER
+
     engine = make_test_engine()
     monkeypatch.setattr(generate_module, "engine", engine)
 
@@ -113,8 +112,8 @@ def test_run_pipeline_rejects_a_non_room_photo_before_any_paid_step(monkeypatch)
         session.commit()
 
     class RejectingProvider(FakeProvider):
-        def validate_room_photo(self, image_bytes: bytes) -> bool:
-            return False
+        def describe_room(self, image_bytes: bytes) -> str:
+            return UNWORKABLE_IMAGE_MARKER
 
     provider = RejectingProvider()
     run_pipeline("p1v", provider, storage, "Modern", "Neutral")
@@ -124,18 +123,22 @@ def test_run_pipeline_rejects_a_non_room_photo_before_any_paid_step(monkeypatch)
         assert project.status == "failed"
         assert project.error
         # The rejection message must stay generic - never echo back what the
-        # image actually was (see Provider.validate_room_photo's docstring).
+        # image actually was, and the marker itself must never leak into the
+        # user-visible room_description field.
         assert "room" in project.error.lower()
+        assert UNWORKABLE_IMAGE_MARKER not in project.error
+        assert project.room_description is None
 
     # No paid image generation (or anything downstream of the gate) ran.
     assert provider.image_calls == []
     assert provider.materials_calls == []
 
 
-def test_run_pipeline_continues_when_validate_room_photo_itself_fails(monkeypatch):
-    # Fail-open: a provider error while just RUNNING the check (not a
-    # confident "this isn't a room" classification) must never block a
-    # legitimate upload.
+def test_run_pipeline_continues_when_describe_room_itself_fails(monkeypatch):
+    # Fail-open: a provider error while just RUNNING describe_room (not a
+    # confident "this isn't a room" marker) must never block a legitimate
+    # upload - it already degrades to room_description=None, same as before
+    # this gate existed.
     engine = make_test_engine()
     monkeypatch.setattr(generate_module, "engine", engine)
 
@@ -147,16 +150,17 @@ def test_run_pipeline_continues_when_validate_room_photo_itself_fails(monkeypatc
         session.add(project)
         session.commit()
 
-    class BrokenValidationProvider(FakeProvider):
-        def validate_room_photo(self, image_bytes: bytes) -> bool:
+    class BrokenDescribeProvider(FakeProvider):
+        def describe_room(self, image_bytes: bytes) -> str:
             raise RuntimeError("transient Gemini error")
 
-    provider = BrokenValidationProvider()
+    provider = BrokenDescribeProvider()
     run_pipeline("p1w", provider, storage, "Modern", "Neutral")
 
     with Session(engine) as session:
         project = session.get(Project, "p1w")
         assert project.status == "done"
+        assert project.room_description is None
 
     assert len(provider.image_calls) == 3
 

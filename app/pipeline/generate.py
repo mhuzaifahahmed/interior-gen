@@ -10,7 +10,7 @@ from app.models import Project
 from app.pipeline.prompts import PROMPT_VERSION, build_prompt, build_tier_spec
 from app.pipeline.timing import PipelineTimer
 from app.providers.base import Provider
-from app.providers.gemini import fallback_materials
+from app.providers.gemini import UNWORKABLE_IMAGE_MARKER, fallback_materials
 from app.storage.base import Storage
 
 logger = logging.getLogger(__name__)
@@ -142,30 +142,32 @@ def run_pipeline(
             with timer.stage("storage.get(original)"):
                 original_bytes = storage.get(project.original_key)
 
-            # Hard gate, before any paid step: reject an upload that isn't
-            # actually a photo of a real room, instead of letting it reach
-            # the image model, which has nothing real to preserve and just
-            # hallucinates an unrelated generic room per tier (a real,
-            # user-reported failure mode). Fail-open by design (see
-            # Provider.validate_room_photo's docstring) - a failure to even
-            # run the check must never block a legitimate upload, so both an
-            # explicit exception here AND validate_room_photo() itself
-            # default to allowing generation to continue. The rejection
-            # message is a fixed, generic string - deliberately never built
-            # from what the image actually contains, so nothing about the
-            # upload is echoed back to the user.
             try:
-                with timer.stage("validate_room_photo"):
-                    is_valid_room_photo = provider.validate_room_photo(original_bytes)
+                with timer.stage("describe_room"):
+                    room_description = provider.describe_room(original_bytes)
             except Exception:
-                logger.exception(
-                    "validate_room_photo failed for project %s; continuing (fail open)", project_id
-                )
-                is_valid_room_photo = True
+                logger.exception("describe_room failed for project %s; continuing without it", project_id)
+                room_description = None
 
-            if not is_valid_room_photo:
+            # Hard gate, before any paid step: describe_room() doubles as the
+            # "is this even a usable room photo" check (see
+            # app/providers/gemini.py's UNWORKABLE_IMAGE_MARKER docstring) - a
+            # real, user-reported failure mode this fixes: an uploaded image
+            # that isn't actually a photo of a real room (e.g. a graphic)
+            # still reached the paid image model, which had nothing real to
+            # preserve and just hallucinated an unrelated generic room per
+            # tier. Checked as a substring, not an exact match, so minor
+            # formatting Gemini adds around the marker (trailing punctuation,
+            # a stray newline) still counts. Fail-open by construction: this
+            # only fires on a genuine, successfully-parsed marker match -
+            # describe_room() raising already degraded room_description to
+            # None above, which never matches. The rejection message is a
+            # fixed, generic string, and the marker text itself is never
+            # written to project.room_description - nothing about the actual
+            # upload is ever echoed back to the user.
+            if room_description and UNWORKABLE_IMAGE_MARKER in room_description:
                 logger.info(
-                    "project %s rejected: uploaded image is not a photo of a room", project_id
+                    "project %s rejected: uploaded image is not a usable room photo", project_id
                 )
                 project.status = "failed"
                 project.error = (
@@ -175,13 +177,6 @@ def run_pipeline(
                 session.add(project)
                 session.commit()
                 return
-
-            try:
-                with timer.stage("describe_room"):
-                    room_description = provider.describe_room(original_bytes)
-            except Exception:
-                logger.exception("describe_room failed for project %s; continuing without it", project_id)
-                room_description = None
 
             project.room_description = room_description
             session.add(project)

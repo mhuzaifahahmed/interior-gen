@@ -66,28 +66,22 @@ class Provider(ABC):
 
     @abstractmethod
     def describe_room(self, image_bytes: bytes) -> str:
-        """Return a short structural description (walls/windows/layout/camera) of the room."""
-        ...
+        """Return a short structural description (walls/windows/layout/camera) of the room.
 
-    @abstractmethod
-    def validate_room_photo(self, image_bytes: bytes) -> bool:
-        """Hard gate, checked BEFORE any paid image generation runs (see
-        app/pipeline/generate.py's run_pipeline) - unlike describe_room/
-        generate_tier_notes, this is NOT best-effort in how it's used: a
-        confident False here stops the whole generation with a plain,
-        generic rejection message, before a single dollar is spent.
-
-        The check itself, however, IS best-effort/fail-open: any failure to
-        even complete the underlying analysis (network error, quota, an
-        unparseable response) must return True, never raise and never
-        default to False - a transient provider hiccup must never block a
-        real, legitimate room photo. Only a positive, confident "this is not
-        a real photographed room interior" classification should return
-        False. Deliberately content-agnostic - implementations must not
-        describe or leak WHAT the image actually contains anywhere a caller
-        might surface it to the end user (the pipeline's own rejection
-        message is a fixed, generic string, never built from this method's
-        internal reasoning).
+        Also doubles as this pipeline's "is this even a usable room photo" gate
+        (see app/providers/gemini.py's UNWORKABLE_IMAGE_MARKER and
+        app/pipeline/generate.py's run_pipeline) - a real, user-reported
+        problem (an uploaded graphic/logo being sent straight to the paid
+        image model, which hallucinated an unrelated room since it had
+        nothing real to preserve) is fixed by folding the check into this
+        SAME call rather than adding a second one: implementations that can
+        detect an unusable upload should return exactly UNWORKABLE_IMAGE_MARKER
+        instead of a description when they're confident the image isn't a
+        real photographed room interior. Any other return value (including
+        this method raising, which the pipeline still treats as best-effort
+        and degrades to None) is treated as "proceed normally" - so this
+        check is fail-open by construction: only a confident, successfully-
+        parsed marker match ever blocks a generation.
         """
         ...
 

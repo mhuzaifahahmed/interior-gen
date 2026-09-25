@@ -35,9 +35,6 @@ class FakeProvider:
     def describe_room(self, image_bytes: bytes) -> str:
         return "A small rectangular room with one window."
 
-    def validate_room_photo(self, image_bytes: bytes) -> bool:
-        return True
-
     def generate_tier_notes(self, image_bytes: bytes) -> dict[str, str]:
         return {}
 

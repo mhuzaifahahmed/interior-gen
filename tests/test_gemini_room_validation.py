@@ -4,7 +4,7 @@ from PIL import Image
 
 import app.providers.gemini as gemini_module
 from app.providers import analysis_cache
-from app.providers.gemini import GeminiProvider
+from app.providers.gemini import UNWORKABLE_IMAGE_MARKER, GeminiProvider
 
 
 def _sample_image_bytes(seed: int = 0) -> bytes:
@@ -32,62 +32,77 @@ def _fake_client_returning(text: str):
     return FakeClient
 
 
-def test_validate_room_photo_true_when_gemini_says_valid(monkeypatch):
-    analysis_cache.clear()
-    monkeypatch.setattr(gemini_module.genai, "Client", _fake_client_returning("VALID"))
+def test_describe_room_prompt_asks_gemini_to_return_the_marker_when_unworkable(monkeypatch):
+    # Not asserting exact prompt wording (that's brittle), just that the
+    # marker Gemini is told to respond with is actually present in the
+    # instruction it's given. The classifier prompt is allowed to give
+    # Gemini illustrative examples (logo, diagram, screenshot, etc.) - the
+    # "never say what the upload actually was" requirement applies to the
+    # USER-FACING rejection message (see run_pipeline's fixed generic
+    # string), not to Gemini's own internal classification instructions.
+    captured = {}
 
-    provider = GeminiProvider()
-    assert provider.validate_room_photo(_sample_image_bytes(1)) is True
+    class FakeResponse:
+        text = "A rectangular room."
 
-
-def test_validate_room_photo_false_when_gemini_says_invalid(monkeypatch):
-    analysis_cache.clear()
-    monkeypatch.setattr(gemini_module.genai, "Client", _fake_client_returning("INVALID"))
-
-    provider = GeminiProvider()
-    assert provider.validate_room_photo(_sample_image_bytes(2)) is False
-
-
-def test_validate_room_photo_tolerates_stray_whitespace_and_case(monkeypatch):
-    analysis_cache.clear()
-    monkeypatch.setattr(gemini_module.genai, "Client", _fake_client_returning("  invalid.\n"))
-
-    provider = GeminiProvider()
-    assert provider.validate_room_photo(_sample_image_bytes(3)) is False
-
-
-def test_validate_room_photo_fails_open_on_unexpected_response(monkeypatch):
-    # Anything that isn't a confident "INVALID" must be treated as valid -
-    # this is a fail-open check, not fail-closed.
-    analysis_cache.clear()
-    monkeypatch.setattr(gemini_module.genai, "Client", _fake_client_returning("uh, sure, looks fine"))
-
-    provider = GeminiProvider()
-    assert provider.validate_room_photo(_sample_image_bytes(4)) is True
-
-
-def test_validate_room_photo_fails_open_when_client_raises(monkeypatch):
-    class BrokenModels:
+    class FakeModels:
         def generate_content(self, model, contents):
-            raise RuntimeError("network error")
+            captured["prompt"] = contents[0]
+            return FakeResponse()
 
-    class BrokenClient:
+    class FakeClient:
         def __init__(self, api_key=None):
-            self.models = BrokenModels()
+            self.models = FakeModels()
 
     analysis_cache.clear()
-    monkeypatch.setattr(gemini_module.genai, "Client", BrokenClient)
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
 
     provider = GeminiProvider()
-    assert provider.validate_room_photo(_sample_image_bytes(5)) is True
+    provider.describe_room(_sample_image_bytes(0))
+
+    assert UNWORKABLE_IMAGE_MARKER in captured["prompt"]
 
 
-def test_validate_room_photo_caches_result_per_image(monkeypatch):
+def test_describe_room_returns_marker_when_gemini_flags_it_unworkable(monkeypatch):
+    analysis_cache.clear()
+    monkeypatch.setattr(gemini_module.genai, "Client", _fake_client_returning(UNWORKABLE_IMAGE_MARKER))
+
+    provider = GeminiProvider()
+    result = provider.describe_room(_sample_image_bytes(1))
+    assert UNWORKABLE_IMAGE_MARKER in result
+
+
+def test_describe_room_tolerates_stray_formatting_around_the_marker(monkeypatch):
+    analysis_cache.clear()
+    monkeypatch.setattr(
+        gemini_module.genai, "Client", _fake_client_returning(f"  {UNWORKABLE_IMAGE_MARKER}.\n")
+    )
+
+    provider = GeminiProvider()
+    result = provider.describe_room(_sample_image_bytes(2))
+    assert UNWORKABLE_IMAGE_MARKER in result
+
+
+def test_describe_room_returns_real_description_for_a_workable_photo(monkeypatch):
+    analysis_cache.clear()
+    monkeypatch.setattr(
+        gemini_module.genai,
+        "Client",
+        _fake_client_returning("A bedroom with one window on the left wall."),
+    )
+
+    provider = GeminiProvider()
+    result = provider.describe_room(_sample_image_bytes(3))
+    assert UNWORKABLE_IMAGE_MARKER not in result
+    assert "bedroom" in result
+
+
+def test_describe_room_caches_the_marker_result_per_image(monkeypatch):
     analysis_cache.clear()
     call_count = 0
 
     class FakeResponse:
-        text = "INVALID"
+        text = UNWORKABLE_IMAGE_MARKER
 
     class FakeModels:
         def generate_content(self, model, contents):
@@ -102,7 +117,7 @@ def test_validate_room_photo_caches_result_per_image(monkeypatch):
     monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
 
     provider = GeminiProvider()
-    image_bytes = _sample_image_bytes(6)
-    assert provider.validate_room_photo(image_bytes) is False
-    assert provider.validate_room_photo(image_bytes) is False
+    image_bytes = _sample_image_bytes(4)
+    assert UNWORKABLE_IMAGE_MARKER in provider.describe_room(image_bytes)
+    assert UNWORKABLE_IMAGE_MARKER in provider.describe_room(image_bytes)
     assert call_count == 1
