@@ -1082,17 +1082,11 @@ Interior&#8209;Gen
 </div>
 <h3 class="font-headline-sm text-headline-sm text-on-surface mb-1">Upgrade to <span id="jazzcash-plan-name">Pro</span></h3>
 
-<!-- Real Safepay sandbox checkout (app/payments.py) - clicking this hits
-     POST /api/payments/safepay/checkout and redirects the browser to
-     Safepay's hosted checkout page; a successful payment auto-upgrades the
-     plan via the callback endpoint, no admin panel action needed. Sits
-     ABOVE the manual JazzCash instructions, not replacing them - JazzCash
-     stays a permanent secondary option per explicit user request. -->
-<button type="button" class="w-full bg-primary text-on-primary px-6 py-3 font-label-caps text-label-caps rounded-full hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 mb-4 flex items-center justify-center gap-2" id="safepay-checkout-btn">
-<span class="material-symbols-outlined text-[18px]">credit_card</span>
-<span id="safepay-checkout-btn-label">Pay with card</span>
-</button>
-<p class="font-body-md text-on-surface-variant/70 text-xs mb-5">or send <span id="jazzcash-plan-price" class="font-semibold text-on-surface">PKR 2,499/mo</span> manually via JazzCash below</p>
+<!-- Safepay checkout button temporarily removed from the frontend (2026-09) -
+     the subscription/payment flow isn't working right now. Backend
+     (app/payments.py, /api/payments/safepay/*) is untouched and can be
+     re-added here later - only the button + its wiring in app.js are gone. -->
+<p class="font-body-md text-on-surface-variant/70 text-xs mb-5">Send <span id="jazzcash-plan-price" class="font-semibold text-on-surface">PKR 2,499/mo</span> manually via JazzCash below</p>
 <div class="bg-surface-container-low border border-outline-variant rounded-xl p-5 text-left">
 <p class="font-label-caps text-label-caps text-on-surface-variant mb-1">Account Title</p>
 <p class="font-body-md text-on-surface mb-4">Muddassir Ahmed</p>

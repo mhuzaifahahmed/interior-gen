@@ -2554,13 +2554,8 @@ const JAZZCASH_PLAN_LABELS = { pro: "Pro", studio: "Studio" };
 const JAZZCASH_PLAN_PRICES = { pro: "PKR 2,499/mo", studio: "PKR 6,999/mo" };
 
 let jazzcashModalTl = null;
-// Tracks which plan the JazzCash modal is currently showing, so the Safepay
-// "Pay with card" button (same modal) knows which plan to check out for
-// without needing its own separate plan-selection UI.
-let jazzcashModalPlan = "pro";
 
 function openJazzCashModal(plan) {
-  jazzcashModalPlan = plan === "studio" ? "studio" : "pro";
   jazzcashPlanNameEl.textContent = JAZZCASH_PLAN_LABELS[plan] || "Pro";
   jazzcashPlanPriceEl.textContent = JAZZCASH_PLAN_PRICES[plan] || JAZZCASH_PLAN_PRICES.pro;
   jazzcashModalOverlay.hidden = false;
@@ -2664,94 +2659,10 @@ jazzcashCopyBtn.addEventListener("click", async () => {
   }
 });
 
-/* ---------- Safepay checkout (real card payment, auto-upgrades on success) ----------
-   POST /api/payments/safepay/checkout creates a real Safepay sandbox checkout
-   session and returns a checkout_url - the browser is sent there directly
-   (window.location.href, not a fetch-and-render, since Safepay's hosted
-   checkout page is the whole point of using their processor instead of
-   building a card form ourselves). Safepay eventually redirects back to
-   GET /api/payments/safepay/callback (backend-side signature + payment
-   verification, then app/plans.py's set_plan()), which itself redirects to
-   "/?payment=success|failed|cancelled|invalid|error" - see
-   showPaymentStatusToast() near the end of this file for how that's shown. */
-
-const safepayCheckoutBtn = document.getElementById("safepay-checkout-btn");
-const safepayCheckoutBtnLabel = document.getElementById("safepay-checkout-btn-label");
-
-safepayCheckoutBtn.addEventListener("click", async () => {
-  safepayCheckoutBtn.disabled = true;
-  safepayCheckoutBtnLabel.textContent = "Opening checkout…";
-
-  // Real bug fixed here (mobile-only, reported live): window.open() was
-  // previously called AFTER the `await authFetch(...)` below. Mobile
-  // browsers (iOS Safari especially, some Android browsers too) revoke a
-  // click's "user activation" the moment an async gap passes - a
-  // window.open() called post-await gets silently blocked as a popup, with
-  // no JS exception to catch. Fix: open a blank tab SYNCHRONOUSLY, still
-  // directly inside this click handler's own call stack, then navigate
-  // THAT already-open tab once the real checkout_url is known. Deliberately
-  // NOT using the "noopener" string param (which would make window.open()
-  // return null, losing our ability to navigate it later) - the equivalent
-  // security property (the new tab can't reach back via window.opener) is
-  // achieved by nulling checkoutTab.opener directly instead, while still
-  // keeping OUR OWN reference to control its location.
-  const checkoutTab = window.open("about:blank", "_blank");
-  if (checkoutTab) checkoutTab.opener = null;
-
-  try {
-    const body = new FormData();
-    body.append("plan", jazzcashModalPlan);
-    const res = await authFetch(apiUrl("/api/payments/safepay/checkout"), { method: "POST", body });
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    if (checkoutTab) {
-      // Same-theme-mismatch reasoning as before: a new tab keeps this page
-      // exactly where the user left it (still on the Plans tab, modal still
-      // open underneath) - see awaitSafepayCompletion() below for how this
-      // tab notices when the OTHER tab finishes.
-      checkoutTab.location.href = data.checkout_url;
-    } else {
-      // Popup still blocked outright (e.g. user has popups fully disabled,
-      // not just the async-gap issue above) - fall back to a same-tab
-      // navigation so the flow isn't a dead end.
-      window.location.href = data.checkout_url;
-    }
-    safepayCheckoutBtnLabel.textContent = "Pay with card";
-    safepayCheckoutBtn.disabled = false;
-    awaitSafepayCompletion();
-  } catch (err) {
-    if (checkoutTab) checkoutTab.close();
-    console.error("Safepay checkout failed", err);
-    safepayCheckoutBtn.disabled = false;
-    safepayCheckoutBtnLabel.textContent = "Pay with card";
-    alert("Couldn't start checkout right now - please try again, or use the JazzCash option below.");
-  }
-});
-
-// The Safepay checkout tab is a SEPARATE browsing context (window.open above) -
-// its own redirect back to "/?payment=..." (GET /api/payments/safepay/callback)
-// happens in THAT tab, not this one, so this tab's own UI (nav quota bar,
-// pricing cards) would otherwise stay stale until manually refreshed even
-// after a real upgrade succeeded. Simplest fix: whenever this tab regains
-// focus/visibility (the natural "I'm done in the other tab, back to this
-// one" moment) after a checkout was started, re-fetch plan status - cheap
-// (GET /api/plan) and harmless to call speculatively even if nothing
-// actually changed yet. Not a perfect real-time sync (Safepay's own 3D
-// Secure step can take longer than a quick tab-switch), but the same
-// listener fires on every future focus too, so returning again later still
-// catches it.
-let safepayCompletionListenerActive = false;
-function awaitSafepayCompletion() {
-  if (safepayCompletionListenerActive) return;
-  safepayCompletionListenerActive = true;
-  const refresh = () => {
-    if (document.visibilityState !== "visible") return;
-    applyPlanMenuQuota();
-    applyPricingUI();
-  };
-  document.addEventListener("visibilitychange", refresh);
-  window.addEventListener("focus", refresh);
-}
+// Safepay checkout button + its wiring were removed from the frontend
+// (2026-09) - the subscription/payment flow isn't working right now. Backend
+// (app/payments.py, /api/payments/safepay/*) is untouched; re-add the button
+// in index.html's JazzCash modal + this block to bring it back later.
 
 /* ---------- Quota-exceeded popup (real quota hit, not a generic error) ----------
    Same GSAP "morph" open/close recipe as the JazzCash modal above (see
