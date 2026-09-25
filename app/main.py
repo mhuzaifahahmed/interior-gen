@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Response, UploadFile, File
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
@@ -224,62 +224,25 @@ def _write_account_json(storage, storage_namespace: str, plan_row) -> None:
         logger.exception("failed to write account.json for user %s - continuing", plan_row.user_id)
 
 
-# Shared S3 prefix for every anonymous (pre-login) generation - see
-# _consume_anonymous_trial() below. Deliberately ONE fixed namespace, not a
-# per-visitor id: these are one-off trial generations with no History/
-# ownership feature attached, so there's no need to distinguish one
-# anonymous visitor's S3 objects from another's the way a real per-user
-# namespace does.
-ANONYMOUS_STORAGE_NAMESPACE = "anonymous"
-
-# Pre-login trial cookie (future-plans/subscription-and-access-roadmap.md):
-# 1 free Room + 1 free House generation before login is required, tracked by
-# a plain browser cookie - the user's own explicit choice over IP/fingerprint
-# tracking (simple, no new infra, accepted as trivially bypassable via
-# clearing cookies/private browsing in exchange for zero friction - matches
-# this app's existing localStorage-based low-friction conventions
-# elsewhere). A long max-age (1 year) since the whole point is "used once,
-# ever", not a session-scoped allowance.
-_ANON_TRIAL_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365
-
-
-def _anon_trial_cookie_name(kind: str) -> str:
-    return f"ig_anon_trial_{kind}"
+# Login is required for every generation (create_project/create_house_project
+# both gate on Depends(require_user)) - a pre-login trial (1 free anonymous
+# generation per browser, cookie-tracked) used to exist here and was removed
+# at the user's explicit request: "no generation before logging in". Legacy
+# rows created while that feature was live may still have user_id=None in
+# the DB - _owns_project() below stays anonymous-aware for THOSE, not for any
+# new project (which can no longer be created without a real user_id).
 
 
 def _owns_project(project_user_id: str | None, user: AuthUser | None) -> bool:
-    """Ownership check that also covers anonymous (pre-login trial) projects,
-    which have user_id=None. An anonymous caller (also `user=None`, since
+    """Ownership check. A real project (user_id set, the only kind that can
+    be created now) requires an exact Clerk id match. Also still covers
+    legacy anonymous projects (user_id=None) from before the pre-login trial
+    was removed - an anonymous caller (also `user=None`, since
     static/app.js's authFetch() sends no Authorization header when nobody's
-    logged in) can view/cancel an anonymous project - there's no per-visitor
-    id to scope by (see ANONYMOUS_STORAGE_NAMESPACE's comment), so this is a
-    deliberately coarse "any anonymous caller can see any anonymous project"
-    check, same low-stakes/low-security posture already accepted for the
-    cookie-based trial gate itself. A real project (user_id set) still
-    requires an exact Clerk id match, unchanged from before this feature."""
+    logged in) can view/cancel one of those, a deliberately coarse "any
+    anonymous caller can see any anonymous project" check matching the
+    low-stakes posture that feature always had."""
     return project_user_id == (user.id if user else None)
-
-
-def _consume_anonymous_trial(request: Request, response: Response, kind: str) -> None:
-    """Called only when there's no logged-in user at all (create_project/
-    create_house_project's `user` dependency resolved to None). Raises 401
-    if this browser's pre-login trial for `kind` ("room"/"house") was already
-    used - the SAME status code the frontend already handles for "you need to
-    log in" (see static/app.js's savePendingGeneration() + redirect-to-login
-    flow on a 401 from these endpoints), so no new frontend error-handling
-    path was needed for this case. Otherwise marks the trial used via the
-    cookie and lets the request proceed anonymously.
-    """
-    cookie_name = _anon_trial_cookie_name(kind)
-    if request.cookies.get(cookie_name) == "used":
-        raise HTTPException(401, "Free trial already used - please log in to continue.")
-    response.set_cookie(
-        cookie_name,
-        "used",
-        max_age=_ANON_TRIAL_COOKIE_MAX_AGE_SECONDS,
-        httponly=True,
-        samesite="lax",
-    )
 
 
 @app.get("/api/plan", response_model=PlanStatusResponse)
@@ -654,8 +617,6 @@ async def clerk_webhook(request: Request, session: Session = Depends(get_session
 @app.post("/api/projects", response_model=ProjectCreateResponse)
 async def create_project(
     background_tasks: BackgroundTasks,
-    request: Request,
-    response: Response,
     file: UploadFile = File(...),
     interior_style: str = Form(""),
     color_palette: str = Form(""),
@@ -669,7 +630,7 @@ async def create_project(
     dimension_unit: str = Form("ft"),
     preferred_model: str | None = Form(None),
     session: Session = Depends(get_session),
-    user: AuthUser | None = Depends(get_current_user),
+    user: AuthUser = Depends(require_user),
 ):
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(400, f"unsupported file type: {file.content_type}")
@@ -711,37 +672,32 @@ async def create_project(
 
     # Access gate - after every cheap/free validation above (so a request
     # that was going to 400 anyway never burns a generation), but before any
-    # real storage/pipeline cost is incurred. Two paths (see
-    # future-plans/subscription-and-access-roadmap.md):
-    #   - No logged-in user: the pre-login trial (1 free Room generation per
-    #     browser, cookie-tracked) - 401s once already used, matching the
-    #     existing "log in to continue" frontend handling. Always allowed to
-    #     choose a backend (Chunk 3's pre-login spec), unlike a logged-in
-    #     Free-tier user.
-    #   - Logged-in user: Chunk 1's plan quota, against whichever backend
-    #     this user's plan+request actually resolves to (Chunk 3) - Free
-    #     always resolves to the app's CONFIGURED default (settings.image_provider),
-    #     ignoring any preferred_model sent; Pro/Studio may override it.
+    # real storage/pipeline cost is incurred. Login is required for every
+    # generation (Depends(require_user) above already 401s an anonymous
+    # caller before this point is ever reached - see the removed pre-login
+    # trial below) - Chunk 1's plan quota then applies, against whichever
+    # backend this user's plan+request actually resolves to (Chunk 3): Free
+    # always resolves to the app's CONFIGURED default (settings.image_provider),
+    # ignoring any preferred_model sent; Pro/Studio may override it.
     #
     # requested_backend is the client's raw, unvalidated ask - resolve_preferred_backend()
     # (app/plans.py) is what actually decides whether it's honored; an
     # invalid/unrecognized value is silently treated as "no preference", same
     # "correct nonsense rather than error the whole request" convention this
     # endpoint already uses elsewhere.
+    #
+    # A pre-login trial (1 free anonymous generation per browser) used to
+    # exist here - removed at the user's explicit request ("no generation
+    # before logging in"). require_user above is now the entire gate.
     requested_backend = preferred_model if preferred_model in ("kaggle", "openai") else None
-    plan_row = None
-    if user is None:
-        _consume_anonymous_trial(request, response, "room")
-        backend_override = resolve_preferred_backend(None, requested_backend)
-    else:
-        plan_row = get_or_create_user_plan(session, user.id)
-        capture_identity(session, user.id, email=email, display_name=display_name)
-        backend_override = resolve_preferred_backend(plan_row.plan, requested_backend)
-        quota_backend = backend_override or backend_bucket(settings.image_provider)
-        try:
-            plan_row = consume_quota(session, user.id, "room", quota_backend)
-        except QuotaExceededError as exc:
-            raise HTTPException(403, exc.user_message())
+    plan_row = get_or_create_user_plan(session, user.id)
+    capture_identity(session, user.id, email=email, display_name=display_name)
+    backend_override = resolve_preferred_backend(plan_row.plan, requested_backend)
+    quota_backend = backend_override or backend_bucket(settings.image_provider)
+    try:
+        plan_row = consume_quota(session, user.id, "room", quota_backend)
+    except QuotaExceededError as exc:
+        raise HTTPException(403, exc.user_message())
 
     storage = get_storage()
     provider = get_provider()
@@ -751,7 +707,7 @@ async def create_project(
         interior_style=interior_style,
         color_palette=color_palette,
         additional_instructions=additional_instructions,
-        user_id=user.id if user else None,
+        user_id=user.id,
         room_dimensions_json=json.dumps(room_dimensions) if room_dimensions else None,
     )
     session.add(project)
@@ -762,9 +718,8 @@ async def create_project(
     # appended (see _storage_namespace) so every user's uploads/renders group
     # under their own S3 prefix, and that prefix is actually identifiable by
     # name when browsing the bucket - see CLAUDE.md's "Authentication"
-    # section. Anonymous (pre-login trial) uploads share one fixed namespace
-    # instead - see ANONYMOUS_STORAGE_NAMESPACE's comment.
-    storage_namespace = _storage_namespace(user.id, display_name) if user else ANONYMOUS_STORAGE_NAMESPACE
+    # section.
+    storage_namespace = _storage_namespace(user.id, display_name)
     if plan_row is not None:
         _write_account_json(storage, storage_namespace, plan_row)
     original_key = f"users/{storage_namespace}/roomRedesign/input/{project.id}/original.png"
@@ -1029,8 +984,6 @@ def list_projects(session: Session = Depends(get_session), user: AuthUser = Depe
 @app.post("/api/house-projects", response_model=HouseProjectCreateResponse)
 async def create_house_project(
     background_tasks: BackgroundTasks,
-    request: Request,
-    response: Response,
     file: UploadFile | None = File(None),
     length: float | None = Form(None),
     width: float | None = Form(None),
@@ -1047,7 +1000,7 @@ async def create_house_project(
     architectural_style: str | None = Form(None),
     preferred_model: str | None = Form(None),
     session: Session = Depends(get_session),
-    user: AuthUser | None = Depends(get_current_user),
+    user: AuthUser = Depends(require_user),
 ):
     """Mirrors create_project()'s validate -> create-row -> commit ->
     upload-original -> commit -> background_tasks.add_task shape. length/width
@@ -1152,9 +1105,12 @@ async def create_house_project(
     if length and width:
         dimensions = {"length": length, "width": width, "unit": unit.strip()[:10]}
 
-    # Anonymous (pre-login) trial gate ONLY - a logged-in user's ONGOING
-    # monthly quota is still NOT enforced here (unlike create_project above),
-    # deliberately, not an oversight. The approved pricing table
+    # Login is required for every generation (Depends(require_user) above
+    # already 401s an anonymous caller before this point is ever reached - a
+    # pre-login trial used to exist here, removed at the user's explicit
+    # request: "no generation before logging in"). A logged-in user's
+    # ONGOING monthly quota is still NOT enforced here (unlike create_project
+    # above), deliberately, not an oversight. The approved pricing table
     # (future-plans/subscription-and-access-roadmap.md) gives Free tier
     # "3 Kaggle house generations/mo, 0 OpenAI", but settings.house_image_provider
     # defaults to "openai" (no trained Kaggle house-render model exists in
@@ -1175,14 +1131,9 @@ async def create_house_project(
     # only configured backend), but it stops a Free user from making that
     # exposure WORSE by actively picking the paid option on purpose.
     requested_backend = preferred_model if preferred_model in ("kaggle", "openai") else None
-    plan_row = None
-    if user is None:
-        _consume_anonymous_trial(request, response, "house")
-        backend_override = resolve_preferred_backend(None, requested_backend)
-    else:
-        plan_row = get_or_create_user_plan(session, user.id)
-        capture_identity(session, user.id, email=email, display_name=display_name)
-        backend_override = resolve_preferred_backend(plan_row.plan, requested_backend)
+    plan_row = get_or_create_user_plan(session, user.id)
+    capture_identity(session, user.id, email=email, display_name=display_name)
+    backend_override = resolve_preferred_backend(plan_row.plan, requested_backend)
 
     storage = get_storage()
     provider = get_provider()
@@ -1191,7 +1142,7 @@ async def create_house_project(
         status="queued",
         dimensions_json=json.dumps(dimensions),
         prompt=prompt,
-        user_id=user.id if user else None,
+        user_id=user.id,
         house_inputs_json=json.dumps(house_inputs),
     )
     session.add(house_project)
@@ -1201,7 +1152,7 @@ async def create_house_project(
     # storage_namespace is needed below (metadata.json key, background task)
     # regardless of whether a photo was uploaded - only plot_image_key itself
     # is conditional on data being present.
-    storage_namespace = _storage_namespace(user.id, display_name) if user else ANONYMOUS_STORAGE_NAMESPACE
+    storage_namespace = _storage_namespace(user.id, display_name)
     if plan_row is not None:
         # NOTE: house generations aren't currently counted by consume_quota()
         # at all (see the "House quota gap" comment above) - the

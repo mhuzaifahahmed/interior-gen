@@ -132,64 +132,32 @@ def test_full_upload_and_poll_flow(monkeypatch):
         assert body["materials"] is not None
 
 
-def test_anonymous_user_gets_one_free_room_trial_generation(monkeypatch):
-    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
-    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
-
+def test_anonymous_user_cannot_generate_without_logging_in(monkeypatch):
+    # A pre-login trial (1 free anonymous generation per browser) used to
+    # exist here - removed at the user's explicit request ("no generation
+    # before logging in"). No provider/storage mocking needed: the request
+    # must 401 before the pipeline is ever reached.
     with TestClient(app) as client:
         # No login at all - authFetch() sends no Authorization header when
         # logged out (see static/app.js), so a bare TestClient call already
         # matches that.
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-        first = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
-        assert first.status_code == 200
-        project_id = first.json()["project_id"]
-
-        # Anonymous caller can poll their own trial project without logging in.
-        status_res = client.get(f"/api/projects/{project_id}")
-        assert status_res.status_code == 200
-        assert status_res.json()["status"] == "done"
+        res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
+        assert res.status_code == 401
 
 
-def test_anonymous_user_is_prompted_to_log_in_after_the_trial_is_used(monkeypatch):
-    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
-    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
-
-    with TestClient(app) as client:
-        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-        first = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
-        assert first.status_code == 200
-
-        second = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
-        assert second.status_code == 401
-
-
-def test_a_different_anonymous_browser_gets_its_own_trial(monkeypatch):
-    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
-    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
-
-    files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-    with TestClient(app) as client_a:
-        used = client_a.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
-        assert used.status_code == 200
-
-    with TestClient(app) as client_b:
-        fresh = client_b.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
-        assert fresh.status_code == 200
-
-
-def test_logged_in_user_is_unaffected_by_the_anonymous_trial_cookie(monkeypatch):
+def test_logged_in_user_can_still_generate(monkeypatch):
     monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
     monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
 
     with TestClient(app) as client:
         files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
         anon = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
-        assert anon.status_code == 200  # burns the anonymous trial cookie on this client
+        assert anon.status_code == 401
 
         _signup_and_login(client)
         logged_in = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
-        assert logged_in.status_code == 200  # goes through the Free-plan quota path instead
+        assert logged_in.status_code == 200  # goes through the Free-plan quota path
 
 
 def test_anonymous_caller_cannot_see_someone_elses_real_project(monkeypatch):
@@ -269,20 +237,6 @@ def test_pro_plan_room_with_no_preference_uses_the_configured_default(monkeypatc
     # No preferred_model sent - the provider must receive no override at all
     # (None), same call shape as before this feature existed.
     assert provider.received_preferred_backends == [None, None, None]
-
-
-def test_anonymous_trial_can_choose_openai_backend(monkeypatch):
-    provider = FakeProvider()
-    monkeypatch.setattr(main_module, "get_provider", lambda: provider)
-    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
-
-    with TestClient(app) as client:
-        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-        data = {**_REQUIRED_STYLE_FIELDS, "preferred_model": "openai"}
-        res = client.post("/api/projects", files=files, data=data)
-
-    assert res.status_code == 200
-    assert provider.received_preferred_backends == ["openai", "openai", "openai"]
 
 
 def test_free_plan_room_quota_is_enforced(monkeypatch):
@@ -637,23 +591,6 @@ def test_rejects_unsupported_file_type():
         files = {"file": ("doc.pdf", b"not-an-image", "application/pdf")}
         res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
         assert res.status_code == 400
-
-
-def test_create_project_no_longer_requires_login_for_the_first_anonymous_trial(monkeypatch):
-    # Superseded by the pre-login trial feature (see
-    # future-plans/subscription-and-access-roadmap.md) - a first-ever
-    # anonymous request now succeeds instead of 401ing immediately.
-    # test_anonymous_user_is_prompted_to_log_in_after_the_trial_is_used
-    # covers the "login required after the trial is used" case this test
-    # used to check. MUST mock get_provider/get_storage - unlike before,
-    # this request now actually runs the real pipeline instead of failing
-    # fast on auth.
-    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
-    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
-    with TestClient(app) as client:
-        files = {"file": ("room.png", _sample_image_bytes(), "image/png")}
-        res = client.post("/api/projects", files=files, data=_REQUIRED_STYLE_FIELDS)
-        assert res.status_code == 200
 
 
 def test_unknown_project_returns_404():

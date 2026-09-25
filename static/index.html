@@ -618,11 +618,11 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <p class="font-body-md text-on-surface-variant/70 text-xs mt-2">Left blank, our AI will estimate the room's size from the photo instead, which may lead to less accurate pricing for flooring, paint, and lighting. Height is optional and only improves paint quantity accuracy.</p>
 </div>
 <!-- Kaggle-vs-OpenAI model choice (see app/plans.py's resolve_preferred_backend())
-     - hidden entirely for a logged-in Free-plan user (the backend silently
-     ignores it for them anyway, so showing it would just be a control that
-     does nothing); shown for an anonymous pre-login visitor (their one trial
-     generation) and for Pro/Studio plans. Visibility + the note under it are
-     driven live by applyRoomPlanUI() in app.js. -->
+     - hidden entirely for an anonymous visitor (login is required before any
+     generation at all) and for a logged-in Free-plan user (the backend
+     silently ignores it for them anyway, so showing it would just be a
+     control that does nothing); shown only for Pro/Studio plans. Visibility
+     + the note under it are driven live by applyRoomPlanUI() in app.js. -->
 <div id="room-model-toggle-wrap" hidden>
 <label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Generation model</label>
 <div class="flex gap-2" id="room-model-toggle" role="radiogroup">

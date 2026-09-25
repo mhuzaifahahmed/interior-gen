@@ -174,29 +174,19 @@ def test_pro_plan_house_can_choose_openai_backend(monkeypatch):
     assert provider.received_preferred_backends == ["openai"]
 
 
-def test_anonymous_user_gets_one_free_house_trial_generation(monkeypatch):
-    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
-    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
-
+def test_anonymous_user_cannot_generate_house_without_logging_in():
+    # A pre-login trial (1 free anonymous generation per browser) used to
+    # exist here - removed at the user's explicit request ("no generation
+    # before logging in"). No provider/storage mocking needed: the request
+    # must 401 before the pipeline is ever reached.
     with TestClient(app) as client:
         files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
-        first = client.post(
+        res = client.post(
             "/api/house-projects",
             files=files,
             data={"length": "40", "width": "60", "unit": "ft", "prompt": "2 floors, modern style"},
         )
-        assert first.status_code == 200
-        house_project_id = first.json()["house_project_id"]
-
-        status_res = client.get(f"/api/house-projects/{house_project_id}")
-        assert status_res.status_code == 200
-
-        second = client.post(
-            "/api/house-projects",
-            files=files,
-            data={"length": "40", "width": "60", "unit": "ft", "prompt": "2 floors, modern style"},
-        )
-        assert second.status_code == 401
+        assert res.status_code == 401
 
 
 def test_full_house_upload_without_photo_still_completes(monkeypatch):
@@ -637,18 +627,6 @@ def test_house_project_rejects_unsupported_file_type():
         files = {"file": ("doc.pdf", b"not-an-image", "application/pdf")}
         res = client.post("/api/house-projects", files=files)
         assert res.status_code == 400
-
-
-def test_create_house_project_no_longer_requires_login_for_the_first_anonymous_trial(monkeypatch):
-    # Superseded by the pre-login trial feature - see
-    # test_create_project_no_longer_requires_login_for_the_first_anonymous_trial
-    # in test_api.py for the full reasoning (same change, mirrored here).
-    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
-    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
-    with TestClient(app) as client:
-        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
-        res = client.post("/api/house-projects", files=files)
-        assert res.status_code == 200
 
 
 def test_unknown_house_project_returns_404():

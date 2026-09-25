@@ -2036,22 +2036,30 @@ aspirational). Real payment processing is **not** — see "Payments" below for t
   production) bypasses the limit check while still tracking real usage.
 - **`resolve_preferred_backend(plan, requested)`** — decides whether a generation request's
   `preferred_model` Form field (`"kaggle"`/`"openai"`) actually overrides the app's configured default.
-  Anonymous (pre-login trial, `plan=None`) is always allowed to choose; Free is never honored (silently
-  falls back to the app default, verified end-to-end by a test that a Free user's explicit `"openai"`
-  request still succeeds against the Kaggle quota — if it had wrongly been honored, it would 403
+  Still accepts `plan=None` (the pre-login-trial caller this was originally built for, before anonymous
+  generation was removed — see below) as "always allowed to choose", but neither generator endpoint can
+  actually reach it with `plan=None` anymore since both now require login first. Free is never honored
+  (silently falls back to the app default, verified end-to-end by a test that a Free user's explicit
+  `"openai"` request still succeeds against the Kaggle quota — if it had wrongly been honored, it would 403
   immediately since Free's OpenAI allowance is 0); Pro/Studio are honored and quota-checked against
   whichever bucket the chosen backend maps to. Threaded through `HybridProvider._resolve_room_provider()`/
   `_resolve_house_provider()` and only included in pipeline calls when non-`None`
   (`backend_kwargs = {"preferred_backend": ...} if preferred_backend else {}`) — a deliberate scope
   decision so a call with no explicit preference is byte-for-byte identical to before this feature
   existed, avoiding touching ~25+ duck-typed `FakeProvider` test doubles across the test suite.
-- **Anonymous pre-login trial**: `create_project`/`create_house_project` don't require login at all —
-  `get_current_user` (optional) instead of `require_user`. A plain `httponly` 1-year cookie
-  (`ig_anon_trial_room`/`ig_anon_trial_house`, `_consume_anonymous_trial()`) tracks whether this browser
-  already used its one free trial per generation type; a second attempt 401s with "Free trial already
-  used - please log in to continue" — the same status code the frontend already handles for the
-  post-login redirect flow, so no frontend change was needed for that path. Anonymous projects use a
-  fixed `ANONYMOUS_STORAGE_NAMESPACE = "anonymous"` S3 prefix (no per-visitor id exists to key by).
+- **No anonymous generation — removed 2026-09, at the user's explicit request ("no generation before
+  logging in").** `create_project`/`create_house_project` originally didn't require login at all (a
+  1-free-trial-per-browser cookie, `get_current_user` optional instead of `require_user`) — both now gate
+  on `Depends(require_user)` like every other generator-adjacent endpoint, so an anonymous POST 401s
+  immediately, before any storage/pipeline cost. The frontend needed **zero changes** to make this work:
+  `static/app.js`'s existing 401 handler (`savePendingGeneration()` + redirect to `/static/login.html`,
+  originally built for "trial already used") already does exactly the right thing for "never logged in at
+  all" too, since both cases were always the same status code. The only real UI follow-up was hiding the
+  Kaggle/OpenAI model-choice toggle for anonymous visitors (`applyRoomPlanUI()`/`applyHousePlanUI()`) —
+  previously shown to let an anonymous visitor pick a backend for their one trial, now meaningless before
+  login and hidden until Pro/Studio. `_owns_project()` stays anonymous-aware (`user_id=None` still matches
+  an anonymous caller) purely for **legacy rows** created while the trial feature was live — not for any
+  new project, which can no longer have a null `user_id`.
 - **7-day Pro trial: explicitly decided AGAINST, not just deferred.** An earlier draft of the roadmap
   floated this; the user has since said no outright — don't build it, don't suggest it as a lever, it's
   off the table.
@@ -2139,8 +2147,9 @@ caller, not a logged-in user.
   hitting a limit. Pro/Studio cards show "Current plan" (disabled) instead of "Upgrade" when `GET
   /api/plan` confirms that's the real plan.
 - **Room Redesign has a Kaggle/OpenAI toggle** (`#room-model-toggle-wrap`), shown only when the choice is
-  real: anonymous trial and Pro/Studio. Hidden entirely for logged-in Free (showing a control that does
-  nothing would be its own bug, since `resolve_preferred_backend()` already silently ignores their
+  real: logged-in Pro/Studio. Hidden entirely for an anonymous visitor (no generation is possible before
+  logging in at all — see "No anonymous generation" above) and for logged-in Free (showing a control that
+  does nothing would be its own bug, since `resolve_preferred_backend()` already silently ignores their
   choice). **Build a House deliberately has no such toggle** — `HOUSE_IMAGE_PROVIDER` defaults to
   `"openai"` and no trained self-hosted house model exists, so both toggle options would silently do the
   same (paid) thing; a plain static note explains this instead ("Build a House renders currently use

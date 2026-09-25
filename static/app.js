@@ -573,17 +573,19 @@ wireModelToggle(houseModelToggle, houseModelSelect);
 setModelToggleValue(houseModelToggle, houseModelSelect, "kaggle");
 
 // Decides whether Room Redesign's Kaggle/OpenAI toggle is shown at all, and
-// what the quota note under it says. Only anonymous (pre-login trial) and
-// Pro/Studio users get a real choice - see app/plans.py's
-// resolve_preferred_backend(), which silently ignores the choice for a
-// logged-in Free-plan user regardless of what's sent, so showing the toggle
-// to them would just be a control that does nothing.
+// what the quota note under it says. Only logged-in Pro/Studio users get a
+// real choice - see app/plans.py's resolve_preferred_backend(), which
+// silently ignores the choice for a logged-in Free-plan user regardless of
+// what's sent, so showing the toggle to them would just be a control that
+// does nothing.
 async function applyRoomPlanUI() {
   const Clerk = await clerkReady;
   if (!Clerk.user) {
-    // Anonymous pre-login trial - the roadmap's spec explicitly lets an
-    // anonymous visitor choose a backend for their one free trial.
-    roomModelToggleWrap.hidden = false;
+    // No generation is possible before logging in at all (POST /api/projects
+    // 401s immediately for an anonymous caller - a pre-login trial used to
+    // exist here and was removed) - showing a model-choice toggle before
+    // that point would be a control that leads nowhere.
+    roomModelToggleWrap.hidden = true;
     roomQuotaNote.hidden = true;
     return;
   }
@@ -623,16 +625,17 @@ async function applyRoomPlanUI() {
 }
 
 // Build a House's equivalent of applyRoomPlanUI() above - same shown-to/
-// hidden-from rules (anonymous + Pro/Studio get the toggle, Free doesn't),
-// but OpenAI is always disabled in the markup itself (see index.html's
-// house-model-toggle-wrap - it's a real <button disabled>, "Coming soon")
-// since it isn't wired as a genuine per-request choice for house yet -
-// HOUSE_IMAGE_PROVIDER=kaggle (our elevation model) is the real, working
-// default today, unlike when this toggle didn't exist at all.
+// hidden-from rules (only logged-in Pro/Studio get the toggle; no
+// generation is possible before logging in at all, and Free doesn't get a
+// real choice either), but OpenAI is always disabled in the markup itself
+// (see index.html's house-model-toggle-wrap - it's a real <button disabled>,
+// "Coming soon") since it isn't wired as a genuine per-request choice for
+// house yet - HOUSE_IMAGE_PROVIDER=kaggle (our elevation model) is the real,
+// working default today, unlike when this toggle didn't exist at all.
 async function applyHousePlanUI() {
   const Clerk = await clerkReady;
   if (!Clerk.user) {
-    houseModelToggleWrap.hidden = false;
+    houseModelToggleWrap.hidden = true;
     houseQuotaNote.hidden = true;
     return;
   }
@@ -1693,9 +1696,9 @@ form.addEventListener("submit", async (e) => {
   if (roomWidthInput.value) formData.append("room_width", roomWidthInput.value);
   if (roomHeightInput.value) formData.append("room_height", roomHeightInput.value);
   formData.append("dimension_unit", roomDimensionUnitInput.value);
-  // Only sent when the toggle is actually visible/meaningful (anonymous
-  // trial or Pro/Studio - see applyRoomPlanUI()) - a logged-in Free-plan
-  // user's request omits it entirely, same as before this feature existed.
+  // Only sent when the toggle is actually visible/meaningful (logged-in
+  // Pro/Studio - see applyRoomPlanUI()) - a logged-in Free-plan user's
+  // request omits it entirely, same as before this feature existed.
   if (!roomModelToggleWrap.hidden) formData.append("preferred_model", roomModelSelect.value);
 
   let projectId;
@@ -2972,9 +2975,9 @@ houseForm.addEventListener("submit", async (e) => {
   formData.append("extras", houseExtrasInput.value.trim());
   formData.append("display_name", await currentUserDisplayName());
   formData.append("email", await currentUserEmail());
-  // Only sent when the toggle is actually visible/meaningful (anonymous
-  // trial or Pro/Studio - see applyHousePlanUI()) - a logged-in Free-plan
-  // user's request omits it entirely, same as Room Redesign's toggle above.
+  // Only sent when the toggle is actually visible/meaningful (logged-in
+  // Pro/Studio - see applyHousePlanUI()) - a logged-in Free-plan user's
+  // request omits it entirely, same as Room Redesign's toggle above.
   if (!houseModelToggleWrap.hidden) formData.append("preferred_model", houseModelSelect.value);
 
   let houseProjectId;
