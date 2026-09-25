@@ -6,6 +6,7 @@ import time
 import httpx
 
 from app.config import settings
+from app.dynamic_settings import KAGGLE_API_URL_KEY, KAGGLE_HOUSE_API_URL_KEY, get_effective_url
 from app.pipeline.prompts import (
     KAGGLE_PROMPT_MAX_WORDS,
     build_kaggle_negative_prompt,
@@ -204,12 +205,17 @@ class KaggleImageProvider:
         if negative_prompt:
             payload["negative_prompt"] = negative_prompt
 
+        # DB override (editable from /admin, see app/dynamic_settings.py) takes
+        # priority over the .env-configured default - lets a rotated Cloudflare
+        # tunnel URL be fixed in seconds instead of a Render redeploy.
+        base_url = get_effective_url(KAGGLE_API_URL_KEY, settings.kaggle_api_url)
+
         # Serialized - see _request_lock's module-level comment for the real
         # concurrent-request failure this guards against.
         try:
             with _request_lock:
                 response = httpx.post(
-                    _generate_url(settings.kaggle_api_url),
+                    _generate_url(base_url),
                     json=payload,
                     timeout=REQUEST_TIMEOUT_SECONDS,
                 )
@@ -294,12 +300,17 @@ class KaggleImageProvider:
             "resolution": settings.kaggle_batch_resolution,
         }
 
+        # Resolved ONCE for this whole call (submit + every poll) - a DB
+        # override changing mid-poll shouldn't retarget an already-in-flight
+        # job. See app/dynamic_settings.py.
+        base_url = get_effective_url(KAGGLE_API_URL_KEY, settings.kaggle_api_url)
+
         # No _request_lock needed here - the notebook's own generation_lock
         # serializes GPU access server-side, and this submit call is
         # near-instant anyway (nothing left to serialize client-side).
         try:
             submit_response = httpx.post(
-                _generate_batch_url(settings.kaggle_api_url),
+                _generate_batch_url(base_url),
                 json=payload,
                 timeout=BATCH_SUBMIT_TIMEOUT_SECONDS,
             )
@@ -317,7 +328,7 @@ class KaggleImageProvider:
             logger.error("unexpected Kaggle batch submit response shape: %s", submit_data)
             raise RuntimeError(f"unexpected Kaggle batch submit response shape: {submit_data}")
 
-        status_url = _generate_batch_status_url(settings.kaggle_api_url, job_id)
+        status_url = _generate_batch_status_url(base_url, job_id)
         deadline = time.monotonic() + BATCH_POLL_MAX_SECONDS
 
         while True:
@@ -444,7 +455,7 @@ class KaggleImageProvider:
         if style:
             payload["style"] = style
 
-        base_url = settings.kaggle_house_api_url
+        base_url = get_effective_url(KAGGLE_HOUSE_API_URL_KEY, settings.kaggle_house_api_url)
         try:
             submit_response = httpx.post(
                 _generate_elevation_url(base_url),

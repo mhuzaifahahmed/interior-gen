@@ -81,6 +81,7 @@ import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
 
 from app.config import settings
+from app.dynamic_settings import KAGGLE_AUTOCAD_API_URL_KEY, get_effective_url
 from app.pipeline.blueprint_svg import _NAME_LINE_GAP_PX, _fit_room_name
 from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box, render_conditioning_edge_map
 from app.pipeline.floor_layout import layout_floor
@@ -222,6 +223,15 @@ def _composite_room_labels(image: Image.Image, rects: list[dict], dimensions: di
     return image
 
 
+def is_configured() -> bool:
+    """Whether this vendor has a real URL to call right now - checks the SAME
+    effective source (DB override or .env fallback, see app/dynamic_settings.py)
+    generate_floor_plan() itself will use, so HybridProvider's provider-selection
+    check (_default_floor_plan_provider() in hybrid.py) never disagrees with
+    what actually happens once generate_floor_plan() is called."""
+    return bool(get_effective_url(KAGGLE_AUTOCAD_API_URL_KEY, settings.kaggle_autocad_api_url))
+
+
 def generate_floor_plan(
     plot_description: str | None,
     dimensions: dict,
@@ -229,7 +239,7 @@ def generate_floor_plan(
     room_layout: dict | None = None,
     facing: str | None = None,
 ) -> list[bytes] | None:
-    base_url = settings.kaggle_autocad_api_url
+    base_url = get_effective_url(KAGGLE_AUTOCAD_API_URL_KEY, settings.kaggle_autocad_api_url)
     if not base_url:
         return None
 

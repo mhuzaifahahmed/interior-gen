@@ -77,6 +77,47 @@
 </div>
 
 <div id="admin-content" class="hidden">
+
+  <div class="mb-10">
+    <h2 class="font-headline-md text-headline-md text-on-surface">Kaggle Model URLs</h2>
+    <p class="font-body-md text-on-surface-variant text-sm mt-1 mb-4">
+      These Cloudflare tunnel URLs rotate every time the matching Kaggle notebook session restarts.
+      Paste the new one here after a restart - it takes effect within seconds, no Render redeploy needed.
+    </p>
+    <div class="rounded-xl border border-outline-variant/70 bg-surface p-5 grid gap-4 sm:grid-cols-3">
+      <div>
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-1.5" for="kaggle-url-room">
+          Room Redesign
+        </label>
+        <input id="kaggle-url-room" data-key="kaggle_api_url" type="text" placeholder="https://…trycloudflare.com"
+          class="w-full px-3 py-2 rounded-lg border border-outline-variant bg-surface font-technical-data text-technical-data focus:outline-none focus:border-primary" />
+        <p class="text-xs text-on-surface-variant mt-1" data-source-for="kaggle_api_url"></p>
+      </div>
+      <div>
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-1.5" for="kaggle-url-house">
+          Build a House (elevation)
+        </label>
+        <input id="kaggle-url-house" data-key="kaggle_house_api_url" type="text" placeholder="https://…trycloudflare.com"
+          class="w-full px-3 py-2 rounded-lg border border-outline-variant bg-surface font-technical-data text-technical-data focus:outline-none focus:border-primary" />
+        <p class="text-xs text-on-surface-variant mt-1" data-source-for="kaggle_house_api_url"></p>
+      </div>
+      <div>
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-1.5" for="kaggle-url-autocad">
+          AI Concept Layout
+        </label>
+        <input id="kaggle-url-autocad" data-key="kaggle_autocad_api_url" type="text" placeholder="https://…trycloudflare.com"
+          class="w-full px-3 py-2 rounded-lg border border-outline-variant bg-surface font-technical-data text-technical-data focus:outline-none focus:border-primary" />
+        <p class="text-xs text-on-surface-variant mt-1" data-source-for="kaggle_autocad_api_url"></p>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 mt-4">
+      <button id="kaggle-urls-save-btn" class="px-5 py-2.5 rounded-full bg-primary text-on-primary font-label-caps text-label-caps">
+        Save Kaggle URLs
+      </button>
+      <span id="kaggle-urls-status" class="text-sm text-on-surface-variant"></span>
+    </div>
+  </div>
+
   <div class="flex items-center justify-between gap-4 mb-6 flex-wrap">
     <div>
       <h1 class="font-headline-md text-headline-md text-on-surface">Users &amp; Plans</h1>
@@ -254,6 +295,58 @@
 
   searchEl.addEventListener("input", applyFilter);
 
+  const kaggleUrlInputs = document.querySelectorAll("[data-key]");
+  const kaggleUrlsSaveBtn = document.getElementById("kaggle-urls-save-btn");
+  const kaggleUrlsStatus = document.getElementById("kaggle-urls-status");
+
+  function renderKaggleUrls(urls) {
+    kaggleUrlInputs.forEach((input) => {
+      const entry = urls[input.dataset.key];
+      if (!entry) return;
+      input.value = entry.value || "";
+      const sourceLabel = entry.source === "database" ? "Set here (overriding .env)" : "Using .env default";
+      const badge = document.querySelector(`[data-source-for="${input.dataset.key}"]`);
+      if (badge) badge.textContent = entry.value ? sourceLabel : "Not configured";
+    });
+  }
+
+  async function loadKaggleUrls() {
+    try {
+      const res = await adminFetch("/api/admin/kaggle-urls");
+      if (!res.ok) return;
+      const data = await res.json();
+      renderKaggleUrls(data.urls);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  kaggleUrlsSaveBtn.addEventListener("click", async () => {
+    const body = {};
+    kaggleUrlInputs.forEach((input) => {
+      body[input.dataset.key] = input.value.trim();
+    });
+    kaggleUrlsSaveBtn.disabled = true;
+    kaggleUrlsStatus.textContent = "Saving…";
+    try {
+      const res = await adminFetch("/api/admin/kaggle-urls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      renderKaggleUrls(data.urls);
+      kaggleUrlsStatus.textContent = "Saved - takes effect within seconds.";
+      setTimeout(() => { kaggleUrlsStatus.textContent = ""; }, 4000);
+    } catch (err) {
+      console.error(err);
+      kaggleUrlsStatus.textContent = "Failed to save - see console for details.";
+    } finally {
+      kaggleUrlsSaveBtn.disabled = false;
+    }
+  });
+
   clerkReady
     .then(async (Clerk) => {
       if (!Clerk.user) {
@@ -279,6 +372,7 @@
       allUsers = data.users;
       contentEl.classList.remove("hidden");
       applyFilter();
+      loadKaggleUrls();
     })
     .catch((err) => {
       console.error(err);

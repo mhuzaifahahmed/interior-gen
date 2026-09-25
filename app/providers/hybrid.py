@@ -66,12 +66,16 @@ def _default_house_image_provider(openai_provider):
 def _default_floor_plan_provider():
     # Real vendor for the still-generally-inert generate_floor_plan() slot
     # (see idealhouse.py's own docstring for why it stays the default "no
-    # vendor configured" fallback). kaggle_autocad only activates itself
-    # (falls back to None internally) when settings.kaggle_autocad_api_url is
-    # set - see that module's docstring for the real, live-confirmed request
-    # contract AND the honest quality caveat (garbled text, broken geometry)
-    # before trusting its output for anything beyond visual inspection.
-    if settings.kaggle_autocad_api_url:
+    # vendor configured" fallback). kaggle_autocad.is_configured() checks the
+    # SAME effective URL source (DB override or .env, see
+    # app/dynamic_settings.py) generate_floor_plan() itself resolves - not
+    # just the raw .env setting - so an admin-set DB override actually
+    # activates this vendor, not just changes which URL an already-inactive
+    # one would have used. See kaggle_autocad.py's own docstring for the
+    # real, live-confirmed request contract AND the honest quality caveat
+    # (garbled text, broken geometry) before trusting its output for
+    # anything beyond visual inspection.
+    if kaggle_autocad.is_configured():
         return kaggle_autocad
     return idealhouse
 

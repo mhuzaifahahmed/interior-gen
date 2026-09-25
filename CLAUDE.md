@@ -261,6 +261,49 @@ paid-only). Current setup is a **hybrid**, wired in `app/providers/hybrid.py`:
   `USER_NOTES_MAX_CHARS` (150) - enforced in **both** `build_prompt()` and `main.py`'s endpoint, since the
   frontend's `maxlength` is trivially bypassable by anyone calling the API directly.
 
+## Kaggle tunnel URLs editable from /admin, no redeploy needed (2026-09-21)
+
+Direct follow-up to the room OpenAI-fallback change below (chronologically this happened right after it,
+but is documented first since it's the more foundational piece): with the OpenAI fallback disabled, a
+stale Kaggle tunnel URL now directly fails every real generation - and Kaggle's Cloudflare tunnel URL
+rotates every time its notebook session restarts (see "Provider split" above), which previously meant
+editing Render's env var and waiting for a full redeploy. That turnaround was real friction the user
+explicitly flagged as impractical ("wont be possible to change the variable in render everytime we run
+this").
+
+- **`AppSetting`** (`app/models.py`) - a tiny generic key-value table (`key`, `value`, `updated_at`). New
+  table, no migration entry needed (`create_all()` handles new tables on its own). Deliberately narrow -
+  not a general config system, just this one use case for now.
+- **`app/dynamic_settings.py`** - `get_effective_url(key, fallback)` returns the DB-stored override if one
+  is set (and non-blank), else `fallback` (the `.env`-configured `Settings` value) - a DB value always
+  wins when present. `set_effective_url(key, value)` upserts (empty string clears the override, reverting
+  to `.env`) and immediately invalidates a short (15s) in-process cache so an admin's save is visible on
+  the very next request, not just eventually. The cache exists so `kaggle.py`'s batch-job poll loop
+  (every 3s for up to 420s) doesn't hit the DB on every single iteration. **Fails open on any DB error**
+  (e.g. an old running instance whose `AppSetting` table hasn't appeared yet) - degrades to `fallback`
+  rather than ever being the reason a real generation request fails.
+- **Wired into all three Kaggle Cloudflare-tunnel URLs** - `kaggle_api_url` (room-redesign),
+  `kaggle_house_api_url` (Build a House elevation), `kaggle_autocad_api_url` (AI Concept Layout). Each
+  call site in `kaggle.py`/`kaggle_autocad.py` that used to read `settings.kaggle_*_api_url` directly now
+  resolves through `get_effective_url()` first. `generate_images_batch()`/`generate_house_render()`
+  resolve the URL ONCE at the top of the call (not per-poll-iteration) - a DB update mid-poll shouldn't
+  retarget an already-in-flight job. `kaggle_autocad.is_configured()` (new) checks the SAME effective
+  source `generate_floor_plan()` itself will use, so `hybrid.py`'s `_default_floor_plan_provider()`
+  (which decides whether this vendor is even selected at all) never disagrees with what the call would
+  actually do - an admin-set DB override genuinely ACTIVATES the vendor, not just changes which URL an
+  already-inactive one would have used.
+- **Admin panel** (`static/admin.html`): a new "Kaggle Model URLs" section above the Users & Plans table -
+  3 inputs (Room Redesign / Build a House / AI Concept Layout) each showing whether its current effective
+  value is "Set here (overriding .env)" or "Using .env default", plus one Save button
+  (`GET`/`POST /api/admin/kaggle-urls`, `app/main.py`, gated by the same `require_admin()` as every other
+  admin endpoint). `POST` is a partial update (`model_dump(exclude_unset=True)`) - saving the panel's 3
+  fields together is safe even if only one actually changed.
+- **Real workflow this enables**: after restarting the Kaggle notebook (new Cloudflare tunnel URL
+  printed), paste it into `/admin` and save - takes effect within seconds. No Render dashboard edit, no
+  redeploy wait. `.env`'s `KAGGLE_API_URL` etc. still work exactly as before for a fresh install with
+  nothing ever set in `/admin` - this is purely additive, an override layer on top of the existing
+  `.env`-driven default, never a replacement for it.
+
 ## Room OpenAI-fallback disabled by default (2026-09-21)
 
 Real, user-reported cost problem: `HybridProvider.generate_image()`/`generate_images_batch()` used to

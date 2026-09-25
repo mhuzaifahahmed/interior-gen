@@ -19,6 +19,7 @@ from app.auth import AuthUser, get_current_user, require_admin, require_user
 from app.config import settings
 from app import payments
 from app.db import get_session, init_db
+from app import dynamic_settings
 from app.models import HouseProject, PaymentIntent, Project
 from app.pipeline.generate import TIERS, run_pipeline
 from app.pipeline.generate_house import run_house_pipeline
@@ -48,6 +49,9 @@ from app.schemas import (
     AdminUsersResponse,
     HouseProjectCreateResponse,
     HouseProjectStatusResponse,
+    KaggleUrlEntry,
+    KaggleUrlsResponse,
+    KaggleUrlsUpdateRequest,
     PlanStatusResponse,
     ProjectCreateResponse,
     ProjectStatusResponse,
@@ -383,6 +387,40 @@ def admin_reset_usage(
 ):
     plan_row = reset_usage(session, user_id)
     return _admin_row(session, plan_row)
+
+
+def _kaggle_urls_response() -> KaggleUrlsResponse:
+    env_fallbacks = {
+        dynamic_settings.KAGGLE_API_URL_KEY: settings.kaggle_api_url,
+        dynamic_settings.KAGGLE_HOUSE_API_URL_KEY: settings.kaggle_house_api_url,
+        dynamic_settings.KAGGLE_AUTOCAD_API_URL_KEY: settings.kaggle_autocad_api_url,
+    }
+    raw = dynamic_settings.get_all_effective_urls(env_fallbacks)
+    return KaggleUrlsResponse(urls={key: KaggleUrlEntry(**entry) for key, entry in raw.items()})
+
+
+@app.get("/api/admin/kaggle-urls", response_model=KaggleUrlsResponse)
+def admin_get_kaggle_urls(_admin: AuthUser = Depends(require_admin)):
+    """Current effective value of each Kaggle Cloudflare-tunnel URL (room-
+    redesign, Build a House elevation, AI Concept Layout) plus whether it's a
+    DB override (set here) or falling back to the .env-configured default -
+    see app/dynamic_settings.py's module docstring for why this exists: these
+    tunnel URLs rotate every time their notebook session restarts, and
+    editing them here takes effect in seconds instead of a Render redeploy."""
+    return _kaggle_urls_response()
+
+
+@app.post("/api/admin/kaggle-urls", response_model=KaggleUrlsResponse)
+def admin_set_kaggle_urls(body: KaggleUrlsUpdateRequest, _admin: AuthUser = Depends(require_admin)):
+    """Only the fields actually present in the request body are written -
+    partial updates are safe (e.g. updating just the room URL doesn't touch
+    the house/autocad ones). An empty string clears that key's override,
+    reverting it back to the .env default."""
+    updates = body.model_dump(exclude_unset=True)
+    for key, value in updates.items():
+        if key in dynamic_settings.KAGGLE_URL_KEYS:
+            dynamic_settings.set_effective_url(key, value or "")
+    return _kaggle_urls_response()
 
 
 def _frontend_redirect_base(request: Request) -> str:

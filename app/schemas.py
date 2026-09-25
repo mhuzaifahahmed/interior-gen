@@ -49,6 +49,32 @@ class AdminSetPlanRequest(BaseModel):
     plan: str  # "free" | "pro" | "studio" - validated against app.plans.VALID_PLANS
 
 
+class KaggleUrlEntry(BaseModel):
+    """One Kaggle Cloudflare-tunnel URL's effective value + where it came
+    from - "database" (an admin-set override, via app/dynamic_settings.py)
+    or "env" (falling back to the .env-configured Settings default)."""
+
+    value: str
+    source: str  # "database" | "env"
+
+
+class KaggleUrlsResponse(BaseModel):
+    """GET/POST /api/admin/kaggle-urls - keyed by the same key names as
+    app/dynamic_settings.py's KAGGLE_URL_KEYS ("kaggle_api_url",
+    "kaggle_house_api_url", "kaggle_autocad_api_url")."""
+
+    urls: dict[str, KaggleUrlEntry]
+
+
+class KaggleUrlsUpdateRequest(BaseModel):
+    """All fields optional - only the keys actually present are written.
+    An empty string clears that key's DB override, reverting to .env."""
+
+    kaggle_api_url: Optional[str] = None
+    kaggle_house_api_url: Optional[str] = None
+    kaggle_autocad_api_url: Optional[str] = None
+
+
 class ProjectCreateResponse(BaseModel):
     project_id: str
 

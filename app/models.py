@@ -159,6 +159,25 @@ class PaymentIntent(SQLModel, table=True):
     completed_at: Optional[datetime] = None
 
 
+class AppSetting(SQLModel, table=True):
+    """Tiny runtime-editable key-value store - see app/dynamic_settings.py.
+    Currently used only for the Kaggle Cloudflare tunnel URLs (room-redesign,
+    Build a House elevation, AI Concept Layout), all of which rotate every
+    time their notebook session restarts - previously the only way to update
+    one was editing Render's env var + waiting for a full redeploy, painful
+    enough that a stale URL could break generation for a while with no quick
+    fix. A row here overrides the matching .env/Settings default, editable
+    from /admin, taking effect within app/dynamic_settings.py's short cache
+    TTL instead of a redeploy. Not a general config system - this is
+    deliberately a narrow, single-purpose table; add a new column/table if a
+    future setting needs real structure/typing rather than growing this into
+    one."""
+
+    key: str = Field(primary_key=True)
+    value: str = ""
+    updated_at: datetime = Field(default_factory=_now)
+
+
 class HouseProject(SQLModel, table=True):
     """The 'Build a House' feature's own table - kept separate from Project
     rather than overloaded onto it, since the fields genuinely differ (plot

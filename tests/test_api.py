@@ -3,6 +3,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlmodel import Session
@@ -1013,6 +1014,83 @@ def test_admin_reset_usage_zeroes_a_users_counters(monkeypatch):
         assert res.json()["used"]["room_kaggle"] == 0
         # lifetime_generations is never zeroed by a reset.
         assert res.json()["lifetime_generations"] == 1
+
+
+def test_kaggle_urls_endpoints_reject_a_non_admin_user():
+    with TestClient(app) as client:
+        login_as(client)
+        res = client.get("/api/admin/kaggle-urls")
+        assert res.status_code == 403
+
+
+def test_kaggle_urls_endpoints_reject_an_unauthenticated_caller():
+    with TestClient(app) as client:
+        res = client.get("/api/admin/kaggle-urls")
+        assert res.status_code == 401
+
+
+@pytest.fixture(autouse=False)
+def _clean_kaggle_url_override():
+    """AppSetting.key is a fixed, shared string ("kaggle_api_url", etc.) -
+    unlike most rows this test suite creates, it's NOT randomized per test,
+    so a value written here would otherwise persist in the real dev DB
+    (this file has no DB isolation - see CLAUDE.md) and break a later test
+    run's "falls back to env" assertion. Explicit cleanup, not relied-upon
+    randomization."""
+    import app.dynamic_settings as dynamic_settings_module
+
+    yield
+    dynamic_settings_module.set_effective_url("kaggle_api_url", "")
+
+
+def test_get_kaggle_urls_falls_back_to_env_defaults_when_nothing_is_set(monkeypatch, _clean_kaggle_url_override):
+    monkeypatch.setattr(main_module.settings, "kaggle_api_url", "https://room-env.example.com")
+    with TestClient(app) as client:
+        admin_id = login_as(client)
+        monkeypatch.setattr(main_module.settings, "admin_user_ids", admin_id)
+
+        res = client.get("/api/admin/kaggle-urls")
+        assert res.status_code == 200
+        body = res.json()["urls"]
+        assert body["kaggle_api_url"]["value"] == "https://room-env.example.com"
+        assert body["kaggle_api_url"]["source"] == "env"
+
+
+def test_set_kaggle_url_overrides_the_env_default_and_is_readable_back(monkeypatch, _clean_kaggle_url_override):
+    monkeypatch.setattr(main_module.settings, "kaggle_api_url", "https://room-env.example.com")
+    with TestClient(app) as client:
+        admin_id = login_as(client)
+        monkeypatch.setattr(main_module.settings, "admin_user_ids", admin_id)
+
+        res = client.post(
+            "/api/admin/kaggle-urls",
+            json={"kaggle_api_url": "https://new-tunnel.trycloudflare.com"},
+        )
+        assert res.status_code == 200
+        body = res.json()["urls"]
+        assert body["kaggle_api_url"]["value"] == "https://new-tunnel.trycloudflare.com"
+        assert body["kaggle_api_url"]["source"] == "database"
+
+        # Also reflected on a fresh GET, confirming it actually persisted.
+        res2 = client.get("/api/admin/kaggle-urls")
+        assert res2.json()["urls"]["kaggle_api_url"]["value"] == "https://new-tunnel.trycloudflare.com"
+
+        # A DIFFERENT key (house) was never touched by this partial update.
+        assert res2.json()["urls"]["kaggle_house_api_url"]["source"] == "env"
+
+
+def test_set_kaggle_url_with_empty_string_clears_the_override(monkeypatch, _clean_kaggle_url_override):
+    monkeypatch.setattr(main_module.settings, "kaggle_api_url", "https://room-env.example.com")
+    with TestClient(app) as client:
+        admin_id = login_as(client)
+        monkeypatch.setattr(main_module.settings, "admin_user_ids", admin_id)
+
+        client.post("/api/admin/kaggle-urls", json={"kaggle_api_url": "https://new-tunnel.trycloudflare.com"})
+        res = client.post("/api/admin/kaggle-urls", json={"kaggle_api_url": ""})
+        assert res.status_code == 200
+        body = res.json()["urls"]
+        assert body["kaggle_api_url"]["value"] == "https://room-env.example.com"
+        assert body["kaggle_api_url"]["source"] == "env"
 
 
 def _sign_clerk_webhook(secret: str, body: bytes) -> dict:
