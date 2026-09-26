@@ -76,15 +76,25 @@ import io
 import logging
 import re
 import time
+from itertools import combinations
 
 import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
 
 from app.config import settings
 from app.dynamic_settings import KAGGLE_AUTOCAD_API_URL_KEY, get_effective_url
-from app.pipeline.blueprint_svg import _NAME_LINE_GAP_PX, _fit_room_name
+from app.pipeline.blueprint_svg import (
+    _DOOR_POSITION_FRACTION,
+    _NAME_LINE_GAP_PX,
+    _fit_room_name,
+    _front_door_opening,
+    _shared_edge,
+    _should_suppress_direct_door,
+    _should_suppress_garage_direct_door,
+)
 from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box, render_conditioning_edge_map
 from app.pipeline.floor_layout import layout_floor
+from app.pipeline.room_specs import classify_room_category
 from app.providers.session_errors import KaggleSessionUnavailableError, classify_kaggle_failure
 from app.providers.gemini import _explicit_floor_count
 
@@ -131,6 +141,150 @@ def _conditioning_images_by_floor(
             continue
         by_floor[floor_number] = layout_floor(floor.get("rooms") or [], dimensions, facing=facing)
     return by_floor
+
+
+# ---- Door overlays for the AI Concept Layout card (2026-09-26) ----
+#
+# Real, user-requested feature: the deterministic Computed Layout
+# (blueprint_svg.py) draws clean swing-arc doors, but the AI Concept Layout
+# didn't show any. The AI model itself CAN'T reliably draw them (it only ever
+# sees pixels - asking a diffusion model to draw precise door symbols is the
+# exact hallucination failure documented throughout CLAUDE.md), so - exactly
+# like this module already composites accurate room LABELS onto the returned
+# image (see _composite_room_labels) - we compute the door geometry HERE, from
+# the same rects the Computed Layout uses, and hand the notebook ready-to-draw
+# primitives (leaf line + swing arc) in CANVAS-FRACTION coordinates. The
+# notebook just scales those fractions to its own image size and draws them
+# with PIL - the SAME leaf+arc symbol blueprint_svg._draw_door()/_draw_front_
+# door() draw - so the two renderers can never disagree about which doors
+# exist or where they are.
+#
+# WHY the notebook draws them and not this module: per the user's explicit
+# choice (they wanted the notebook's own output to carry the doors). This
+# module already has all the geometry, so it sends draw-ready specs and the
+# notebook's role stays trivial (a few draw.line/draw.arc calls). Coordinates
+# are fractions of CANVAS_SIZE (the conditioning-image canvas the AI traced),
+# so they map 1:1 onto the AI's own walls regardless of the exact output
+# resolution.
+#
+# Suppression logic is reproduced from blueprint_svg.render_floor_blueprint()'s
+# own door loop EXACTLY (has_hallway/has_entry + _should_suppress_direct_door/
+# _should_suppress_garage_direct_door + _front_door_opening) so the Concept
+# Layout's doors match the Computed Layout's set precisely - no bedroom-into-
+# bedroom door when a hallway exists, real ensuite doors kept, garage routed
+# through the entry, and the front entrance on the chosen facing edge.
+
+
+def _frac(px: float, py: float) -> list[float]:
+    """Canvas pixels -> [x, y] fraction of CANVAS_SIZE (0..1)."""
+    return [px / CANVAS_SIZE, py / CANVAS_SIZE]
+
+
+def _interior_door_spec(edge: dict, x0c: float, y0c: float, scale: float, nominal_len_px: float) -> dict | None:
+    """Replicates blueprint_svg._draw_door()'s leaf+arc geometry in canvas
+    space (see that function). Returns a draw-ready spec in canvas fractions,
+    or None if the shared wall is too short for a legible door."""
+    seg_len_px = (edge["end"] - edge["start"]) * scale
+    leaf = min(nominal_len_px, seg_len_px * 0.7)
+    if leaf < 6:
+        return None
+    mid_units = edge["start"] + (edge["end"] - edge["start"]) * _DOOR_POSITION_FRACTION
+    gap_start_units = mid_units - (leaf / scale) / 2
+    if edge["orientation"] == "vertical":
+        hx = x0c + edge["pos"] * scale
+        hy = y0c + gap_start_units * scale
+        open_end = (hx + leaf, hy)
+    else:
+        hx = x0c + gap_start_units * scale
+        hy = y0c + edge["pos"] * scale
+        open_end = (hx, hy + leaf)
+    return {
+        "leaf": [_frac(hx, hy), _frac(*open_end)],
+        "arc": [(hx - leaf) / CANVAS_SIZE, (hy - leaf) / CANVAS_SIZE, (hx + leaf) / CANVAS_SIZE, (hy + leaf) / CANVAS_SIZE],
+        "arc_start": 0,
+        "arc_end": 90,
+        "label": None,
+        "label_at": None,
+    }
+
+
+def _front_door_spec(edge: dict, facing: str, x0c: float, y0c: float, scale: float, nominal_len_px: float) -> dict | None:
+    """Replicates blueprint_svg._draw_front_door()'s inward-aware leaf+arc +
+    ENTRANCE label in canvas space. `facing` decides which way the leaf swings
+    inward (so the symbol always opens INTO the house, never out into the
+    margin - the same bug blueprint_svg fixed via visual inspection)."""
+    seg_len_px = (edge["end"] - edge["start"]) * scale
+    leaf = min(nominal_len_px, seg_len_px * 0.7)
+    if leaf < 6:
+        return None
+    mid_units = (edge["start"] + edge["end"]) / 2
+    gap_start_units = mid_units - (leaf / scale) / 2
+    label_offset = leaf + 18
+    if edge["orientation"] == "vertical":
+        hx = x0c + edge["pos"] * scale
+        hy = y0c + gap_start_units * scale
+        inward = 1 if facing == "west" else -1
+        open_end = (hx + inward * leaf, hy)
+        arc_start, arc_end = (0, 90) if inward == 1 else (90, 180)
+        label_at = (hx + inward * label_offset, hy + leaf / 2)
+    else:
+        hx = x0c + gap_start_units * scale
+        hy = y0c + edge["pos"] * scale
+        inward = 1 if facing == "north" else -1
+        open_end = (hx, hy + inward * leaf)
+        arc_start, arc_end = (0, 90) if inward == 1 else (270, 360)
+        label_at = (hx + leaf / 2, hy + inward * label_offset)
+    return {
+        "leaf": [_frac(hx, hy), _frac(*open_end)],
+        "arc": [(hx - leaf) / CANVAS_SIZE, (hy - leaf) / CANVAS_SIZE, (hx + leaf) / CANVAS_SIZE, (hy + leaf) / CANVAS_SIZE],
+        "arc_start": arc_start,
+        "arc_end": arc_end,
+        "label": "ENTRANCE",
+        "label_at": _frac(*label_at),
+    }
+
+
+def _door_specs_for_floor(rects: list[dict], dimensions: dict, facing: str | None) -> list[dict]:
+    """Every door on one floor, as draw-ready canvas-fraction specs - interior
+    doors (post-suppression, matching the Computed Layout's set exactly) plus
+    the front entrance on the chosen facing edge. Empty list when there's no
+    real geometry to work from."""
+    if not rects:
+        return []
+    length = float(dimensions.get("length") or 1)
+    width = float(dimensions.get("width") or 1)
+    x0c, y0c, box_w, _box_h = plot_to_canvas_box(length, width)
+    scale = box_w / length if length else 0.0
+    if scale <= 0:
+        return []
+    # Same nominal door length blueprint_svg.render_floor_blueprint() uses, so
+    # the Concept Layout's doors are proportioned like the Computed Layout's.
+    nominal_len_px = max(10.0, min(26.0, 2.6 * scale))
+    facing_normalized = (facing or "").strip().lower()
+
+    has_hallway = any(r.get("name") == "Hallway" for r in rects)
+    has_entry = any(classify_room_category(r.get("name") or "") == "foyer" for r in rects)
+
+    specs: list[dict] = []
+    for a, b in combinations(rects, 2):
+        edge = _shared_edge(a, b)
+        if edge is None:
+            continue
+        if has_hallway and _should_suppress_direct_door(a, b):
+            continue
+        if has_entry and _should_suppress_garage_direct_door(a, b):
+            continue
+        spec = _interior_door_spec(edge, x0c, y0c, scale, nominal_len_px)
+        if spec:
+            specs.append(spec)
+
+    front_edge = _front_door_opening(rects, length, width, facing_normalized)
+    if front_edge:
+        spec = _front_door_spec(front_edge, facing_normalized, x0c, y0c, scale, nominal_len_px)
+        if spec:
+            specs.append(spec)
+
+    return specs
 
 
 # The model has no fixed random seed (no `seed` field exists in the
@@ -265,11 +419,20 @@ def generate_floor_plan(
         # fallback (see module docstring). Sent only when we actually have a
         # real layout; omitting the field keeps a not-yet-updated notebook
         # working exactly as before (its own create_plot_boundary() fallback).
+        ordered_floors = sorted(rects_by_floor)
         payload["conditioning_images"] = [
             base64.b64encode(
                 render_conditioning_edge_map(rects_by_floor[floor_number], dimensions, facing=facing)
             ).decode("utf-8")
-            for floor_number in sorted(rects_by_floor)
+            for floor_number in ordered_floors
+        ]
+        # Draw-ready swing-arc door specs per floor (see the "Door overlays"
+        # section above) - floor-ordered, parallel to conditioning_images. An
+        # un-updated notebook simply ignores this field; an updated one draws
+        # the same doors the Computed Layout shows.
+        payload["doors"] = [
+            _door_specs_for_floor(rects_by_floor[floor_number], dimensions, facing)
+            for floor_number in ordered_floors
         ]
 
     try:

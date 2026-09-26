@@ -879,6 +879,34 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     to 0.95 when using real geometry, prompt simplification) is DONE too** - pasted into the friend's
     notebook and redeployed; a live end-to-end test against the real tunnel confirmed both halves work
     together correctly (see the plan file's Status section for the verification evidence).
+  - **Swing-arc DOORS on the Concept Layout (2026-09-26)**: real user request - the deterministic
+    Computed Layout draws clean swing-arc doors, but the AI Concept Layout showed none. Same core lesson
+    as labels/geometry: the SDXL+ControlNet model only ever sees pixels, so it can't be prompted to draw
+    accurate door symbols (hallucination). Fix mirrors the existing `_composite_room_labels()` pattern
+    exactly - **`app/providers/kaggle_autocad.py`** computes the door geometry from the SAME rects
+    (`_door_specs_for_floor()`, reproducing `blueprint_svg.render_floor_blueprint()`'s own door loop
+    verbatim: `has_hallway`/`has_entry` gating + `_shared_edge`/`_should_suppress_direct_door`/
+    `_should_suppress_garage_direct_door`/`_front_door_opening`, all imported from `blueprint_svg.py` so
+    the two renderers can never disagree about which doors exist) and sends them as **draw-ready specs in
+    canvas-fraction coordinates** (leaf line + swing-arc bbox + PIL arc angles, + an ENTRANCE label on the
+    front door) as a new `doors` field in the request payload, floor-ordered parallel to
+    `conditioning_images`. **Per the user's explicit choice, the NOTEBOOK draws them** (not the app - they
+    wanted the notebook's own output to carry the doors), so the notebook's role stays trivial: a new
+    `draw_doors_on_image()` does `draw.line` + `draw.arc` from the fractions scaled to its output size.
+    The notebook's SDXL GENERATION is completely unchanged - doors are drawn ON TOP of the finished image
+    only. **Polarity handled correctly**: `draw_doors_on_image()` picks the door ink to contrast the
+    model's own random output polarity (black on light, white on dark), and the app's existing
+    `_normalize_dark_background()` inversion then flips doors + background together, so the final card is
+    always dark doors on a light plan. The `doors` field is additive/optional - an un-updated notebook
+    ignores it (no doors, same as before); the field is omitted entirely when there's no real room_layout.
+    **The notebook reference copy is now version-controlled** at `kaggle_notebooks/autocad_floorplan_server.py`
+    (this notebook "was never version-controlled and got lost/rediscovered more than once" per
+    `elevation_server.py`'s own header - now fixed), including the door additions. Verified: 6 new
+    `tests/test_kaggle_autocad.py` cases (door specs produced/in-range/front-entrance-per-facing/payload
+    parity) AND visually - rendered the door overlays for a 3-suite south-facing ground floor, a small
+    north-facing 2-room plot, and a west-facing plot, confirming swing arcs land on the real shared walls,
+    bedrooms open onto the hallway (not into each other), ensuite doors kept, and the ENTRANCE sits on the
+    correct facing edge every time (using the exact `draw_doors_on_image()` the notebook runs).
   - **Text-hallucination mitigation identified, sent to the friend, not yet applied on their side**: their
     notebook's `negative_prompt` never excludes text/labels at all - the model is spontaneously adding
     labels because "architectural blueprint" implies them in its training data, then rendering them as

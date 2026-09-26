@@ -417,3 +417,109 @@ def test_composite_room_labels_shrinks_or_wraps_a_label_too_wide_for_its_room():
     lines, font = _fit_room_name(draw, bathroom["name"].upper(), max(room_px_w - 8, 10), base_font)
     rendered_w = max(draw.textbbox((0, 0), line, font=font)[2] for line in lines)
     assert rendered_w <= room_px_w
+
+
+# ---- Door overlays (2026-09-26): swing-arc door specs sent to the notebook ----
+
+
+def _door_rects(facing=None):
+    """Two side-by-side rooms sharing a real vertical wall - guaranteed to
+    produce at least one interior door."""
+    from app.pipeline.floor_layout import layout_floor
+
+    rooms = [{"name": "Living Room", "area": 2}, {"name": "Kitchen", "area": 1}]
+    return layout_floor(rooms, {"length": 40, "width": 30, "unit": "ft"}, facing=facing)
+
+
+def test_door_specs_produce_a_swing_arc_door_for_two_adjacent_rooms():
+    rects = _door_rects()
+    specs = kaggle_autocad_module._door_specs_for_floor(rects, {"length": 40, "width": 30, "unit": "ft"}, None)
+    assert specs, "expected at least one interior door between two adjacent rooms"
+    door = specs[0]
+    # A door is a leaf line + a swing arc (matching blueprint_svg._draw_door).
+    assert len(door["leaf"]) == 2
+    assert len(door["arc"]) == 4
+    assert door["arc_start"] == 0 and door["arc_end"] == 90
+
+
+def test_door_specs_are_all_canvas_fractions_in_range():
+    rects = _door_rects()
+    specs = kaggle_autocad_module._door_specs_for_floor(rects, {"length": 40, "width": 30, "unit": "ft"}, None)
+    for door in specs:
+        for point in door["leaf"]:
+            assert all(0.0 <= c <= 1.0 for c in point), f"leaf point out of range: {point}"
+        assert all(0.0 <= c <= 1.0 for c in door["arc"]), f"arc bbox out of range: {door['arc']}"
+
+
+def test_door_specs_include_the_front_entrance_when_facing_is_given():
+    # With a facing, _front_door_opening() should place a labeled ENTRANCE
+    # door on the matching exterior edge - the one visible proof the facing
+    # was honored (same as the Computed Layout's own front door).
+    facing = "south"
+    rects = _door_rects(facing=facing)
+    specs = kaggle_autocad_module._door_specs_for_floor(rects, {"length": 40, "width": 30, "unit": "ft"}, facing)
+    entrances = [d for d in specs if d.get("label") == "ENTRANCE"]
+    assert len(entrances) == 1
+    assert entrances[0]["label_at"] is not None
+
+
+def test_door_specs_empty_for_no_rects():
+    assert kaggle_autocad_module._door_specs_for_floor([], {"length": 40, "width": 30, "unit": "ft"}, None) == []
+
+
+def test_generate_floor_plan_sends_door_specs_parallel_to_conditioning_images(monkeypatch):
+    monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_autocad_module.time, "sleep", lambda _: None)
+
+    room_layout = {
+        "floors": [
+            {"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}, {"name": "Kitchen", "area": 1}]},
+            {"floor_number": 2, "rooms": [{"name": "Bedroom", "area": 1}, {"name": "Bathroom", "area": 1}]},
+        ]
+    }
+    captured = {}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["doors"] = json.get("doors")
+        captured["conditioning_images"] = json.get("conditioning_images")
+        return FakeResponse(json_data={"status": "started", "job_id": "job-doors"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(
+            json_data={
+                "status": "done",
+                "floors": [
+                    {"floor_number": 1, "image_base64": _fake_jpeg_b64()},
+                    {"floor_number": 2, "image_base64": _fake_jpeg_b64()},
+                ],
+            }
+        )
+
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "get", fake_get)
+
+    generate_floor_plan(
+        "a plot", {"length": 40, "width": 60, "unit": "ft"}, "2 floors", room_layout=room_layout
+    )
+    # One door-spec list per floor, parallel to conditioning_images.
+    assert captured["doors"] is not None
+    assert len(captured["doors"]) == len(captured["conditioning_images"]) == 2
+    # Floor 1's two adjacent rooms should yield at least one door.
+    assert len(captured["doors"][0]) >= 1
+
+
+def test_generate_floor_plan_omits_doors_when_no_room_layout(monkeypatch):
+    monkeypatch.setattr(kaggle_autocad_module.settings, "kaggle_autocad_api_url", "https://example.trycloudflare.com")
+    monkeypatch.setattr(kaggle_autocad_module.time, "sleep", lambda _: None)
+
+    def fake_post(url, json=None, timeout=None):
+        assert "doors" not in json
+        return FakeResponse(json_data={"status": "started", "job_id": "job-nodoors"})
+
+    def fake_get(url, timeout=None):
+        return FakeResponse(json_data={"status": "done", "floors": [{"floor_number": 1, "image_base64": _fake_jpeg_b64()}]})
+
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "post", fake_post)
+    monkeypatch.setattr(kaggle_autocad_module.httpx, "get", fake_get)
+
+    generate_floor_plan("a plot", {"length": 40, "width": 60, "unit": "ft"}, "1 floor")
