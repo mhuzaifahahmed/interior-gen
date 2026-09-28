@@ -95,6 +95,37 @@ def test_preferred_backend_none_keeps_the_existing_default_behavior(monkeypatch)
     assert provider.generate_image(b"x", "prompt") == b"kaggle:image"
 
 
+def test_default_house_image_provider_warns_on_unrecognized_value(monkeypatch, caplog):
+    # Real, live-diagnosed incident (2026-09-28): HOUSE_IMAGE_PROVIDER was
+    # never set on Render at all (only the separate IMAGE_PROVIDER was),
+    # house rendering silently defaulted to OpenAI for weeks, and nothing
+    # logged the resolved choice anywhere - the misconfiguration was
+    # invisible. A genuinely missing env var still resolves to the valid
+    # default "openai" (see the info-log test below), so this test covers
+    # the OTHER half of the fix: a typo'd/stray value now warns loudly.
+    monkeypatch.setattr(hybrid_module.settings, "house_image_provider", "Kaggle")
+    openai_fake = FakeImageProvider("openai")
+    with caplog.at_level("WARNING", logger=hybrid_module.__name__):
+        provider = HybridProvider(image_provider=openai_fake)
+
+    assert provider.generate_house_render(b"x", "prompt") == b"openai:house"
+    assert any("HOUSE_IMAGE_PROVIDER" in record.message for record in caplog.records)
+    assert any("not a recognized value" in record.message for record in caplog.records)
+
+
+def test_default_house_image_provider_logs_the_resolved_choice(monkeypatch, caplog):
+    monkeypatch.setattr(hybrid_module.settings, "house_image_provider", "kaggle")
+    monkeypatch.setattr(hybrid_module, "KaggleImageProvider", lambda: FakeImageProvider("kaggle"))
+    openai_fake = FakeImageProvider("openai")
+    with caplog.at_level("INFO", logger=hybrid_module.__name__):
+        HybridProvider(image_provider=openai_fake)
+
+    assert any(
+        "HOUSE_IMAGE_PROVIDER" in record.message and "FakeImageProvider" in record.message
+        for record in caplog.records
+    )
+
+
 def test_preferred_backend_openai_for_house_render(monkeypatch):
     monkeypatch.setattr(hybrid_module.settings, "house_image_provider", "modal")
     monkeypatch.setattr(hybrid_module, "ModalImageProvider", lambda: FakeImageProvider("modal"))

@@ -70,6 +70,31 @@ caused several real incidents (below) worth understanding before touching either
   sync.** Build-a-House's own `KAGGLE_HOUSE_API_URL`/`KAGGLE_AUTOCAD_API_URL` hit this exact same gap —
   set locally, never mirrored to Render, silently leaving `floor_plan_status="not_configured"` (a
   deliberately silent state — see "Build a House feature" below) with zero visible error.
+- **`HOUSE_IMAGE_PROVIDER` — the exact same category of gap, real incident diagnosed 2026-09-28, but
+  worse: not "set locally, never mirrored," genuinely never set on Render AT ALL.** Live-diagnosed by
+  reading the actual `GET /api/house-projects` list response: every one of the user's 7 house projects
+  (going back to 2026-09-16) had `render_model: null` and `images.render: null`, `status: "done"`, **zero
+  errors** — a 100% silent failure rate, not intermittent. Root cause: `IMAGE_PROVIDER=kaggle` (room-
+  redesign's setting) WAS correctly set on Render, but `HOUSE_IMAGE_PROVIDER` (Build a House's own,
+  deliberately separate setting — see "Provider split" above for why they're isolated) was never added at
+  all — so it silently fell back to its Python class default (`"openai"`, `app/config.py`'s
+  `house_image_provider: str = "openai"`). OpenAI is an image-EDIT backend that needs a real plot photo;
+  the plot photo has been optional since 2026-09 (v12) and the user never supplied one in any of these 7
+  tests — so the render step's own `render_needs_photo and plot_bytes is None` guard
+  (`app/pipeline/generate_house.py`) correctly, silently skipped every single time, with the whole project
+  still completing as `status="done"` (by design — this guard is meant to handle the deliberate "no Kaggle
+  house model configured yet" case gracefully, not a genuine misconfiguration). **Nothing logged the
+  actually-resolved provider anywhere**, so this was fully invisible in Render's own logs for the entire
+  time it was broken. Fixed two ways: (1) the actual config fix — added `HOUSE_IMAGE_PROVIDER=kaggle` as
+  its own new Render env var, separate from the pre-existing `IMAGE_PROVIDER`; (2) a permanent code-side
+  safety net, `app/providers/hybrid.py`'s new `_resolve_and_log()` — every startup now logs the
+  ACTUALLY-resolved provider class for both `IMAGE_PROVIDER` and `HOUSE_IMAGE_PROVIDER` at INFO level (so
+  "which backend is really live" is answered by grepping one Render log line, not by re-tracing fallback
+  logic after the fact), and logs a loud WARNING if either value isn't one of `{"openai", "kaggle",
+  "modal"}` (catches a future typo/stray-whitespace variant of this same mistake — a case this exact
+  incident wasn't, since the value was simply absent, not misspelled, but the same defensive fix covers
+  both). Regression-guarded by `test_default_house_image_provider_warns_on_unrecognized_value`/
+  `test_default_house_image_provider_logs_the_resolved_choice` in `tests/test_hybrid_provider.py`.
 - **Auth survives the cross-domain split because it's Bearer-token-based, not cookie-based** — see
   "Authentication (Clerk)" below for why that migration happened; the short version is that a Bearer
   `Authorization` header isn't subject to `SameSite`/third-party-cookie rules, so it survives the

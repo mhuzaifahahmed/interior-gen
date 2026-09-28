@@ -32,6 +32,36 @@ def _label_for(provider) -> str:
     return _PROVIDER_LABELS.get(type(provider).__name__, "OpenAI")
 
 
+# Real, live-diagnosed incident (2026-09-28): HOUSE_IMAGE_PROVIDER was never
+# set on Render at all (only the separate, room-redesign-only IMAGE_PROVIDER
+# was) - house rendering silently defaulted to OpenAI for weeks, which
+# requires a plot photo, which was never given (optional since 2026-09), so
+# every single house generation silently skipped its render with zero error
+# anywhere. Nothing logged the resolved choice at all, so this was invisible
+# in Render's logs the entire time. _VALID_IMAGE_PROVIDER_VALUES +
+# _resolve_and_log() below close that gap for BOTH the room and house
+# toggles: an unrecognized value (typo, stray whitespace) now logs a loud
+# warning instead of silently falling through, and the actually-resolved
+# provider class is always logged once at startup - so "which backend is
+# really live" is answered by grepping a Render log line, not by tracing
+# fallback logic after the fact.
+_VALID_IMAGE_PROVIDER_VALUES = {"openai", "kaggle", "modal"}
+
+
+def _resolve_and_log(label: str, configured_value: str, resolved) -> object:
+    if configured_value not in _VALID_IMAGE_PROVIDER_VALUES:
+        logger.warning(
+            "%s=%r is not a recognized value (expected one of %s) - falling back to %s. "
+            "If this is unexpected, check for a typo/stray whitespace or a missing env var.",
+            label,
+            configured_value,
+            sorted(_VALID_IMAGE_PROVIDER_VALUES),
+            type(resolved).__name__,
+        )
+    logger.info("%s=%r resolved to %s", label, configured_value, type(resolved).__name__)
+    return resolved
+
+
 def _default_room_image_provider(fallback_provider):
     # IMAGE_PROVIDER selects the room-redesign image backend: "modal"
     # (default, self-hosted - see modal_provider.py), "kaggle" (the old
@@ -41,10 +71,12 @@ def _default_room_image_provider(fallback_provider):
     # is a SEPARATE toggle (house_image_provider) - see HybridProvider's
     # docstring for why they're independent.
     if settings.image_provider == "modal":
-        return ModalImageProvider()
-    if settings.image_provider == "kaggle":
-        return KaggleImageProvider()
-    return fallback_provider
+        resolved = ModalImageProvider()
+    elif settings.image_provider == "kaggle":
+        resolved = KaggleImageProvider()
+    else:
+        resolved = fallback_provider
+    return _resolve_and_log("IMAGE_PROVIDER", settings.image_provider, resolved)
 
 
 def _default_house_image_provider(openai_provider):
@@ -57,10 +89,12 @@ def _default_house_image_provider(openai_provider):
     # house model being ready; see KaggleImageProvider.generate_house_render()'s
     # docstring for the assumed (not yet confirmed) request contract.
     if settings.house_image_provider == "modal":
-        return ModalImageProvider()
-    if settings.house_image_provider == "kaggle":
-        return KaggleImageProvider()
-    return openai_provider
+        resolved = ModalImageProvider()
+    elif settings.house_image_provider == "kaggle":
+        resolved = KaggleImageProvider()
+    else:
+        resolved = openai_provider
+    return _resolve_and_log("HOUSE_IMAGE_PROVIDER", settings.house_image_provider, resolved)
 
 
 def _default_floor_plan_provider():
