@@ -31,7 +31,9 @@ class FakeProvider:
     def generate_floor_plan(self, plot_description, dimensions, prompt, room_layout=None, facing=None):
         return None
 
-    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+    def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
         return {"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]}]}
 
     def generate_house_render(self, image_bytes, prompt, floor_count=None, preferred_backend=None, wants_garage=None, color=None, style=None):
@@ -313,12 +315,114 @@ def test_structured_house_inputs_compose_the_prompt_and_persist(monkeypatch):
             "floor_count": 2,
             "bedrooms": 3,
             "bathrooms": 2,
+            "floor_bedrooms": None,
+            "floor_bathrooms": None,
             "extras": "dirty kitchen each floor, garage",
             "facing": None,
             "color_palette": None,
             "architectural_style": None,
         }
         assert body["dimensions"] == {"length": 40.0, "width": 60.0, "unit": "ft"}
+
+
+def test_per_floor_bedroom_bathroom_arrays_persist_and_compose_the_prompt(monkeypatch):
+    # Real fix (2026-09-28) for a live-reproduced bug: a house-wide total
+    # gave Gemini no per-floor targets at all. Confirms the JSON array
+    # intake persists real per-floor lists (not just the flat totals) and
+    # composes the new per-floor requirements sentence.
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={
+                "length": "40",
+                "width": "60",
+                "unit": "ft",
+                "floor_count": "2",
+                "floor_bedrooms": "[3, 2]",
+                "floor_bathrooms": "[2, 1]",
+            },
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        status_res = client.get(f"/api/house-projects/{house_project_id}")
+        body = status_res.json()
+        assert body["prompt"] == "2 floors. Floor 1: 3 bedrooms, 2 bathrooms. Floor 2: 2 bedrooms, 1 bathroom."
+        assert body["house_inputs"]["floor_bedrooms"] == [3, 2]
+        assert body["house_inputs"]["floor_bathrooms"] == [2, 1]
+        # Flat legacy fields are derived as the sum across floors, for
+        # backward-compat display only.
+        assert body["house_inputs"]["bedrooms"] == 5
+        assert body["house_inputs"]["bathrooms"] == 3
+
+
+def test_per_floor_bedroom_bathroom_arrays_are_padded_to_floor_count(monkeypatch):
+    # A shorter array than floor_count must be padded (repeating the last
+    # value), never cause an index error downstream.
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={
+                "length": "40",
+                "width": "60",
+                "unit": "ft",
+                "floor_count": "3",
+                "floor_bedrooms": "[3]",
+                "floor_bathrooms": "[2]",
+            },
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        status_res = client.get(f"/api/house-projects/{house_project_id}")
+        body = status_res.json()
+        assert body["house_inputs"]["floor_bedrooms"] == [3, 3, 3]
+        assert body["house_inputs"]["floor_bathrooms"] == [2, 2, 2]
+
+
+def test_malformed_floor_bedroom_arrays_degrade_to_legacy_flat_path(monkeypatch):
+    # Same "silently correct obvious nonsense rather than error the whole
+    # request" treatment as every other field on this endpoint - malformed
+    # JSON must never 400, just fall back to the flat bedrooms/bathrooms path.
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={
+                "length": "40",
+                "width": "60",
+                "unit": "ft",
+                "floor_count": "1",
+                "bedrooms": "3",
+                "bathrooms": "2",
+                "floor_bedrooms": "not valid json",
+            },
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        status_res = client.get(f"/api/house-projects/{house_project_id}")
+        body = status_res.json()
+        assert body["house_inputs"]["floor_bedrooms"] is None
+        assert body["house_inputs"]["bedrooms"] == 3
+        assert body["prompt"] == "1 floor, 3 bedrooms, 2 bathrooms"
 
 
 def test_house_facing_selection_persists_in_house_inputs(monkeypatch):
@@ -483,6 +587,8 @@ def test_house_input_metadata_json_written_to_storage(monkeypatch):
             "floor_count": 2,
             "bedrooms": 3,
             "bathrooms": 2,
+            "floor_bedrooms": None,
+            "floor_bathrooms": None,
             "extras": "modern style",
             "facing": None,
             "color_palette": None,

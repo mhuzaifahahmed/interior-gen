@@ -772,8 +772,7 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <input type="hidden" id="house-unit" name="unit" value="ft"/>
 </div>
 </div>
-<div class="flex gap-4">
-<div class="flex-1">
+<div class="sm:max-w-[200px]">
 <label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Floors</label>
 <div class="relative">
 <button type="button" id="house-floor-count-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-1 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
@@ -790,8 +789,31 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 </div>
 <input type="hidden" id="house-floor-count" name="floor_count" value="1"/>
 </div>
+<!-- Bedrooms/bathrooms mode toggle (2026-09-28, real fix for a live-
+     reproduced bug: a multi-floor request came back with a floor containing
+     no bedrooms at all, because only a single house-wide total existed).
+     "Same on every floor" (default) keeps the two uniform dropdowns below;
+     "Per floor" swaps to dynamically-generated rows, one per floor, built
+     live in app.js's renderPerFloorRows() as the Floors dropdown changes.
+     Both modes normalize to the same floor_bedrooms/floor_bathrooms JSON
+     arrays at submit time - see the submit handler in app.js. Reuses the
+     same model-toggle-btn/.is-active pattern (and JS helpers
+     setModelToggleValue/wireModelToggle) as the Kaggle/OpenAI model
+     toggles above, just with two different option values. -->
+<div>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bedrooms &amp; bathrooms</label>
+<div class="flex gap-2 mb-4" id="house-bedbath-mode-toggle" role="radiogroup">
+<button type="button" class="model-toggle-btn flex-1 border border-outline-variant rounded-lg px-4 py-2.5 text-left transition-all duration-200" data-value="uniform">
+<span class="font-label-caps text-label-caps block">Same on every floor</span>
+</button>
+<button type="button" class="model-toggle-btn flex-1 border border-outline-variant rounded-lg px-4 py-2.5 text-left transition-all duration-200" data-value="perfloor">
+<span class="font-label-caps text-label-caps block">Per floor</span>
+</button>
+</div>
+<input type="hidden" id="house-bedbath-mode-select" value="uniform"/>
+<div id="house-uniform-bedbath-block" class="flex gap-4">
 <div class="flex-1">
-<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bedrooms</label>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bedrooms / floor</label>
 <div class="relative">
 <button type="button" id="house-bedrooms-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-1 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
 <span id="house-bedrooms-btn-label" class="text-on-surface">3</span>
@@ -809,7 +831,7 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 <input type="hidden" id="house-bedrooms" name="bedrooms" value="3"/>
 </div>
 <div class="flex-1">
-<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bathrooms</label>
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bathrooms / floor</label>
 <div class="relative">
 <button type="button" id="house-bathrooms-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-1 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
 <span id="house-bathrooms-btn-label" class="text-on-surface">2</span>
@@ -825,6 +847,11 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
 </div>
 <input type="hidden" id="house-bathrooms" name="bathrooms" value="2"/>
 </div>
+</div>
+<!-- Filled live by app.js's renderPerFloorRows() - one row per floor, each
+     with its own Bedrooms/Bathrooms morph-dropdown pair. Hidden unless the
+     mode toggle above is set to "perfloor". -->
+<div id="house-per-floor-rows" class="hidden flex flex-col gap-4"></div>
 </div>
 <div>
 <label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Architectural style (optional)</label>

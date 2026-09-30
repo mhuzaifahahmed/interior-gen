@@ -887,6 +887,13 @@ def test_privacy_page_serves():
         assert "Privacy" in res.text
 
 
+def test_health_endpoint():
+    with TestClient(app) as client:
+        res = client.get("/api/health")
+        assert res.status_code == 200
+        assert res.json() == {"status": "ok"}
+
+
 def test_contact_page_serves():
     with TestClient(app) as client:
         res = client.get("/contact")

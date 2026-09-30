@@ -110,6 +110,15 @@ async def custom_404_handler(request: Request, exc: StarletteHTTPException):
     return await http_exception_handler(request, exc)
 
 
+@app.get("/api/health")
+def health():
+    """Cheap keep-alive target - no DB/storage/provider calls - so an
+    external pinger (see .github/workflows/keep-alive.yml) can hit this every
+    few minutes to stop Render's free tier from spinning the instance down,
+    without that ping itself costing anything real."""
+    return {"status": "ok"}
+
+
 @app.get("/")
 def index():
     return FileResponse("static/index.html")
@@ -1073,6 +1082,8 @@ async def create_house_project(
     floor_count: int | None = Form(None),
     bedrooms: int | None = Form(None),
     bathrooms: int | None = Form(None),
+    floor_bedrooms: str | None = Form(None),
+    floor_bathrooms: str | None = Form(None),
     extras: str = Form(""),
     facing: str | None = Form(None),
     color_palette: str | None = Form(None),
@@ -1137,6 +1148,21 @@ async def create_house_project(
     app/pipeline/house_prompts.py's HOUSE_STYLE_PROFILES/house_style_words) -
     NOT room-redesign's interior style descriptions. Same soft-degrade
     treatment as color_palette: unrecognized/blank -> None, never a 400.
+
+    floor_bedrooms/floor_bathrooms (2026-09-28, optional) - JSON arrays of
+    per-floor bedroom/bathroom counts (e.g. "[3,2]" for a 2-floor house),
+    replacing the single flat bedrooms/bathrooms total with real per-floor
+    control (see static/index.html's "Same on every floor" / "Per floor"
+    mode toggle - both modes normalize to these same arrays before
+    submitting). Parsed by _parse_floor_counts_json() below; any parse
+    failure (missing, malformed, wrong shape) silently degrades to None -
+    same "silently correct obvious nonsense" treatment as every other field
+    here - which is also exactly the legacy, house-wide-total-only path
+    (flat bedrooms/bathrooms unchanged, _enforce_room_counts() no-ops). When
+    given, the flat `bedrooms`/`bathrooms` values are REPLACED with the sum
+    across floors (a house-wide total, for backward-compat display only -
+    see house_inputs below) rather than whatever the frontend happened to
+    send in those fields.
     """
     data: bytes | None = None
     if file is not None:
@@ -1164,16 +1190,33 @@ async def create_house_project(
     if architectural_style not in STYLE_OPTIONS:
         architectural_style = None
 
+    # Per-floor arrays take priority over the flat totals above when given -
+    # see _parse_floor_counts_json()'s own docstring. The flat bedrooms/
+    # bathrooms values are recomputed as the sum across floors purely for
+    # backward-compat display (house_inputs, the legacy composed-prompt
+    # fallback) - the arrays themselves are the real, authoritative signal
+    # from here on.
+    floor_bedrooms_list = _parse_floor_counts_json(floor_bedrooms, floor_count)
+    floor_bathrooms_list = _parse_floor_counts_json(floor_bathrooms, floor_count)
+    if floor_bedrooms_list is not None:
+        bedrooms = sum(floor_bedrooms_list)
+    if floor_bathrooms_list is not None:
+        bathrooms = sum(floor_bathrooms_list)
+
     house_inputs = {
         "floor_count": floor_count,
         "bedrooms": bedrooms,
         "bathrooms": bathrooms,
+        "floor_bedrooms": floor_bedrooms_list,
+        "floor_bathrooms": floor_bathrooms_list,
         "extras": extras or None,
         "facing": facing or None,
         "color_palette": color_palette,
         "architectural_style": architectural_style,
     }
-    composed_requirements = _compose_house_requirements(floor_count, bedrooms, bathrooms, extras)
+    composed_requirements = _compose_house_requirements(
+        floor_count, bedrooms, bathrooms, extras, floor_bedrooms_list, floor_bathrooms_list
+    )
     # Defensive re-truncation, same reasoning as style_notes/city above - the
     # frontend's <input maxlength> is trivially bypassable by a direct API call.
     # Falls back to the raw legacy `prompt` field only when NO structured
@@ -1272,9 +1315,52 @@ async def create_house_project(
         backend_override,
         color_palette,
         architectural_style,
+        floor_bedrooms_list,
+        floor_bathrooms_list,
     )
 
     return HouseProjectCreateResponse(house_project_id=house_project.id)
+
+
+def _parse_floor_counts_json(raw: str | None, floor_count: int | None) -> list[int] | None:
+    """Parses one of create_house_project's floor_bedrooms/floor_bathrooms
+    Form fields - a JSON array of per-floor ints, e.g. "[3,2]" (see
+    static/app.js's submit handler, which builds this array from whichever
+    input mode - "Same on every floor" or "Per floor" - the user picked).
+
+    Each element is clamped to 0-20 (same bound the legacy flat bedrooms/
+    bathrooms fields already use), and the list itself is clamped/padded in
+    LENGTH to `floor_count` (when known) - repeating the last value to pad,
+    truncating to shorten - so a mismatched array can never cause an index
+    error downstream in _enforce_room_counts() (app/pipeline/generate_house.py).
+
+    Returns None on any parse problem (missing field, malformed JSON, wrong
+    shape/empty) - same "silently correct obvious nonsense rather than error
+    the whole request" treatment this endpoint already uses for floor_count/
+    bedrooms/bathrooms. None is also exactly the signal for the legacy,
+    house-wide-total-only path everywhere downstream (_enforce_room_counts()
+    no-ops, _compose_house_requirements() falls back to flat phrasing).
+    """
+    if not raw:
+        return None
+    try:
+        values = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(values, list) or not values:
+        return None
+    try:
+        counts = [max(0, min(int(v), 20)) for v in values]
+    except (TypeError, ValueError):
+        return None
+
+    if floor_count is not None:
+        if len(counts) > floor_count:
+            counts = counts[:floor_count]
+        while len(counts) < floor_count:
+            counts.append(counts[-1])
+
+    return counts
 
 
 def _compose_house_requirements(
@@ -1282,6 +1368,8 @@ def _compose_house_requirements(
     bedrooms: int | None,
     bathrooms: int | None,
     extras: str,
+    floor_bedrooms: list[int] | None = None,
+    floor_bathrooms: list[int] | None = None,
 ) -> str | None:
     """Turns the structured "Plot Parameters" selections into one natural-
     language requirements sentence, stored as HouseProject.prompt (see
@@ -1295,24 +1383,57 @@ def _compose_house_requirements(
     (run_house_pipeline -> generate_room_layout) - belt and suspenders,
     not redundant.
 
-    Only 3 structured dropdowns feed this (floors/bedrooms/bathrooms) - a
-    Garage + Kitchen-on-every-floor checkbox pair was tried and dropped (felt
-    like an arbitrary, incomplete amenities list sitting next to real
-    dropdowns); anything beyond the 3 counts is just free text in `extras`.
+    floor_bedrooms/floor_bathrooms (2026-09-28, optional), when given,
+    REPLACE the flat "{bedrooms} bedrooms, {bathrooms} bathrooms" phrasing
+    with an explicit PER-FLOOR breakdown, e.g. "2 floors. Floor 1: 3
+    bedrooms, 2 bathrooms. Floor 2: 3 bedrooms, 2 bathrooms." - a real,
+    structured signal threaded into Gemini's generate_room_layout() prompt
+    (see app/providers/gemini.py's ROOM_LAYOUT_PROMPT_TEMPLATE /
+    _format_room_targets_block()), and the direct fix for a live-reproduced
+    bug where a floor came back with no bedrooms/bathrooms at all - nothing
+    previously told Gemini exactly how many of each a specific floor needed.
+    Falls back to the original flat phrasing when neither array is given
+    (the legacy, house-wide-total path - unchanged).
+
+    Only floors/bedrooms/bathrooms (flat or per-floor) feed this - a Garage +
+    Kitchen-on-every-floor checkbox pair was tried and dropped (felt like an
+    arbitrary, incomplete amenities list sitting next to real dropdowns);
+    anything beyond these counts is just free text in `extras`.
 
     Returns None (not "") when every field is empty - the pipeline already
     treats an empty/None prompt as "no specific requirements", identical to
     today's behavior when a user left the old free-text field blank.
     """
-    parts = []
-    if floor_count:
-        parts.append(f"{floor_count} floor{'s' if floor_count != 1 else ''}")
+    floor_part = f"{floor_count} floor{'s' if floor_count != 1 else ''}." if floor_count else ""
+
+    if floor_bedrooms or floor_bathrooms:
+        length = max(len(floor_bedrooms or []), len(floor_bathrooms or []))
+        floor_sentences = []
+        for i in range(length):
+            beds = floor_bedrooms[i] if floor_bedrooms and i < len(floor_bedrooms) else None
+            baths = floor_bathrooms[i] if floor_bathrooms and i < len(floor_bathrooms) else None
+            floor_parts = []
+            if beds is not None:
+                floor_parts.append(f"{beds} bedroom{'s' if beds != 1 else ''}")
+            if baths is not None:
+                floor_parts.append(f"{baths} bathroom{'s' if baths != 1 else ''}")
+            if floor_parts:
+                floor_sentences.append(f"Floor {i + 1}: {', '.join(floor_parts)}.")
+        requirements = " ".join(part for part in [floor_part, *floor_sentences] if part)
+        if extras:
+            requirements = f"{requirements} Extras: {extras}" if requirements else extras
+        return requirements or None
+
+    # Legacy, house-wide-total path - byte-for-byte the original format
+    # (", "-joined parts, ". Extras: " suffix), unchanged since before
+    # floor_bedrooms/floor_bathrooms existed.
+    parts = [floor_part.rstrip(".")] if floor_part else []
     if bedrooms:
         parts.append(f"{bedrooms} bedroom{'s' if bedrooms != 1 else ''}")
     if bathrooms:
         parts.append(f"{bathrooms} bathroom{'s' if bathrooms != 1 else ''}")
-
     requirements = ", ".join(parts)
+
     if extras:
         requirements = f"{requirements}. Extras: {extras}" if requirements else extras
 

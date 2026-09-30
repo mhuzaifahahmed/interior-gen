@@ -10,6 +10,7 @@ from google.genai import errors as genai_errors
 from PIL import Image
 
 from app.config import settings
+from app.pipeline.room_specs import classify_room_category
 from app.providers import analysis_cache, serpapi
 from app.providers.base import Provider
 
@@ -142,17 +143,64 @@ ROOM_LAYOUT_PROMPT_TEMPLATE = (
     "sense for where each room type belongs:\n"
     "- The GROUND FLOOR (floor_number 1) should hold entry/foyer, living room, kitchen, "
     "dining room, a guest bathroom/WC, and - if it fits the requirements - a garage and/or "
-    "utility/laundry room.\n"
+    "utility/laundry room. If the requirements state a specific bedroom/bathroom count for "
+    "the ground floor, include exactly that many bedrooms and bathrooms there too, in "
+    "addition to those public rooms.\n"
     "- UPPER FLOORS should hold bedrooms, an ensuite or shared bathroom, and optionally a "
     "study or family lounge.\n"
     "- NEVER place a garage or a kitchen on any floor above the ground floor.\n"
     "- Any floor that has one or more bedrooms must include at least one bathroom on that "
-    "same floor.\n\n"
+    "same floor.\n"
+    "- Never collapse a floor's rooms down to a single generic room (e.g. just a "
+    "'Hallway') - a hallway/corridor, if one is warranted, is in ADDITION to that floor's "
+    "real rooms (bedrooms, bathrooms, etc.), never a replacement for them.\n\n"
+    "{room_targets_block}"
     "For each room, also give a relative area weight (bigger rooms get bigger numbers - the "
     "exact scale doesn't matter, only the proportions between rooms on the same floor).\n\n"
     'Respond with ONLY raw JSON, no markdown fences, in this exact shape: '
     '{{"floors": [{{"floor_number": 1, "rooms": [{{"name": "...", "area": 1}}]}}]}}'
 )
+
+
+def _format_room_targets_block(
+    floor_bedrooms: list[int] | None, floor_bathrooms: list[int] | None
+) -> str:
+    """Builds an explicit, per-floor bedroom/bathroom target block for
+    ROOM_LAYOUT_PROMPT_TEMPLATE when the user gave real per-floor counts (see
+    app/main.py's create_house_project, "Bedrooms / floor" / "Bathrooms /
+    floor"). A real, structured signal Gemini can follow precisely - stronger
+    than the same info also appearing inside the free-text {prompt_text} via
+    _compose_house_requirements(), which is why this is threaded as its own
+    param rather than relying on prompt_text alone. Returns "" when no
+    targets were given (the template's existing generic ground/upper
+    convention applies unchanged) - real fix for a live-reproduced bug: a
+    2-floor request came back with floor 2 containing only a "Hallway", no
+    bedrooms/bathrooms at all, because nothing told Gemini exactly how many
+    of each that floor needed. This is defense in depth, not the actual
+    guarantee - generate_house.py's _enforce_room_counts() is the real
+    deterministic backstop; this just gets Gemini's own output closer so
+    enforcement has less to pad/trim.
+    """
+    if not floor_bedrooms and not floor_bathrooms:
+        return ""
+    length = max(len(floor_bedrooms or []), len(floor_bathrooms or []))
+    lines = []
+    for i in range(length):
+        beds = floor_bedrooms[i] if floor_bedrooms and i < len(floor_bedrooms) else None
+        baths = floor_bathrooms[i] if floor_bathrooms and i < len(floor_bathrooms) else None
+        parts = []
+        if beds is not None:
+            parts.append(f"exactly {beds} bedroom{'s' if beds != 1 else ''}")
+        if baths is not None:
+            parts.append(f"exactly {baths} bathroom{'s' if baths != 1 else ''}")
+        if parts:
+            lines.append(f"- Floor {i + 1} MUST contain {' and '.join(parts)}.")
+    if not lines:
+        return ""
+    return (
+        "REQUIRED per-floor bedroom/bathroom counts (these override the general "
+        "ground/upper convention above wherever they conflict):\n" + "\n".join(lines) + "\n\n"
+    )
 
 # Real, user-reported bug this exists to fix: an uploaded image that isn't
 # actually a photograph of a real room (e.g. a graphic, a logo, an icon, a
@@ -549,6 +597,8 @@ class GeminiProvider(Provider):
         prompt: str,
         plot_description: str | None = None,
         floor_count: int | None = None,
+        floor_bedrooms: list[int] | None = None,
+        floor_bathrooms: list[int] | None = None,
     ) -> dict:
         """floor_count, when given, is a REAL explicit value (from the
         structured "Floors" dropdown - see app/main.py's create_house_project)
@@ -560,12 +610,25 @@ class GeminiProvider(Provider):
         deterministic backstop that actually guarantees the returned layout
         has exactly that many floors, regardless of what Gemini's own
         response contains.
+
+        floor_bedrooms/floor_bathrooms, when given, are the REAL per-floor
+        counts from the "Bedrooms / floor" / "Bathrooms / floor" inputs (see
+        app/main.py's create_house_project) - index i is floor i+1. Folded
+        into the prompt via _format_room_targets_block() so Gemini gets an
+        explicit, structured per-floor target instead of only the free-text
+        prompt. This is still just a prompt-level improvement, not a
+        guarantee - app/pipeline/generate_house.py's _enforce_room_counts()
+        is the actual deterministic backstop that runs on whatever this
+        method returns (Gemini's real response OR fallback_room_layout()
+        below), same "prompt fix + deterministic backstop" pattern as
+        _enforce_floor_count() above.
         """
         context_block = f"Context about the actual plot: {plot_description}\n\n" if plot_description else ""
         formatted_prompt = ROOM_LAYOUT_PROMPT_TEMPLATE.format(
             dims_text=_format_dimensions(dimensions),
             context_block=context_block,
             prompt_text=prompt.strip() if prompt else "no specific requirements given",
+            room_targets_block=_format_room_targets_block(floor_bedrooms, floor_bathrooms),
         )
 
         explicit_floor_count = floor_count if floor_count is not None else _explicit_floor_count(prompt)
@@ -578,7 +641,13 @@ class GeminiProvider(Provider):
         except Exception:
             logger.exception("generate_room_layout failed for dimensions %s", dimensions)
 
-        return fallback_room_layout(dimensions, prompt, floor_count=floor_count)
+        return fallback_room_layout(
+            dimensions,
+            prompt,
+            floor_count=floor_count,
+            floor_bedrooms=floor_bedrooms,
+            floor_bathrooms=floor_bathrooms,
+        )
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -937,7 +1006,13 @@ _SINGLE_STOREY_ROOMS = [
 ]
 
 
-def fallback_room_layout(dimensions: dict, prompt: str, floor_count: int | None = None) -> dict:
+def fallback_room_layout(
+    dimensions: dict,
+    prompt: str,
+    floor_count: int | None = None,
+    floor_bedrooms: list[int] | None = None,
+    floor_bathrooms: list[int] | None = None,
+) -> dict:
     """Never-empty room-layout fallback for when the Gemini call itself fails
     entirely (network/auth/quota/timeout) or returns unparseable JSON.
     floor_count, when given (a real explicit value from the "Floors" dropdown),
@@ -949,8 +1024,38 @@ def fallback_room_layout(dimensions: dict, prompt: str, floor_count: int | None 
     the ground floor, bedrooms/bathrooms on upper floors) - always produces
     something the blueprint step can draw, same never-empty guarantee as
     fallback_materials.
+
+    floor_bedrooms/floor_bathrooms, when given, take priority over the plain
+    ground/upper convention below - each floor gets exactly that many real
+    "Bedroom N"/"Bathroom N" rooms (any generic bedroom/bathroom room already
+    in that floor's base set, e.g. _GROUND_FLOOR_ROOMS's "Guest Bathroom", is
+    dropped first via classify_room_category() so counts are never doubled).
+    Doesn't need to be perfectly precise on its own - generate_house.py's
+    _enforce_room_counts() re-verifies every floor's final counts regardless
+    of whether room_layout came from a real Gemini response or this fallback,
+    so this only needs to get reasonably close.
     """
     floor_count = floor_count if floor_count is not None else _guess_floor_count(prompt)
+
+    if floor_bedrooms or floor_bathrooms:
+        floors = []
+        for floor_number in range(1, floor_count + 1):
+            idx = floor_number - 1
+            beds = floor_bedrooms[idx] if floor_bedrooms and idx < len(floor_bedrooms) else None
+            baths = floor_bathrooms[idx] if floor_bathrooms and idx < len(floor_bathrooms) else None
+            base_rooms = _GROUND_FLOOR_ROOMS if floor_number == 1 else []
+            rooms = [
+                dict(r) for r in base_rooms if classify_room_category(r["name"]) not in ("bedroom", "bathroom")
+            ]
+            if beds:
+                rooms.extend({"name": f"Bedroom {i}", "area": 1.5} for i in range(1, beds + 1))
+            if baths:
+                rooms.extend({"name": f"Bathroom {i}", "area": 0.8} for i in range(1, baths + 1))
+            if not rooms:
+                rooms = list(_UPPER_FLOOR_ROOMS if floor_number > 1 else _GROUND_FLOOR_ROOMS)
+            floors.append({"floor_number": floor_number, "rooms": rooms})
+        return {"floors": floors}
+
     if floor_count == 1:
         return {"floors": [{"floor_number": 1, "rooms": _SINGLE_STOREY_ROOMS}]}
 

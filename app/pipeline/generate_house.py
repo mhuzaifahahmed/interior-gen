@@ -39,6 +39,76 @@ def _is_cancelled(session: Session, house_project: HouseProject) -> bool:
     session.refresh(house_project)
     return house_project.status == "cancelled"
 
+
+def _enforce_room_type_count(rooms: list[dict], category: str, target: int, label: str) -> None:
+    """Pads or trims `rooms` IN PLACE so exactly `target` of them classify as
+    `category` (via room_specs.classify_room_category) - shared by both the
+    bedroom and bathroom passes in _enforce_room_counts() below. Same
+    "generic, interchangeable room" treatment as the garage/staircase
+    injection blocks elsewhere in this module: trimming keeps the FIRST
+    `target` matches (earliest-listed ones are as good as any) and removes
+    the rest; padding appends new `{label} N` rooms using the same
+    average-weight formula those injection blocks use, so a padded room
+    doesn't distort the floor's area proportions any more than necessary.
+    """
+    matching_indices = [i for i, r in enumerate(rooms) if classify_room_category(str(r.get("name") or "")) == category]
+    current = len(matching_indices)
+
+    if current > target:
+        to_remove = set(matching_indices[target:])
+        rooms[:] = [r for i, r in enumerate(rooms) if i not in to_remove]
+    elif current < target:
+        avg_weight = sum(float(r.get("area") or 1) for r in rooms) / len(rooms) if rooms else 1.0
+        for i in range(current + 1, target + 1):
+            rooms.append({"name": f"{label} {i}", "area": avg_weight})
+
+
+def _enforce_room_counts(
+    room_layout: dict, floor_bedrooms: list[int] | None, floor_bathrooms: list[int] | None
+) -> None:
+    """Deterministic backstop, one level deeper than _enforce_floor_count()
+    (app/providers/gemini.py) - that function guarantees the right number of
+    FLOORS; this guarantees the right room CONTENT on each of them. Verifies
+    every floor's actual bedroom/bathroom count against what the user
+    explicitly requested for that specific floor (floor_bedrooms[i]/
+    floor_bathrooms[i], index i = floor i+1 - the "Bedrooms / floor" /
+    "Bathrooms / floor" inputs, see app/main.py's create_house_project),
+    padding shortfalls and trimming surplus so every floor - INCLUDING the
+    ground floor, per explicit user decision - ends up with EXACTLY the
+    requested counts, regardless of whether room_layout came from a real
+    Gemini response or GeminiProvider.fallback_room_layout().
+
+    Real, live-reproduced bug this exists to fix: a 2-floor/3-bedroom/
+    2-bathroom request came back with floor 2 containing only a single
+    "Hallway" room - no bedrooms, no bathrooms at all. Nothing previously
+    verified a floor's room CONTENT, only its floor COUNT. Mutates
+    room_layout["floors"] in place, the same convention as the garage/entry/
+    utility/staircase injection blocks in run_house_pipeline() this mirrors -
+    called from the same relative position (after generate_room_layout()
+    returns, before the staircase-injection loop and the feasibility check/
+    layout_floor() call).
+
+    No-op when NEITHER array is given (the legacy, house-wide-total-only
+    path, or a direct caller that never had per-floor inputs) - existing
+    behavior is completely unaffected. A floor whose own index falls outside
+    a given (shorter) array is also left unenforced for that count, rather
+    than guessing - both arrays are expected to be exactly floor_count long
+    by the time they reach here (see app/main.py's create_house_project).
+    """
+    if not floor_bedrooms and not floor_bathrooms:
+        return
+
+    for floor in room_layout.get("floors") or []:
+        idx = (floor.get("floor_number") or 1) - 1
+        target_beds = floor_bedrooms[idx] if floor_bedrooms and 0 <= idx < len(floor_bedrooms) else None
+        target_baths = floor_bathrooms[idx] if floor_bathrooms and 0 <= idx < len(floor_bathrooms) else None
+        rooms = floor.setdefault("rooms", [])
+
+        if target_beds is not None:
+            _enforce_room_type_count(rooms, "bedroom", target_beds, "Bedroom")
+        if target_baths is not None:
+            _enforce_room_type_count(rooms, "bathroom", target_baths, "Bathroom")
+
 # v3: enriched photoreal prompt vocabulary, floor-count hard constraint, a
 # researched negative-prompt block.
 # v4: removed the second, blueprint-sourced 3D isometric render; briefly
@@ -273,6 +343,8 @@ def run_house_pipeline(
     preferred_backend: str | None = None,
     color_palette: str | None = None,
     architectural_style: str | None = None,
+    floor_bedrooms: list[int] | None = None,
+    floor_bathrooms: list[int] | None = None,
 ) -> None:
     """Runs the "Build a House" pipeline for one HouseProject. Mirrors
     app/pipeline/generate.py's run_pipeline shape: its own DB session (runs as
@@ -331,6 +403,18 @@ def run_house_pipeline(
     `style` kwarg for the Kaggle elevation model; build_house_prompt() below
     still inlines it for the EDIT-backend path. Same soft-degrade contract as
     color_palette.
+
+    floor_bedrooms/floor_bathrooms (2026-09-28, optional) - the REAL
+    per-floor bedroom/bathroom counts from the "Bedrooms / floor" /
+    "Bathrooms / floor" inputs (index i is floor i+1 - see app/main.py's
+    create_house_project), replacing a single house-wide total. Passed
+    through to provider.generate_room_layout() as a prompt-level signal, but
+    the actual GUARANTEE that each floor ends up with exactly these counts
+    comes from _enforce_room_counts() below, called right after
+    generate_room_layout() returns - this is what fixes a real, live-
+    reproduced bug where a floor came back containing only a single
+    "Hallway" room. None means the legacy, house-wide-total-only path
+    (unchanged behavior).
     """
     key_prefix = f"users/{username}/buildAHouse/output" if username else "local.output"
     with Session(engine) as session:
@@ -414,9 +498,25 @@ def run_house_pipeline(
                 facing = "south"
             try:
                 room_layout = provider.generate_room_layout(
-                    dimensions, prompt or "", plot_description, floor_count
+                    dimensions,
+                    prompt or "",
+                    plot_description,
+                    floor_count,
+                    floor_bedrooms=floor_bedrooms,
+                    floor_bathrooms=floor_bathrooms,
                 )
                 total_floors = len(room_layout["floors"])
+
+                # Deterministic bedroom/bathroom-count guarantee - see
+                # _enforce_room_counts()'s own docstring for the real bug
+                # this fixes. Runs immediately after generate_room_layout()
+                # returns (before the garage/utility/staircase injection
+                # blocks below, which themselves also just mutate
+                # room_layout in place) so every later step - feasibility,
+                # layout_floor(), the AI Concept Layout conditioning image -
+                # sees the corrected, guaranteed room counts. No-op when
+                # floor_bedrooms/floor_bathrooms are both None (legacy path).
+                _enforce_room_counts(room_layout, floor_bedrooms, floor_bathrooms)
 
                 # Garage/front-yard requirements are parsed deterministically
                 # from the free-text requirements string, NOT trusted to

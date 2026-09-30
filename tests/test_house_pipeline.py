@@ -29,7 +29,9 @@ class FakeProvider:
         self.floor_plan_calls.append((plot_description, dimensions, prompt, room_layout))
         return self._floor_plan_images
 
-    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+    def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
             "floors": [
@@ -371,7 +373,9 @@ def test_run_house_pipeline_stops_when_cancelled_before_render(monkeypatch):
         session.commit()
 
     class CancellingProvider(FakeProvider):
-        def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+        def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
             with Session(engine) as cancel_session:
                 hp = cancel_session.get(HouseProject, "hcancel2")
                 hp.status = "cancelled"
@@ -451,7 +455,9 @@ def test_run_house_pipeline_passes_room_layout_into_generate_floor_plan(monkeypa
     call_order = []
 
     class OrderTrackingProvider(FakeProvider):
-        def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+        def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
             call_order.append("room_layout")
             return super().generate_room_layout(dimensions, prompt, plot_description, floor_count)
 
@@ -485,7 +491,9 @@ def test_run_house_pipeline_falls_back_to_plot_photo_when_blueprint_generation_f
         session.commit()
 
     class FailingRoomLayoutProvider(FakeProvider):
-        def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+        def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
             raise RuntimeError("Gemini quota exceeded")
 
     provider = FailingRoomLayoutProvider()
@@ -559,7 +567,9 @@ def test_run_house_pipeline_renders_elevation_without_a_photo_for_text_to_image_
         def house_render_needs_photo(self, preferred_backend=None):
             return False
 
-        def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+        def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
             self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
             # Two floors, so the resolved story count handed to
             # generate_house_render is a real 2 (the computed layout is
@@ -807,7 +817,9 @@ class ManyRoomsProvider(FakeProvider):
     """Returns a room program too large for a tiny plot - used to exercise
     the feasibility hard gate (2026-08-27)."""
 
-    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+    def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
         rooms = [
             {"name": "Bedroom 1", "area": 1},
             {"name": "Bedroom 2", "area": 1},
@@ -927,7 +939,9 @@ class GeminiAddsUnrequestedGarageProvider(FakeProvider):
     real user report: an unrequested garage was rendered as an oversized,
     full-depth strip that cramped every other room)."""
 
-    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+    def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
             "floors": [
@@ -1009,7 +1023,9 @@ class GeminiAddsUnrequestedUtilityProvider(FakeProvider):
     invented on its own initiative, mirroring GeminiAddsUnrequestedGarageProvider
     above - used to verify an unrequested utility/laundry room is stripped."""
 
-    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+    def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
             "floors": [
@@ -1060,7 +1076,9 @@ class TwoFloorProvider(FakeProvider):
     staircase - used to verify the real per-floor staircase injection
     (2026-08-29)."""
 
-    def generate_room_layout(self, dimensions, prompt, plot_description=None, floor_count=None):
+    def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
             "floors": [
@@ -1130,6 +1148,221 @@ def test_run_house_pipeline_does_not_inject_staircase_for_single_floor(monkeypat
         room_layout = json.loads(house_project.room_layout_json)
         room_names = [r["name"] for r in room_layout["floors"][0]["rooms"]]
         assert "Staircase" not in room_names
+
+
+# ---- _enforce_room_type_count() / _enforce_room_counts() - pure unit tests ----
+# ---- (app/pipeline/generate_house.py) - the real deterministic backstop  ----
+# ---- for a live-reproduced bug: a 2-floor/3-bedroom/2-bathroom request   ----
+# ---- came back with floor 2 containing only a single "Hallway" room.    ----
+
+
+def test_enforce_room_type_count_pads_shortfall():
+    rooms = [{"name": "Hallway", "area": 5}]
+    generate_house_module._enforce_room_type_count(rooms, "bedroom", 3, "Bedroom")
+    from app.pipeline.room_specs import classify_room_category
+
+    beds = [r for r in rooms if classify_room_category(r["name"]) == "bedroom"]
+    assert len(beds) == 3
+    # The pre-existing Hallway must be untouched, not replaced.
+    assert any(r["name"] == "Hallway" for r in rooms)
+
+
+def test_enforce_room_type_count_trims_surplus_keeping_the_first_matches():
+    rooms = [
+        {"name": "Bedroom 1", "area": 1},
+        {"name": "Bedroom 2", "area": 1},
+        {"name": "Bedroom 3", "area": 1},
+        {"name": "Living Room", "area": 2},
+    ]
+    generate_house_module._enforce_room_type_count(rooms, "bedroom", 1, "Bedroom")
+    from app.pipeline.room_specs import classify_room_category
+
+    beds = [r for r in rooms if classify_room_category(r["name"]) == "bedroom"]
+    assert len(beds) == 1
+    assert beds[0]["name"] == "Bedroom 1"
+    # Non-matching rooms are never touched by a trim pass for a different category.
+    assert any(r["name"] == "Living Room" for r in rooms)
+
+
+def test_enforce_room_type_count_noop_when_already_correct():
+    rooms = [{"name": "Bedroom 1", "area": 1}, {"name": "Bedroom 2", "area": 1}]
+    generate_house_module._enforce_room_type_count(rooms, "bedroom", 2, "Bedroom")
+    assert len(rooms) == 2
+
+
+def test_enforce_room_counts_fixes_a_floor_collapsed_to_only_a_hallway():
+    # The exact reported bug: floor 2 has NOTHING but a Hallway - no
+    # bedrooms, no bathrooms at all.
+    room_layout = {
+        "floors": [
+            {"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}]},
+            {"floor_number": 2, "rooms": [{"name": "Hallway", "area": 5}]},
+        ]
+    }
+    generate_house_module._enforce_room_counts(room_layout, [0, 3], [0, 2])
+
+    from app.pipeline.room_specs import classify_room_category
+
+    floor2_rooms = room_layout["floors"][1]["rooms"]
+    beds = [r for r in floor2_rooms if classify_room_category(r["name"]) == "bedroom"]
+    baths = [r for r in floor2_rooms if classify_room_category(r["name"]) == "bathroom"]
+    assert len(beds) == 3
+    assert len(baths) == 2
+    # Ground floor's own target (0/0) leaves it untouched - no bedrooms
+    # added to a floor that wasn't asked for any.
+    ground_rooms = room_layout["floors"][0]["rooms"]
+    assert not any(classify_room_category(r["name"]) == "bedroom" for r in ground_rooms)
+
+
+def test_enforce_room_counts_applies_to_ground_floor_too():
+    # Explicit user decision: bedrooms/bathrooms apply to EVERY floor
+    # including ground, not just upper floors.
+    room_layout = {
+        "floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}]}],
+    }
+    generate_house_module._enforce_room_counts(room_layout, [2], [1])
+
+    from app.pipeline.room_specs import classify_room_category
+
+    rooms = room_layout["floors"][0]["rooms"]
+    beds = [r for r in rooms if classify_room_category(r["name"]) == "bedroom"]
+    baths = [r for r in rooms if classify_room_category(r["name"]) == "bathroom"]
+    assert len(beds) == 2
+    assert len(baths) == 1
+
+
+def test_enforce_room_counts_is_noop_when_neither_array_given():
+    room_layout = {"floors": [{"floor_number": 1, "rooms": [{"name": "Hallway", "area": 5}]}]}
+    generate_house_module._enforce_room_counts(room_layout, None, None)
+    assert room_layout["floors"][0]["rooms"] == [{"name": "Hallway", "area": 5}]
+
+
+class DeficientFloorProvider(FakeProvider):
+    """Reproduces the exact live-reported bug: floor 2 of a 2-floor request
+    comes back with only a single "Hallway" room - no bedrooms, no
+    bathrooms at all, despite the user asking for 3 bedrooms/2 bathrooms."""
+
+    def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+        return {
+            "floors": [
+                {
+                    "floor_number": 1,
+                    "rooms": [{"name": "Living Room", "area": 2}, {"name": "Kitchen", "area": 1}],
+                },
+                {
+                    "floor_number": 2,
+                    "rooms": [{"name": "Hallway", "area": 5}],
+                },
+            ]
+        }
+
+
+def test_run_house_pipeline_fixes_a_floor_that_came_back_with_no_bedrooms(monkeypatch):
+    # Direct reproduction of the real, live-reported bug (2026-09-28): with
+    # floor_bedrooms/floor_bathrooms given, a floor that Gemini returned as
+    # just a bare "Hallway" must end up with the real requested counts by
+    # the time the project completes - the whole point of
+    # _enforce_room_counts() as a deterministic backstop.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hbedbath1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hbedbath1", status="queued", plot_image_key="hbedbath1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = DeficientFloorProvider()
+    run_house_pipeline(
+        "hbedbath1",
+        provider,
+        storage,
+        {"length": 60, "width": 80, "unit": "ft"},
+        prompt="2 floors, 3 bedrooms, 2 bathrooms",
+        floor_count=2,
+        floor_bedrooms=[0, 3],
+        floor_bathrooms=[0, 2],
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hbedbath1")
+        assert house_project.status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    floor2_rooms = room_layout["floors"][1]["rooms"]
+    beds = [r for r in floor2_rooms if classify_room_category(r["name"]) == "bedroom"]
+    baths = [r for r in floor2_rooms if classify_room_category(r["name"]) == "bathroom"]
+    assert len(beds) == 3
+    assert len(baths) == 2
+    # A hallway/corridor, if any, is IN ADDITION to the real rooms, not a
+    # replacement for them - the original Hallway room may still be present.
+
+
+class SurplusBedroomProvider(FakeProvider):
+    """Returns MORE bedrooms on floor 1 than the user actually requested -
+    verifies _enforce_room_counts() trims surplus, not just pads shortfalls."""
+
+    def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+        return {
+            "floors": [
+                {
+                    "floor_number": 1,
+                    "rooms": [
+                        {"name": "Bedroom 1", "area": 1},
+                        {"name": "Bedroom 2", "area": 1},
+                        {"name": "Bedroom 3", "area": 1},
+                        {"name": "Bedroom 4", "area": 1},
+                        {"name": "Bathroom", "area": 0.5},
+                    ],
+                }
+            ]
+        }
+
+
+def test_run_house_pipeline_trims_surplus_bedrooms_to_the_requested_count(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hbedbath2/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hbedbath2", status="queued", plot_image_key="hbedbath2/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = SurplusBedroomProvider()
+    run_house_pipeline(
+        "hbedbath2",
+        provider,
+        storage,
+        {"length": 60, "width": 80, "unit": "ft"},
+        prompt="1 floor, 2 bedrooms, 1 bathroom",
+        floor_count=1,
+        floor_bedrooms=[2],
+        floor_bathrooms=[1],
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hbedbath2")
+        assert house_project.status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    rooms = room_layout["floors"][0]["rooms"]
+    beds = [r for r in rooms if classify_room_category(r["name"]) == "bedroom"]
+    assert len(beds) == 2
 
 
 def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):

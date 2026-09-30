@@ -297,6 +297,8 @@ class Provider(ABC):
         prompt: str,
         plot_description: str | None = None,
         floor_count: int | None = None,
+        floor_bedrooms: list[int] | None = None,
+        floor_bathrooms: list[int] | None = None,
     ) -> dict:
         """Return a structured room list per floor for the free algorithmic
         blueprint step (app/pipeline/floor_layout.py + blueprint_svg.py) - NOT
@@ -315,6 +317,15 @@ class Provider(ABC):
         free-text prompt. None means no explicit value was given (the legacy
         free-text-only path) - implementations should fall back to their
         prior guessing behavior in that case.
+
+        floor_bedrooms/floor_bathrooms, when given, are the REAL per-floor
+        bedroom/bathroom counts from the "Bedrooms / floor" / "Bathrooms /
+        floor" inputs (index i is floor i+1) - implementations may use these
+        to steer their own generation (e.g. GeminiProvider folds them into
+        the prompt), but the actual guarantee that a floor ends up with
+        exactly these counts is enforced deterministically downstream in
+        app/pipeline/generate_house.py's _enforce_room_counts(), not by this
+        method. None means no explicit per-floor counts were given.
 
         Must NEVER leave a floor without at least one room and must NEVER
         raise - this is a harder guarantee than analyze_plot's "best effort,

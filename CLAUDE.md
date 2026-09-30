@@ -2240,6 +2240,83 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   `tests/test_room_specs.py` (master min/max both exceed a regular bedroom's, still classifies as plain
   "bedroom", a non-bedroom room merely containing "master" in its name is unaffected - 4 new). 654/654
   passing (full suite).
+- **v19 (2026-09-28): real per-floor bedroom/bathroom counts, replacing a single house-wide total - and
+  the actual fix for a live-reproduced bug.** Root cause of the reported bug: a 2-floor/3-bedroom/
+  2-bathroom request came back with floor 2 containing ONLY a "Hallway" room, no bedrooms/bathrooms at
+  all. Diagnosed by directly reproducing `layout_floor()` with the exact room list `[{"name": "Hallway"}]`
+  - it faithfully drew what it was given, confirming the deterministic layout engine was innocent. The
+  real gap: bedroom/bathroom counts were only ever a single flat total for the WHOLE house, flattened into
+  free text, with **zero verification that any specific floor's room CONTENT matched what was asked** -
+  only floor *count* was ever enforced (`_enforce_floor_count`), never floor *content*. When Gemini's
+  response for one floor came back deficient, nothing caught it.
+  - **Frontend, two-mode input** (`static/index.html`/`static/app.js`): a "Same on every floor" / "Per
+    floor" toggle (reusing the exact `model-toggle-btn`/`.is-active` pattern and `setModelToggleValue`/
+    `wireModelToggle` helpers the Kaggle/OpenAI model toggles already use) sits above the Bedrooms/
+    Bathrooms inputs, which are now labeled **"Bedrooms / floor"** / **"Bathrooms / floor"** per explicit
+    user wording. "Same on every floor" (default) keeps the original two dropdowns, applied uniformly.
+    "Per floor" swaps to `#house-per-floor-rows`, filled live by `renderPerFloorRows()` - one row per
+    floor, each with its own morph-dropdown pair (`setupMorphDropdown()`, same recipe as every other
+    dropdown on this page), rebuilt whenever the Floors dropdown's synthetic `"change"` event fires
+    (previously an unused hook - nothing listened to it before this). Already-entered per-floor values
+    are preserved across a re-render triggered by changing the floor count (`perFloorBedBathValues`, keyed
+    by floor number) - confirmed live via Playwright (set floor 2 to 4 bedrooms, reduced to 2 floors, back
+    to 3, floor 2 still showed 4). Both modes normalize to the same two integer arrays at submit time via
+    `collectFloorBedBathArrays()` - the backend has ONE code path regardless of which mode the user picked.
+  - **Backend intake** (`app/main.py::create_house_project`): new `floor_bedrooms`/`floor_bathrooms` Form
+    fields (JSON-array strings, e.g. `"[3,2]"`), parsed/clamped by `_parse_floor_counts_json()` (element
+    clamp 0-20, same bound as the legacy flat fields; length clamped/padded to `floor_count` by repeating
+    the last value) - any parse failure (missing, malformed, wrong shape) silently degrades to `None`,
+    same "silently correct obvious nonsense" treatment this endpoint already uses elsewhere, and `None` is
+    exactly the signal for the legacy, house-wide-total-only path everywhere downstream. When given, the
+    flat `bedrooms`/`bathrooms` values are RECOMPUTED as the sum across floors (backward-compat display
+    only, in `house_inputs` - no new DB column, `house_inputs_json` already stores the whole dict).
+    `_compose_house_requirements()` emits an explicit per-floor breakdown when arrays are given (e.g.
+    `"2 floors. Floor 1: 3 bedrooms, 2 bathrooms. Floor 2: 2 bedrooms, 1 bathroom."`) instead of the flat
+    `"3 bedrooms, 2 bathrooms"` sentence - verified byte-identical to the original format for the legacy
+    (no-arrays) path via a direct test. `kaggle_autocad.py`'s existing `_parse_int_before_word()` regex
+    (which grabs the FIRST `\d+ bedroom`/`\d+ bathroom` in the composed prompt) now picks up floor 1's
+    real count from this new phrasing - a known, accepted limitation for its own per-floor AI Concept
+    Layout images (floor 1's count, not necessarily accurate for other floors), not fixed in this pass.
+  - **The actual fix - a deterministic backstop, `_enforce_room_counts()`/`_enforce_room_type_count()`**
+    (`app/pipeline/generate_house.py`), mirroring the existing garage/entry/utility/staircase injection
+    pattern one level deeper: `_enforce_floor_count()` (gemini.py) already guaranteed the right number of
+    FLOORS; this guarantees the right room CONTENT on each of them. Runs immediately after
+    `generate_room_layout()` returns (before the garage/staircase blocks, though order doesn't functionally
+    matter since none of those touch bedroom/bathroom classification) - for each floor with a real target,
+    counts current bedroom-/bathroom-classified rooms (`room_specs.classify_room_category()`) and PADS
+    shortfalls (generic `"Bedroom N"`/`"Bathroom N"` rooms, same avg-weight formula the garage/staircase
+    injection uses) or TRIMS surplus (keeps the first N matches, removes the rest) so every floor -
+    **including the ground floor**, per explicit user decision - ends up with EXACTLY the requested counts,
+    regardless of whether `room_layout` came from a real Gemini response or `fallback_room_layout()`.
+    No-op when neither array is given (`None`) - the legacy, house-wide-total-only path is completely
+    unaffected, confirmed by the full existing test suite passing unchanged.
+  - **Prompt-level improvement, defense in depth (not the actual guarantee)**: `generate_room_layout()`
+    (`app/providers/gemini.py`) gained optional `floor_bedrooms`/`floor_bathrooms` params, threaded through
+    the whole provider seam (`base.py`/`hybrid.py`, `None` defaults so every existing caller/test is
+    unaffected) and folded into `ROOM_LAYOUT_PROMPT_TEMPLATE` via a new `_format_room_targets_block()` -
+    an explicit `"Floor N MUST contain exactly K bedrooms and exactly M bathrooms"` block, plus a new rule
+    ("Never collapse a floor's rooms down to a single generic room... a hallway... is in ADDITION to that
+    floor's real rooms, never a replacement for them") directly targeting the reported failure mode. This
+    just gets Gemini's own output closer so `_enforce_room_counts()` has less to pad/trim - the prompt
+    alone is never trusted as the guarantee, same "prompt fix + deterministic backstop" pattern already
+    established for floor count. `fallback_room_layout()` also made per-floor-count aware (synthesizes
+    real `"Bedroom N"`/`"Bathroom N"` rooms per floor when arrays are given, dropping any generic
+    bedroom/bathroom room already in that floor's base set first via `classify_room_category()` so counts
+    are never doubled - e.g. `_GROUND_FLOOR_ROOMS`'s own "Guest Bathroom") - though even an imprecise
+    fallback is corrected afterward by `_enforce_room_counts()` regardless, since that runs on its output
+    too.
+  - **Verification**: reproduced the exact reported bug via a `FakeProvider` subclass whose
+    `generate_room_layout()` returns floor 2 as bare `{"name": "Hallway"}` and nothing else -
+    `test_run_house_pipeline_fixes_a_floor_that_came_back_with_no_bedrooms` confirms the persisted
+    `room_layout_json` ends up with exactly 3 bedrooms/2 bathrooms on that floor. A companion surplus-trim
+    test and pure `_enforce_room_type_count()`/`_enforce_room_counts()` unit tests cover pad/trim/no-op
+    cases directly. Frontend behavior (mode toggle, dynamic rows, value preservation across floor-count
+    changes, `collectFloorBedBathArrays()`'s output in both modes) was visually verified end-to-end via a
+    real running server + Playwright, not just reasoned about - this project's own standing rule for
+    UI/layout-engine changes. 742/742 tests passing (18 new).
+  - **Deferred to future-plans, per explicit user request**: a third "high-rise" input mode (pick only a
+    floor count, e.g. 20 floors, with no per-floor bedroom editing at all) - parked as too complex for this
+    pass.
 
 ## Subscription plans, quotas, admin panel, and payments
 

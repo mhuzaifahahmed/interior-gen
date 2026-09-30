@@ -1133,6 +1133,151 @@ const houseArchStyleInput = document.getElementById("house-arch-style");
 const houseColorPaletteInput = document.getElementById("house-color-palette");
 const houseExtrasInput = document.getElementById("house-extras");
 
+// Bedrooms/bathrooms mode toggle (2026-09-28) - real fix for a live-
+// reproduced bug: a multi-floor request came back with a floor containing
+// zero bedrooms/bathrooms, because only a single house-wide total ever
+// existed. "uniform" (default) keeps the two dropdowns above applying the
+// same count to every floor; "perfloor" swaps to dynamically-generated rows,
+// one per floor. Both modes normalize to the same floor_bedrooms/
+// floor_bathrooms JSON arrays at submit time (see collectFloorBedBathArrays()
+// and the submit handler below) - the backend has one code path either way.
+const houseBedBathModeToggle = document.getElementById("house-bedbath-mode-toggle");
+const houseBedBathModeSelect = document.getElementById("house-bedbath-mode-select");
+const houseUniformBedBathBlock = document.getElementById("house-uniform-bedbath-block");
+const housePerFloorRowsContainer = document.getElementById("house-per-floor-rows");
+
+// { [floorNumber]: { bedrooms: <morph-dropdown instance>, bathrooms: <morph-dropdown instance> } }
+// Rebuilt every renderPerFloorRows() call (the DOM nodes are recreated), so
+// this always reflects the CURRENTLY-rendered rows only.
+const perFloorDropdowns = {};
+// Preserves already-entered per-floor values across a re-render triggered by
+// changing the Floors count, keyed by floor number - without this, going
+// from 3 floors to 2 and back to 3 would silently reset floor 1/2's values
+// back to the 3/2 defaults.
+const perFloorBedBathValues = {};
+
+function setBedBathMode(mode) {
+  houseBedBathModeSelect.value = mode;
+  houseBedBathModeToggle.querySelectorAll(".model-toggle-btn").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.value === mode);
+  });
+  houseUniformBedBathBlock.classList.toggle("hidden", mode !== "uniform");
+  housePerFloorRowsContainer.classList.toggle("hidden", mode !== "perfloor");
+  if (mode === "perfloor") renderPerFloorRows();
+}
+
+houseBedBathModeToggle.querySelectorAll(".model-toggle-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setBedBathMode(btn.dataset.value));
+});
+setBedBathMode("uniform");
+
+function renderPerFloorRows() {
+  const floorCount = parseInt(houseFloorCountInput.value, 10) || 1;
+
+  // Snapshot current values BEFORE wiping the DOM below.
+  Object.keys(perFloorDropdowns).forEach((floorNum) => {
+    perFloorBedBathValues[floorNum] = {
+      bedrooms: document.getElementById(`house-floor-${floorNum}-bedrooms`)?.value,
+      bathrooms: document.getElementById(`house-floor-${floorNum}-bathrooms`)?.value,
+    };
+  });
+
+  housePerFloorRowsContainer.innerHTML = "";
+  Object.keys(perFloorDropdowns).forEach((k) => delete perFloorDropdowns[k]);
+
+  const bedroomOptions = [1, 2, 3, 4, 5, 6];
+  const bathroomOptions = [1, 2, 3, 4, 5];
+  const optionHtml = (values) =>
+    values
+      .map(
+        (n) =>
+          `<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="${n}" role="option">${n}</button>`
+      )
+      .join("");
+
+  for (let floorNum = 1; floorNum <= floorCount; floorNum++) {
+    const row = document.createElement("div");
+    row.className = "flex gap-4 items-end";
+    row.innerHTML = `
+<span class="font-label-caps text-label-caps text-on-surface-variant pb-3 w-16 shrink-0">Floor ${floorNum}</span>
+<div class="flex-1">
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bedrooms</label>
+<div class="relative">
+<button type="button" id="house-floor-${floorNum}-bedrooms-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-1 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="house-floor-${floorNum}-bedrooms-btn-label" class="text-on-surface">3</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="house-floor-${floorNum}-bedrooms-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30" id="house-floor-${floorNum}-bedrooms-menu" role="listbox">${optionHtml(bedroomOptions)}</div>
+</div>
+<input type="hidden" id="house-floor-${floorNum}-bedrooms" value="3"/>
+</div>
+<div class="flex-1">
+<label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bathrooms</label>
+<div class="relative">
+<button type="button" id="house-floor-${floorNum}-bathrooms-btn" aria-haspopup="listbox" aria-expanded="false" class="w-full flex items-center justify-between gap-1 bg-transparent border-b border-outline-variant py-3 font-body-md text-left focus:outline-none focus:border-primary focus:shadow-[0_4px_14px_-6px_rgba(122,71,18,0.4)] transition-all duration-200">
+<span id="house-floor-${floorNum}-bathrooms-btn-label" class="text-on-surface">2</span>
+<span class="material-symbols-outlined text-[20px] text-on-surface-variant transition-transform duration-200" id="house-floor-${floorNum}-bathrooms-chevron">expand_more</span>
+</button>
+<div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30" id="house-floor-${floorNum}-bathrooms-menu" role="listbox">${optionHtml(bathroomOptions)}</div>
+</div>
+<input type="hidden" id="house-floor-${floorNum}-bathrooms" value="2"/>
+</div>`;
+    housePerFloorRowsContainer.appendChild(row);
+
+    const bedroomsDropdown = setupMorphDropdown({
+      btnId: `house-floor-${floorNum}-bedrooms-btn`,
+      chevronId: `house-floor-${floorNum}-bedrooms-chevron`,
+      menuId: `house-floor-${floorNum}-bedrooms-menu`,
+      hiddenInputId: `house-floor-${floorNum}-bedrooms`,
+      placeholder: "3",
+    });
+    const bathroomsDropdown = setupMorphDropdown({
+      btnId: `house-floor-${floorNum}-bathrooms-btn`,
+      chevronId: `house-floor-${floorNum}-bathrooms-chevron`,
+      menuId: `house-floor-${floorNum}-bathrooms-menu`,
+      hiddenInputId: `house-floor-${floorNum}-bathrooms`,
+      placeholder: "2",
+    });
+    const preserved = perFloorBedBathValues[floorNum];
+    bedroomsDropdown.setValue((preserved && preserved.bedrooms) || "3");
+    bathroomsDropdown.setValue((preserved && preserved.bathrooms) || "2");
+    perFloorDropdowns[floorNum] = { bedrooms: bedroomsDropdown, bathrooms: bathroomsDropdown };
+  }
+}
+
+// setValue() dispatches a synthetic "change" on the hidden input (see
+// setupMorphDropdown above) - re-render the per-floor rows whenever the
+// Floors count changes, but only when that mode is actually active (no
+// point building rows nobody sees).
+houseFloorCountInput.addEventListener("change", () => {
+  if (houseBedBathModeSelect.value === "perfloor") renderPerFloorRows();
+});
+
+// Normalizes whichever mode is active into the two per-floor arrays the
+// backend expects (floor_bedrooms/floor_bathrooms - see app/main.py's
+// create_house_project) - the single source of truth both the submit
+// handler and the 401 pending-generation save path call.
+function collectFloorBedBathArrays() {
+  const floorCount = parseInt(houseFloorCountInput.value, 10) || 1;
+  if (houseBedBathModeSelect.value === "perfloor") {
+    const bedrooms = [];
+    const bathrooms = [];
+    for (let floorNum = 1; floorNum <= floorCount; floorNum++) {
+      const bedInput = document.getElementById(`house-floor-${floorNum}-bedrooms`);
+      const bathInput = document.getElementById(`house-floor-${floorNum}-bathrooms`);
+      bedrooms.push(parseInt(bedInput && bedInput.value, 10) || 3);
+      bathrooms.push(parseInt(bathInput && bathInput.value, 10) || 2);
+    }
+    return { bedrooms, bathrooms };
+  }
+  const uniformBedrooms = parseInt(houseBedroomsInput.value, 10) || 3;
+  const uniformBathrooms = parseInt(houseBathroomsInput.value, 10) || 2;
+  return {
+    bedrooms: Array(floorCount).fill(uniformBedrooms),
+    bathrooms: Array(floorCount).fill(uniformBathrooms),
+  };
+}
+
 const houseProgressCard = document.getElementById("house-progress-card");
 const houseProgressMessageEl = document.getElementById("house-progress-message");
 const houseProgressSubtitleEl = document.getElementById("house-progress-subtitle");
@@ -1412,6 +1557,20 @@ async function restorePendingGeneration() {
     houseFloorCountDropdown.setValue(pending.floorCount || "1");
     houseBedroomsDropdown.setValue(pending.bedrooms || "3");
     houseBathroomsDropdown.setValue(pending.bathrooms || "2");
+    // setBedBathMode() itself renders the per-floor rows (using the floor
+    // count already restored above) when the saved mode was "perfloor" -
+    // only then do the per-floor values below have real rows to land on.
+    setBedBathMode(pending.bedBathMode || "uniform");
+    if (pending.bedBathMode === "perfloor") {
+      (pending.floorBedrooms || []).forEach((value, i) => {
+        const dd = perFloorDropdowns[i + 1];
+        if (dd) dd.bedrooms.setValue(String(value));
+      });
+      (pending.floorBathrooms || []).forEach((value, i) => {
+        const dd = perFloorDropdowns[i + 1];
+        if (dd) dd.bathrooms.setValue(String(value));
+      });
+    }
     houseFacingDropdown.setValue(pending.facing || "");
     houseArchStyleDropdown.setValue(pending.architecturalStyle || "");
     houseColorPaletteDropdown.setValue(pending.colorPalette || "");
@@ -2923,6 +3082,14 @@ houseForm.addEventListener("submit", async (e) => {
   formData.append("floor_count", houseFloorCountInput.value);
   formData.append("bedrooms", houseBedroomsInput.value);
   formData.append("bathrooms", houseBathroomsInput.value);
+  // Real, per-floor bedroom/bathroom counts (2026-09-28) - normalizes
+  // whichever mode ("Same on every floor" / "Per floor") the user picked
+  // into the two arrays app/main.py's create_house_project expects. The
+  // flat bedrooms/bathrooms fields above stay for backward compat; the
+  // backend derives its own totals from these arrays when present.
+  const { bedrooms: floorBedroomsArr, bathrooms: floorBathroomsArr } = collectFloorBedBathArrays();
+  formData.append("floor_bedrooms", JSON.stringify(floorBedroomsArr));
+  formData.append("floor_bathrooms", JSON.stringify(floorBathroomsArr));
   // Plot facing is optional - only sent when the user actually picked one;
   // the backend resolves an omitted/blank value to "south" by default (see
   // run_house_pipeline()'s docstring).
@@ -2960,6 +3127,9 @@ houseForm.addEventListener("submit", async (e) => {
         floorCount: houseFloorCountInput.value,
         bedrooms: houseBedroomsInput.value,
         bathrooms: houseBathroomsInput.value,
+        bedBathMode: houseBedBathModeSelect.value,
+        floorBedrooms: floorBedroomsArr,
+        floorBathrooms: floorBathroomsArr,
         facing: houseFacingInput.value,
         architecturalStyle: houseArchStyleInput.value,
         colorPalette: houseColorPaletteInput.value,

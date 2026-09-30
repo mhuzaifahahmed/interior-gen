@@ -172,3 +172,12 @@ flagged as active work items the user wants to come back to:
   heuristic, not an enforced constraint) - this is what "room ventilation intelligence" maps to.
 - [ ] #20/#21 - a real post-generation validator + candidate-layout scoring, instead of one deterministic
   pass with no regenerate-if-invalid loop.
+
+## Deferred: "high-rise" bedrooms/bathrooms input mode (2026-09-28)
+
+Per-floor bedroom/bathroom counts shipped (see CLAUDE.md's Build a House v19 entry) with two input modes:
+"Same on every floor" and "Per floor". A third mode was explicitly requested but parked as too complex
+for that pass: a user picks only a floor count (e.g. a 20-floor building) with NO per-floor bedroom
+editing at all - the system would need to fill in sensible bedroom/bathroom counts itself rather than
+requiring N rows of manual entry. Not started - would need its own UX (e.g. a building "type" or density
+preset) and a real default-count-generation strategy, not just a UI toggle.

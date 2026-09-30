@@ -8,6 +8,7 @@ from app.providers.gemini import (
     ROOM_LAYOUT_PROMPT_TEMPLATE,
     _enforce_floor_count,
     _explicit_floor_count,
+    _format_room_targets_block,
     fallback_room_layout,
     parse_room_layout,
 )
@@ -261,11 +262,110 @@ def test_fallback_room_layout_single_storey_has_both_living_and_bedroom_rooms():
     assert any("bedroom" in name for name in names)
 
 
+def test_fallback_room_layout_uses_explicit_per_floor_bedroom_bathroom_counts():
+    # Real fix for a live-reproduced bug: a total Gemini failure previously
+    # fell back to a FIXED 2-bedroom/1-bathroom upper-floor set regardless of
+    # what the user actually asked for - this confirms the fallback now
+    # honors real per-floor targets when given.
+    result = fallback_room_layout(
+        {"length": 40, "width": 60, "unit": "ft"},
+        "2 floors",
+        floor_count=2,
+        floor_bedrooms=[3, 2],
+        floor_bathrooms=[2, 1],
+    )
+    from app.pipeline.room_specs import classify_room_category
+
+    for floor, expected_beds, expected_baths in zip(result["floors"], [3, 2], [2, 1]):
+        beds = [r for r in floor["rooms"] if classify_room_category(r["name"]) == "bedroom"]
+        baths = [r for r in floor["rooms"] if classify_room_category(r["name"]) == "bathroom"]
+        assert len(beds) == expected_beds
+        assert len(baths) == expected_baths
+
+
+def test_fallback_room_layout_per_floor_counts_do_not_duplicate_ground_floor_bathroom():
+    # _GROUND_FLOOR_ROOMS already includes a "Guest Bathroom" - when an
+    # explicit floor_bathrooms count is given for floor 1, that generic
+    # bathroom must be dropped first, not left alongside the real count
+    # (which would silently double the real bathroom count).
+    result = fallback_room_layout(
+        {"length": 40, "width": 60, "unit": "ft"},
+        "1 floor",
+        floor_count=1,
+        floor_bedrooms=[2],
+        floor_bathrooms=[2],
+    )
+    from app.pipeline.room_specs import classify_room_category
+
+    ground = result["floors"][0]["rooms"]
+    baths = [r for r in ground if classify_room_category(r["name"]) == "bathroom"]
+    assert len(baths) == 2
+    assert "Guest Bathroom" not in {r["name"] for r in ground}
+
+
+def test_fallback_room_layout_ignores_per_floor_counts_when_not_given():
+    # No behavior change at all for the legacy, house-wide-total path.
+    result = fallback_room_layout({"length": 40, "width": 60, "unit": "ft"}, "2 floors", floor_count=2)
+    names = {room["name"].lower() for room in result["floors"][1]["rooms"]}
+    assert "bedroom 1" in names and "bedroom 2" in names
+
+
 def test_room_layout_prompt_names_the_floor_placement_rules():
     assert "GROUND FLOOR" in ROOM_LAYOUT_PROMPT_TEMPLATE
     assert "garage" in ROOM_LAYOUT_PROMPT_TEMPLATE.lower()
     assert "NEVER place a garage or a kitchen" in ROOM_LAYOUT_PROMPT_TEMPLATE
     assert "EXACTLY that many floors" in ROOM_LAYOUT_PROMPT_TEMPLATE
+    assert "{room_targets_block}" in ROOM_LAYOUT_PROMPT_TEMPLATE
+
+
+# ---- _format_room_targets_block() - real fix for a live-reproduced bug: a ----
+# ---- floor came back with no bedrooms/bathrooms at all (just "Hallway")  ----
+
+
+def test_format_room_targets_block_returns_empty_when_no_targets_given():
+    assert _format_room_targets_block(None, None) == ""
+    assert _format_room_targets_block([], []) == ""
+
+
+def test_format_room_targets_block_states_exact_per_floor_counts():
+    block = _format_room_targets_block([3, 2], [2, 1])
+    assert "Floor 1 MUST contain exactly 3 bedrooms and exactly 2 bathrooms." in block
+    assert "Floor 2 MUST contain exactly 2 bedrooms and exactly 1 bathroom." in block
+
+
+def test_format_room_targets_block_handles_bedrooms_only():
+    block = _format_room_targets_block([3], None)
+    floor_line = next(line for line in block.splitlines() if line.startswith("- Floor 1"))
+    assert floor_line == "- Floor 1 MUST contain exactly 3 bedrooms."
+    assert "bathroom" not in floor_line.lower()
+
+
+def test_generate_room_layout_includes_per_floor_targets_in_the_sent_prompt(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        text = '{"floors": [{"floor_number": 1, "rooms": [{"name": "Bedroom 1", "area": 1}]}]}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            captured["prompt"] = contents[0]
+            return FakeResponse()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(gemini_module.genai, "Client", FakeClient)
+
+    GeminiProvider().generate_room_layout(
+        {"length": 40, "width": 60, "unit": "ft"},
+        "2 floors",
+        floor_count=2,
+        floor_bedrooms=[3, 2],
+        floor_bathrooms=[2, 1],
+    )
+    assert "Floor 1 MUST contain exactly 3 bedrooms and exactly 2 bathrooms." in captured["prompt"]
+    assert "Floor 2 MUST contain exactly 2 bedrooms and exactly 1 bathroom." in captured["prompt"]
 
 
 def test_explicit_floor_count_returns_none_when_unstated():
