@@ -205,14 +205,38 @@ def _ensure_requested_rooms_by_floor(room_layout: dict, extra_rooms: list[tuple[
 # _ensure_ground_floor_public_rooms()'s own unconditional treatment of
 # Living/Kitchen/Dining on the ground floor - every upper floor gets a real
 # lounge regardless of whether the user's own text happened to ask for one.
+#
+# REAL BUG, caught via a live generation the SAME DAY this shipped (a
+# 150x150ft, 5-floor house): the room was first labeled "Lounge" - which
+# room_specs.classify_room_category() correctly puts in the "living"
+# category (for real, bounded sizing + a sofa furniture symbol), but
+# floor_layout._PUBLIC_ZONE_KEYWORDS ALSO matches "living"/"lounge" as a
+# ground-floor-style PUBLIC room. On an upper floor with no other public
+# room, the injected Lounge became the ENTIRE top-level "front" zone on its
+# own - the exact machinery meant for garage/kitchen/dining clustering near
+# the entrance - and because "living" also carries the most generous
+# ROOM_MAX_MULTIPLIER (4.0x) of any category, it absorbed nearly all of the
+# floor's redistributed excess area: a real reproduction came back with a
+# 9,451 sq ft "Lounge" while 5 real bedrooms were squeezed into 30x77ft
+# slivers sharing the leftover "back" zone. Fixed by labeling the injected
+# room "Sitting Area" instead - "sitting" was added to room_specs.py's
+# "living" category keywords (so it still sizes/furnishes identically) and
+# to blueprint_svg.py's furniture dispatch (so it still gets a sofa), but
+# was deliberately NOT added to _PUBLIC_ZONE_KEYWORDS - so it correctly
+# falls through to the private/circulation "back" zone instead, packed
+# alongside the bedrooms/hallway it actually belongs with, subject to the
+# SAME min/max-area guarantee as every other private-zone room rather than
+# uniquely privileged as "the whole front zone." A real ground-floor room
+# Gemini itself names "Living Room"/"Lounge"/"Family Room" is UNAFFECTED -
+# this only changes the one label this function itself injects.
 def _ensure_upper_floor_lounge(room_layout: dict) -> None:
     """Guarantees every floor with floor_number > 1 contains a real
-    living-category room (labeled "Lounge" - distinct from the ground
-    floor's "Living Room" label, though both classify identically via
-    classify_room_category()) - mutates room_layout["floors"] in place. A
-    no-op for a floor that already has one (via Gemini's own response, an
-    explicit extra_rooms request, etc.) - never duplicates. A single-storey
-    building (no floor_number > 1 at all) is entirely unaffected."""
+    living-category room (labeled "Sitting Area" - see the real bug this
+    exact label choice fixes, above) - mutates room_layout["floors"] in
+    place. A no-op for a floor that already has one (via Gemini's own
+    response, an explicit extra_rooms request, etc.) - never duplicates. A
+    single-storey building (no floor_number > 1 at all) is entirely
+    unaffected."""
     for floor in room_layout.get("floors") or []:
         if (floor.get("floor_number") or 1) <= 1:
             continue
@@ -220,7 +244,7 @@ def _ensure_upper_floor_lounge(room_layout: dict) -> None:
         has_lounge = any(classify_room_category(str(r.get("name") or "")) == "living" for r in rooms)
         if not has_lounge:
             avg_weight = sum(float(r.get("area") or 1) for r in rooms) / len(rooms) if rooms else 1.0
-            rooms.append({"name": "Lounge", "area": avg_weight})
+            rooms.append({"name": "Sitting Area", "area": avg_weight})
 
 
 # v3: enriched photoreal prompt vocabulary, floor-count hard constraint, a

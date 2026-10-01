@@ -2591,6 +2591,60 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     mirrors the existing `house_render_enabled` test exactly (asserts `provider.floor_plan_calls == []`,
     `floor_plan_status == "not_configured"`, and that blueprint/render still complete normally).
     774/774 tests passing (1 new).
+- **v25 (2026-09-30), same day: a real bug in v23's own upper-floor lounge feature, found by the user from
+  a live render the SAME day it shipped (a 150x150ft, 5-floor house) - "how is it practical" (a ~9,451 sq
+  ft "Lounge" while 5 bedrooms were squeezed into 20.9x88.1ft slivers).** Root cause, confirmed by directly
+  reproducing the exact scenario: the injected room was labeled "Lounge", which `room_specs.
+  classify_room_category()` correctly puts in the "living" category (for real sizing + a sofa furniture
+  symbol) - but `floor_layout._PUBLIC_ZONE_KEYWORDS` ALSO matches "living"/"lounge" as a ground-floor-
+  style PUBLIC room (the same bucket as garage/kitchen/dining). On an upper floor with no other public
+  room, the injected Lounge became the ENTIRE top-level "front" zone on its own - the exact machinery meant
+  for entrance-cluster rooms - and because "living" also carries the single most generous
+  `ROOM_MAX_MULTIPLIER` (4.0x) in the whole system, it absorbed nearly all of the floor's redistributed
+  excess area, while the bedrooms (sharing only the much smaller "back" zone) were squeezed into degenerate
+  slivers. This is a genuinely NEW bug from the lounge feature shipped the same day, not a pre-existing
+  issue.
+  - **Fix**: the injected room is now labeled **"Sitting Area"** instead of "Lounge". `room_specs.py`'s
+    "living" category keywords gained `"sitting"` (so it still sizes/furnishes identically to a living
+    room), and `blueprint_svg.py`'s furniture dispatch gained the same keyword (still gets a sofa) - but
+    `floor_layout._PUBLIC_ZONE_KEYWORDS` was deliberately left UNCHANGED (no `"sitting"` added), so the
+    room correctly falls through to the private/circulation "back" zone instead, packed in the SAME row as
+    the bedrooms/hallway it actually belongs with, subject to the identical min/max-area guarantee as every
+    sibling room rather than uniquely privileged as "the whole front zone." A real ground-floor room Gemini
+    itself names "Living Room"/"Lounge"/"Family Room" is completely unaffected - only this one function's
+    own injected label changed.
+  - **Still an open, separate, pre-existing limitation, NOT fixed here and explicitly flagged to the
+    user**: on a SPARSE room program (e.g. 3-5 bedrooms alone on a 150x150ft plot), even with correct
+    zoning, rooms can still come out large/elongated (e.g. Sitting Area ~8,355 sq ft, bedrooms 140ft deep)
+    - this is the ALREADY-DOCUMENTED "zone-level (public-vs-private) area capping... not attempted" gap
+    (see `floor_layout.py`'s own module docstring, and `future-plans/house-layout-spec-checklist.md`'s
+    item list) - `ROOM_MAX_MULTIPLIER` only bounds a room relative to its OWN minimum, with no absolute
+    real-world ceiling and no zone-wide area cap, so a sparse room list on a huge plot will always have
+    leftover area distributed somewhere. The user floated building a reference "chart" of practical room
+    sizes as a possible next step - `room_specs.ROOM_SIZE_SPECS_M`/`ROOM_MAX_MULTIPLIER` already ARE this
+    chart for MINIMUMS and RELATIVE maximums; an ABSOLUTE real-world ceiling (e.g. "a bedroom should never
+    exceed 400 sq ft regardless of the plot") would be the natural next addition if this keeps surfacing -
+    not built yet, a real design decision to confirm with the user first (same "ask before touching the
+    core layout algorithm" pattern this file follows elsewhere).
+  - **Real, separate test-infrastructure gap found and fixed in the SAME investigation**: `tests/
+    conftest.py` had an existing `_default_house_render_enabled` autouse fixture specifically because a
+    developer's local `.env` toggle silently broke house-pipeline tests once before - the exact same
+    failure mode recurred for the BRAND NEW `autocad_generation_enabled` toggle (v24 above) the very day it
+    shipped, once the user's local `.env` was flipped to `false` for real local testing (as instructed) -
+    7 house-pipeline tests failed with `floor_plan_status == "not_configured"` instead of `"running"`/
+    `"done"`. Fixed by adding a matching `_default_autocad_generation_enabled` autouse fixture
+    (`tests/conftest.py`) - forces the functional default (`True`) for every test regardless of the real
+    `.env`, confirmed working with the user's actual local `.env` left exactly as they set it
+    (`AUTOCAD_GENERATION_ENABLED=false`, untouched).
+  - **Verification**: visually re-rendered the EXACT reported scenario (150x150ft, floor 4 of 5, 5
+    bedrooms) - all 6 rooms (5 bedrooms + Sitting Area) now share one connected row off the real hallway,
+    with the staircase correctly showing its "UP" direction. New tests:
+    `tests/test_house_pipeline.py::test_ensure_upper_floor_lounge_uses_a_label_that_is_not_the_public_zone`
+    (direct zone-classification regression) and
+    `test_run_house_pipeline_upper_floor_lounge_does_not_dominate_a_sparse_floor` (end-to-end: confirms the
+    Sitting Area shares the same row cross-dimension as every bedroom and genuinely borders the hallway,
+    rather than asserting a specific area threshold - the sparse-room-on-huge-plot issue above means raw
+    area alone isn't yet a fully solved/assertable number). 776/776 tests passing (3 new).
 
 ## Subscription plans, quotas, admin panel, and payments
 

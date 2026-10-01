@@ -91,3 +91,18 @@ def _default_house_render_enabled(monkeypatch):
     within its own body, which still wins (same per-test monkeypatch
     instance, last write applies)."""
     monkeypatch.setattr(settings, "house_render_enabled", True)
+
+
+@pytest.fixture(autouse=True)
+def _default_autocad_generation_enabled(monkeypatch):
+    """Same exact shape/purpose as _default_house_render_enabled above, for
+    settings.autocad_generation_enabled (app/config.py) - another dev-only
+    local .env toggle, not meant to affect the test suite. Real failure hit
+    the same day this setting was added: a developer's local .env had it set
+    to false (for testing the room-redesign model toggle without also
+    waiting on the slow AutoCAD Concept Layout stage), which silently broke
+    7 house-pipeline tests expecting that stage to actually run. Forces the
+    functional default (True) for every test regardless of the real .env;
+    the one test that specifically exercises autocad_generation_enabled=False
+    sets it back itself within its own body, which still wins."""
+    monkeypatch.setattr(settings, "autocad_generation_enabled", True)

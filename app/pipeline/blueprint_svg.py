@@ -843,7 +843,7 @@ def _draw_furniture(
             _furnish_kitchen(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "dining" in name:
         _furnish_dining(draw, ix0, iy0, ix1, iy1, iw, ih)
-    elif any(k in name for k in ("living", "lounge", "family", "drawing")):
+    elif any(k in name for k in ("living", "lounge", "family", "drawing", "sitting")):
         if not (door_walls & _WALL_ANCHORED_FURNITURE_WALLS["living"]):
             _furnish_living(draw, ix0, iy0, ix1, iy1, iw, ih)
     elif "study" in name or "office" in name:

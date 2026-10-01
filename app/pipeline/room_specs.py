@@ -106,7 +106,17 @@ _CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("bedroom", ("bed",)),
     ("kitchen", ("kitchen",)),
     ("dining", ("dining",)),
-    ("living", ("living", "lounge", "family", "drawing")),
+    # "sitting" (2026-09-30) is deliberately NOT in floor_layout.py's
+    # _PUBLIC_ZONE_KEYWORDS, unlike every other keyword here - see
+    # generate_house.py's _ensure_upper_floor_lounge() for why: a room
+    # named "Sitting Area" still sizes/furnishes like a living room (same
+    # category, same ROOM_MAX_MULTIPLIER, same blueprint_svg furniture
+    # dispatch) but must NOT be treated as a ground-floor-style PUBLIC
+    # room when injected on an upper floor - using a keyword that's absent
+    # from the public-zone list is what keeps it out of that zone, without
+    # touching "living"/"lounge"/"family"/"drawing" (still public, correct
+    # for a real ground-floor room Gemini names any of those).
+    ("living", ("living", "lounge", "family", "drawing", "sitting")),
     ("study", ("study", "office")),
     ("garage", ("garage",)),
     ("laundry", ("laundry", "utility")),

@@ -1563,6 +1563,101 @@ def test_ensure_upper_floor_lounge_adds_a_lounge_to_every_upper_floor():
         assert "living" in categories
 
 
+def test_ensure_upper_floor_lounge_uses_a_label_that_is_not_the_public_zone():
+    # Real, live-reported bug (2026-09-30), caught the SAME DAY this feature
+    # shipped: the room was first labeled "Lounge", which
+    # floor_layout._PUBLIC_ZONE_KEYWORDS ALSO matches as a ground-floor-
+    # style PUBLIC room - on an upper floor with no other public room, the
+    # injected Lounge became the entire top-level "front" zone by itself,
+    # and (being "living" category, the most generous ROOM_MAX_MULTIPLIER
+    # in the whole system) absorbed nearly all of the floor's redistributed
+    # excess area - a real reproduction came back with a 9,451 sq ft
+    # "Lounge" and 5 real bedrooms squeezed into 30x77ft slivers. The label
+    # this function injects must classify as "living" (for sizing/
+    # furniture) but NOT match the public-zone keyword list.
+    from app.pipeline.floor_layout import _zone_key
+    from app.pipeline.room_specs import classify_room_category
+
+    room_layout = {"floors": [{"floor_number": 2, "rooms": [{"name": "Bedroom 1", "area": 2}]}]}
+    generate_house_module._ensure_upper_floor_lounge(room_layout)
+
+    injected = next(r for r in room_layout["floors"][0]["rooms"] if r["name"] != "Bedroom 1")
+    assert classify_room_category(injected["name"]) == "living"
+    assert _zone_key(injected["name"]) != 0  # must NOT be treated as a public/front-zone room
+
+
+def test_run_house_pipeline_upper_floor_lounge_does_not_dominate_a_sparse_floor(monkeypatch):
+    # End-to-end reproduction of the exact live-reported scenario: a large
+    # plot with only bedrooms on an upper floor. Before the fix, the
+    # injected lounge alone claimed nearly half the floor while bedrooms
+    # were squeezed into degenerate slivers - after the fix, the lounge is
+    # just one more room sharing the private zone's row-packing, bounded by
+    # the same min/max-area machinery as every sibling room.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hsparseupper1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hsparseupper1", status="queued", plot_image_key="hsparseupper1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    class SparseUpperFloorProvider(FakeProvider):
+        def generate_room_layout(
+            self, dimensions, prompt, plot_description=None, floor_count=None,
+            floor_bedrooms=None, floor_bathrooms=None, extra_rooms=None,
+        ):
+            self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+            return {
+                "floors": [
+                    {"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}]},
+                    {
+                        "floor_number": 2,
+                        "rooms": [
+                            {"name": "Bedroom 1", "area": 1.5},
+                            {"name": "Bedroom 2", "area": 1.5},
+                            {"name": "Bedroom 3", "area": 1.5},
+                        ],
+                    },
+                ]
+            }
+
+    provider = SparseUpperFloorProvider()
+    run_house_pipeline(
+        "hsparseupper1", provider, storage, {"length": 150.0, "width": 150.0, "unit": "ft"},
+        prompt="2 floors", floor_count=2,
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hsparseupper1")
+        assert house_project.status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+
+    from app.pipeline.blueprint_svg import _shared_edge
+    from app.pipeline.floor_layout import layout_floor
+
+    floor2_rooms = room_layout["floors"][1]["rooms"]
+    rects = layout_floor(floor2_rooms, {"length": 150.0, "width": 150.0, "unit": "ft"}, facing="south")
+    lounge_rect = next(r for r in rects if r["name"] == "Sitting Area")
+    bedroom_rects = [r for r in rects if r["name"].startswith("Bedroom")]
+    hallway_rects = [r for r in rects if r["name"] == "Hallway"]
+
+    # The REAL, now-fixed bug: the lounge used to be split off into its own
+    # top-level "front" zone, structurally disconnected from the bedrooms/
+    # hallway it should belong with (a separate recursive split, not a
+    # shared row). After the fix, it's one more item packed in the SAME row
+    # as its sibling bedrooms - same cross-dimension (row depth) as every
+    # bedroom, and it genuinely borders the hallway, instead of floating in
+    # its own disconnected region.
+    assert bedroom_rects
+    for bedroom in bedroom_rects:
+        assert abs(bedroom["h"] - lounge_rect["h"]) < 1e-6  # same row, same cross-dimension
+    assert hallway_rects
+    assert any(_shared_edge(lounge_rect, h) is not None for h in hallway_rects)
+
+
 def test_ensure_upper_floor_lounge_never_touches_the_ground_floor():
     room_layout = {
         "floors": [
