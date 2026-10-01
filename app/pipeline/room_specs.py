@@ -204,6 +204,22 @@ def garage_min_area_sqm(cars: int, unit: str) -> float:
     return to_plot_unit(width_m, unit) * to_plot_unit(depth_m, unit)
 
 
+def staircase_dimensions(unit: str) -> tuple[float, float]:
+    """Real (width, depth) for a staircase run, in the plot's own unit -
+    mirrors garage_dimensions() exactly (same "give the layout engine a
+    real, correctly-proportioned rectangle to carve out, not just an area
+    target" reasoning). Added 2026-09-29 alongside floor_layout.py's real
+    staircase carve-out (previously the staircase only ever got its real-
+    world MINIMUM AREA guaranteed, same as any other room - its actual
+    SHAPE was left to the generic weighted slicing algorithm, which could
+    (and did, live-reproduced) squeeze it into a degenerate sliver, e.g.
+    60ft wide x 0.6ft deep - unusable and almost certainly too thin for
+    blueprint_svg.py's furniture-render size gate to draw the stair symbol
+    at all."""
+    spec = ROOM_SIZE_SPECS_M["staircase"]
+    return to_plot_unit(spec["min_width"], unit), to_plot_unit(spec["min_depth"], unit)
+
+
 def garage_dimensions(cars: int, unit: str) -> tuple[float, float]:
     """Real (width, depth) - not just area - a garage needs for `cars` to
     actually fit, in the plot's own unit. Added 2026-09-04: real user

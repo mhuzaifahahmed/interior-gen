@@ -93,7 +93,10 @@ def render_floor_blueprint_dxf(
     door_width = to_plot_unit(DOOR_WIDTH_M, unit)
     window_width = to_plot_unit(WINDOW_WIDTH_M, unit)
     window_width_living = to_plot_unit(WINDOW_WIDTH_LIVING_M, unit)
-    front_door_edge = _front_door_opening(rects, length, width, facing)
+    # Ground floor only (2026-09-29) - see blueprint_svg.render_floor_
+    # blueprint()'s matching gate for why; keeps the PNG and the DXF in
+    # agreement about there being no front entrance on upper floors.
+    front_door_edge = _front_door_opening(rects, length, width, facing) if floor_number == 1 else None
 
     doc = ezdxf.new(dxfversion="R2010")
     doc.header["$INSUNITS"] = _INSUNITS_BY_UNIT.get(unit, 0)

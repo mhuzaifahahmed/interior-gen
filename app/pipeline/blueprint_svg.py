@@ -198,7 +198,13 @@ def render_floor_blueprint(
         interior_door_edges.append(edge)
 
     facing_normalized = (facing or "").strip().lower()
-    front_door_edge = _front_door_opening(rects, length, width, facing_normalized)
+    # The front entrance only ever exists on the GROUND floor (2026-09-29,
+    # real user report: "no entrance on 2nd floor") - _front_door_opening()
+    # itself is floor-agnostic (it only looks at a floor's own rects/facing),
+    # so without this gate it was cutting an "ENTRANCE" opening on every
+    # floor of a multi-storey building, including upper floors that have no
+    # real exterior walk-in door at all.
+    front_door_edge = _front_door_opening(rects, length, width, facing_normalized) if floor_number == 1 else None
     all_door_edges = interior_door_edges + ([front_door_edge] if front_door_edge else [])
 
     # The staircase's UP/DN direction (None on a single-storey building,
@@ -681,6 +687,18 @@ _FURNITURE_MIN_BOX_H = 60
 # ellipses, a toilet's real-world-proportioned rectangle, etc.).
 _GARAGE_MIN_BOX_W = 40
 _GARAGE_MIN_BOX_H = 40
+# Staircase gets the SAME lower threshold as garage, for the SAME real
+# reason (2026-09-29): floor_layout.py's real staircase carve-out (see that
+# module's docstring) gives the stair its own real narrow-run width
+# (~1.2m/~3.9ft) as one dimension and the row's full depth as the other -
+# correctly shaped, but that narrow dimension can still scale down under
+# _FURNITURE_MIN_BOX_W in pixels on a large plot even though the real-world
+# size is fine (same category of problem the garage fix already solved).
+# _furnish_staircase()'s drawing (step lines proportional to w/h, small
+# fixed ~8-12px offsets for the arrow/landing) stays legible at this lower
+# size, same as the garage's purely-proportional car icon.
+_STAIRCASE_MIN_BOX_W = 30
+_STAIRCASE_MIN_BOX_H = 30
 # Half the room label's rendered block height (name + area lines), plus a
 # margin - the label is centered on the room's own cy in _draw_room_label().
 # Real value found by measuring an actual rendered label, not guessed: a
@@ -779,8 +797,12 @@ def _draw_furniture(
     box_w, box_h = x1 - x0, y1 - y0
     name = rect["name"].lower()
 
-    min_w = _GARAGE_MIN_BOX_W if "garage" in name else _FURNITURE_MIN_BOX_W
-    min_h = _GARAGE_MIN_BOX_H if "garage" in name else _FURNITURE_MIN_BOX_H
+    if "garage" in name:
+        min_w, min_h = _GARAGE_MIN_BOX_W, _GARAGE_MIN_BOX_H
+    elif "stair" in name:
+        min_w, min_h = _STAIRCASE_MIN_BOX_W, _STAIRCASE_MIN_BOX_H
+    else:
+        min_w, min_h = _FURNITURE_MIN_BOX_W, _FURNITURE_MIN_BOX_H
     if box_w < min_w or box_h < min_h:
         return
 

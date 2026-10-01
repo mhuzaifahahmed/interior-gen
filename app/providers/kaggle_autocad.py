@@ -244,11 +244,15 @@ def _front_door_spec(edge: dict, facing: str, x0c: float, y0c: float, scale: flo
     }
 
 
-def _door_specs_for_floor(rects: list[dict], dimensions: dict, facing: str | None) -> list[dict]:
+def _door_specs_for_floor(
+    rects: list[dict], dimensions: dict, facing: str | None, floor_number: int = 1
+) -> list[dict]:
     """Every door on one floor, as draw-ready canvas-fraction specs - interior
     doors (post-suppression, matching the Computed Layout's set exactly) plus
-    the front entrance on the chosen facing edge. Empty list when there's no
-    real geometry to work from."""
+    the front entrance on the chosen facing edge - ONLY on the ground floor
+    (2026-09-29, same gate as blueprint_svg.render_floor_blueprint() - an
+    upper floor has no real exterior walk-in door). Empty list when there's
+    no real geometry to work from."""
     if not rects:
         return []
     length = float(dimensions.get("length") or 1)
@@ -278,7 +282,7 @@ def _door_specs_for_floor(rects: list[dict], dimensions: dict, facing: str | Non
         if spec:
             specs.append(spec)
 
-    front_edge = _front_door_opening(rects, length, width, facing_normalized)
+    front_edge = _front_door_opening(rects, length, width, facing_normalized) if floor_number == 1 else None
     if front_edge:
         spec = _front_door_spec(front_edge, facing_normalized, x0c, y0c, scale, nominal_len_px)
         if spec:
@@ -422,7 +426,9 @@ def generate_floor_plan(
         ordered_floors = sorted(rects_by_floor)
         payload["conditioning_images"] = [
             base64.b64encode(
-                render_conditioning_edge_map(rects_by_floor[floor_number], dimensions, facing=facing)
+                render_conditioning_edge_map(
+                    rects_by_floor[floor_number], dimensions, facing=facing, floor_number=floor_number
+                )
             ).decode("utf-8")
             for floor_number in ordered_floors
         ]
@@ -431,7 +437,7 @@ def generate_floor_plan(
         # un-updated notebook simply ignores this field; an updated one draws
         # the same doors the Computed Layout shows.
         payload["doors"] = [
-            _door_specs_for_floor(rects_by_floor[floor_number], dimensions, facing)
+            _door_specs_for_floor(rects_by_floor[floor_number], dimensions, facing, floor_number)
             for floor_number in ordered_floors
         ]
 

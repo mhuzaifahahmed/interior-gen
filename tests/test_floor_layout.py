@@ -1,3 +1,4 @@
+from app.pipeline.blueprint_svg import _shared_edge
 from app.pipeline.floor_layout import (
     HALLWAY_MAX_WIDTH_M,
     HALLWAY_MIN_WIDTH_M,
@@ -758,6 +759,102 @@ def test_layout_floor_garage_three_region_split_tiles_exactly():
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 60 + 1e-6
         assert r["y"] + r["h"] <= 50 + 1e-6
+
+
+# ---- Real staircase carve-out (2026-09-29) - real, live-reported bug:    ----
+# ---- "why is there no staircase when it is 2 floors... the staircase    ----
+# ---- should connect hallways" - see floor_layout.py's module docstring. ----
+
+
+def _stair_rect(rects):
+    return next(r for r in rects if r["name"] == "Staircase")
+
+
+def test_layout_floor_staircase_is_not_a_degenerate_sliver_on_an_upper_floor():
+    # The reported bug, reproduced directly: an upper floor with NO public
+    # rooms at all (just bedrooms/bathrooms + a staircase) used to squeeze
+    # the staircase into a near-zero-depth sliver (confirmed: 60ft x 0.58ft
+    # on this exact plot) because it was treated as the entire "front" zone
+    # against the public/private weight split.
+    rooms = [
+        {"name": "Staircase", "area": 1},
+        {"name": "Bedroom 1", "area": 2},
+        {"name": "Bedroom 2", "area": 2},
+        {"name": "Bedroom 3", "area": 2},
+        {"name": "Bathroom 1", "area": 1},
+        {"name": "Bathroom 2", "area": 1},
+    ]
+    dimensions = {"length": 60, "width": 80, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, facing="south")
+    stair = _stair_rect(rects)
+    assert min(stair["w"], stair["h"]) > 2.0
+
+
+def test_layout_floor_staircase_connects_to_the_hallway():
+    rooms = [
+        {"name": "Staircase", "area": 1},
+        {"name": "Bedroom 1", "area": 2},
+        {"name": "Bedroom 2", "area": 2},
+        {"name": "Bedroom 3", "area": 2},
+        {"name": "Bathroom 1", "area": 1},
+        {"name": "Bathroom 2", "area": 1},
+    ]
+    dimensions = {"length": 60, "width": 80, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, facing="south")
+    stair = _stair_rect(rects)
+    hallways = [r for r in rects if r["name"] == "Hallway"]
+    assert hallways
+    assert any(_shared_edge(stair, h) is not None for h in hallways)
+
+
+def test_layout_floor_ground_floor_staircase_alone_in_back_zone_is_not_squeezed():
+    # The SECOND real gap found while verifying the fix above: when the
+    # staircase is the ONLY "back" zone room (e.g. a ground floor with no
+    # bedrooms of its own), the top-level public-vs-back weight split alone
+    # could still squeeze the back zone's DEPTH down near zero, since public
+    # rooms can legitimately claim almost the whole plot's weight/target
+    # area. A minimum back-zone depth floor fixes this independently of the
+    # staircase carve-out itself.
+    rooms = [
+        {"name": "Living Room", "area": 2},
+        {"name": "Kitchen", "area": 1},
+        {"name": "Dining Room", "area": 1},
+        {"name": "Staircase", "area": 1},
+    ]
+    dimensions = {"length": 60, "width": 80, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, facing="south")
+    stair = _stair_rect(rects)
+    assert min(stair["w"], stair["h"]) > 2.0
+
+
+def test_layout_floor_staircase_tiles_exactly_with_every_facing():
+    rooms = [
+        {"name": "Staircase", "area": 1},
+        {"name": "Bedroom 1", "area": 2},
+        {"name": "Bedroom 2", "area": 2},
+        {"name": "Bedroom 3", "area": 2},
+        {"name": "Bathroom 1", "area": 1},
+        {"name": "Bathroom 2", "area": 1},
+    ]
+    dimensions = {"length": 60, "width": 80, "unit": "ft"}
+    for facing in ("north", "south", "east", "west"):
+        rects = layout_floor(rooms, dimensions, facing=facing)
+        total_area = sum(_area(r) for r in rects)
+        assert abs(total_area - 60 * 80) < 1e-6
+        for r in rects:
+            assert r["x"] >= -1e-6 and r["y"] >= -1e-6
+            assert r["x"] + r["w"] <= 60 + 1e-6
+            assert r["y"] + r["h"] <= 80 + 1e-6
+
+
+def test_layout_floor_no_staircase_and_no_public_rooms_unaffected():
+    # Scoped correctly: a floor with no public rooms AND no staircase (e.g.
+    # a single open studio with many generic rooms) must keep the original
+    # flat, hallway-less behavior - this is NOT the case the staircase fix
+    # targets, and must not gain a surprise corridor as a side effect.
+    rooms = [{"name": f"Room {i}", "area": i + 1} for i in range(12)]
+    rects = layout_floor(rooms, {"length": 100, "width": 80, "unit": "ft"})
+    assert len(rects) == 12
 
 
 def test_layout_floor_garage_sparse_room_program_falls_back_cleanly():

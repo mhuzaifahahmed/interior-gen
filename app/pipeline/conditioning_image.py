@@ -290,7 +290,11 @@ def _draw_plot_boundary(
 
 
 def render_conditioning_edge_map(
-    rects: list[dict], dimensions: dict, canvas_size: int = CANVAS_SIZE, facing: str | None = None
+    rects: list[dict],
+    dimensions: dict,
+    canvas_size: int = CANVAS_SIZE,
+    facing: str | None = None,
+    floor_number: int = 1,
 ) -> bytes:
     """rects: layout_floor() output ([{"name","x","y","w","h"}, ...] in real
     length/width units). dimensions: {"length","width","unit"}. facing
@@ -298,6 +302,14 @@ def render_conditioning_edge_map(
     room_layout - when given, cuts a real gap for the front entrance in the
     boundary edge map (see _draw_plot_boundary()). None/unrecognized draws
     a fully closed boundary, same as before this param existed.
+
+    floor_number (2026-09-29, default 1): the front entrance only ever
+    exists on the GROUND floor - same gate as blueprint_svg.
+    render_floor_blueprint()/blueprint_dxf.render_floor_blueprint_dxf(), so
+    this conditioning image (what the AI Concept Layout model actually
+    traces) never shows an entrance on an upper floor either. Defaults to 1
+    (ground floor) so an existing caller that doesn't pass it keeps its
+    prior "always draw the entrance when facing is given" behavior.
 
     Returns PNG bytes: a black canvas with the plot boundary + every room's
     wall outline drawn as thin white lines, plus a simple per-room-type
@@ -320,7 +332,7 @@ def render_conditioning_edge_map(
         return (x0 + px * scale_x, y0 + py * scale_y)
 
     x1, y1 = to_canvas(length, width)
-    front_door_edge = _front_door_opening(rects, length, width, facing)
+    front_door_edge = _front_door_opening(rects, length, width, facing) if floor_number == 1 else None
     _draw_plot_boundary(draw, x0, y0, x1, y1, length, width, scale_x, scale_y, front_door_edge)
 
     for rect in rects:

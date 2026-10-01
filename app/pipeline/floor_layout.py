@@ -157,6 +157,59 @@ as a coherent zone). Three changes:
      list-adjacent) - kitchen still ranks last (closest to the hallway
      transition, unchanged intent), with dining now beside it.
 
+REAL STAIRCASE CARVE-OUT + "BACK ZONE" REGROUPING (2026-09-29, real user
+report: "why is there no staircase when it is 2 floors... the staircase
+should connect hallways"). Root cause, confirmed via direct reproduction: the
+staircase (circulation zone, see _CIRCULATION_ZONE_KEYWORDS) was being
+grouped into the PUBLIC-zone split (`front_names`) purely because the
+original `private_start` search only looked for zone==2 (private), so a
+staircase (zone 1) always landed in "everything before that," alongside
+garage/living/kitchen. On a typical upper floor with NO public rooms at all
+(just bedrooms/bathrooms + the staircase), this made the staircase become
+the ENTIRE "front" box on its own - `_split_box_along_y()` then split the
+floor using the staircase's own tiny weight as `front_fraction`, producing a
+degenerate full-width, near-zero-height sliver (confirmed: 60ft wide x
+0.58ft deep on a real test case) - almost certainly too thin for
+blueprint_svg.py's `_FURNITURE_MIN_BOX_H` gate to draw the stair symbol at
+all, which is the direct explanation for "no staircase." On the ground
+floor (which DOES have public rooms), the staircase instead became one more
+item inside the public zone's own weighted `_slice()` call, landing
+somewhere architecturally nonsensical (next to the garage/living room, not
+the hallway it's supposed to connect to) with no shape guarantee either.
+
+Fixed two ways:
+  1. `_layout_floor_core()`'s top-level split now groups circulation
+     (staircase) WITH private, not with public - `back_start` (renamed from
+     `private_start`) is the first room whose zone is 1 OR 2, so the
+     staircase always ends up in the same "back" region as the bedrooms/
+     hallway it actually serves, never alongside garage/living/kitchen. When
+     a floor has NO public rooms at all (typical upper floor), the ENTIRE
+     box now routes through `_layout_private_zone()` (previously it fell
+     through to the flat, hallway-less `_slice_reserving_garage()` path) so
+     it still gets a real hallway + staircase carve-out.
+  2. `_layout_private_zone()` now extracts any staircase room BEFORE suite
+     arranging/packing and, whenever a real hallway corridor is built, carves
+     it a REAL, correctly-proportioned rectangle (room_specs.
+     staircase_dimensions(), same "give it real dims, don't just reserve an
+     area" precedent garage_dimensions() already established) flush against
+     the hallway's own near end - the same anchor rule on every floor that
+     has both a staircase and a corridor, so the stair always reads as a
+     direct extension of ITS OWN floor's hallway. When no corridor is built
+     (a small private zone below MIN_ROOMS_FOR_CORRIDOR), the staircase
+     rejoins the plain weighted room list as an ordinary pinned room - shape
+     not specially guaranteed in that lower-priority small-zone case.
+
+Honestly NOT fully solved by this: exact PIXEL alignment of the hallway/
+staircase across floors (e.g. floor 1's stair landing exactly under floor
+2's) still isn't guaranteed, because the ground floor's "back" box legitimately
+starts at a different y than an upper floor's (the ground floor reserves
+real area for public rooms before the back zone begins; an upper floor with
+no public rooms has no such offset) - a genuinely harder problem (see
+"plumbing-zone vertical stacking across floors" below, still out of scope).
+What this DOES fix: the staircase is now always a real, usable, correctly-
+shaped room that visibly connects to its own floor's hallway, instead of an
+invisible sliver in an architecturally arbitrary spot.
+
 Explicitly NOT attempted (real, harder problems, left for later - see
 future-plans/house-layout-spec-checklist.md): non-rectangular/L-shaped
 rooms, a double-loaded (two-facing-rows) corridor, plumbing-zone vertical
@@ -174,6 +227,7 @@ from app.pipeline.room_specs import (
     garage_dimensions,
     max_area_for_room,
     min_area_for_room,
+    staircase_dimensions,
     to_plot_unit,
 )
 
@@ -435,31 +489,66 @@ def _layout_floor_core(rooms: list[dict], dimensions: dict, garage_cars: int | N
         weights = raw_weights
 
     # Real circulation corridor (see module docstring) - find where the
-    # private zone starts in the (already zone-sorted) list. If there's no
-    # real public/circulation-vs-private boundary (everything is one zone,
-    # or there are no private rooms at all), there's nothing to split
-    # specially - same single recursive _slice() call as before.
-    private_start = next((i for i, name in enumerate(names) if _zone_key(name) == 2), len(names))
-    if private_start == 0 or private_start == len(names):
+    # "back" region (circulation + private) starts in the (already
+    # zone-sorted) list. A staircase (zone 1) is grouped WITH private here,
+    # not with public - see module docstring's "REAL STAIRCASE CARVE-OUT"
+    # section for why (it belongs with the hallway/bedrooms it serves, not
+    # the garage/living-room cluster). If there's no real public-vs-back
+    # boundary at all (no public rooms, or no circulation/private rooms),
+    # there's nothing to split specially.
+    back_start = next((i for i, name in enumerate(names) if _zone_key(name) in (1, 2)), len(names))
+    has_staircase = any(_zone_key(name) == 1 for name in names)
+    if back_start == 0 and has_staircase:
+        # No public rooms on this floor at all (the typical upper-floor
+        # case - just a staircase + bedrooms/bathrooms) - the WHOLE box is
+        # the "back" region. Routed through _layout_private_zone() (not the
+        # flat _slice_reserving_garage() fallback) so the staircase gets a
+        # real hallway to connect to, same as a floor that does have a
+        # public zone. Scoped to floors that actually HAVE a staircase -
+        # a floor with no public rooms and no staircase either (e.g. a
+        # single open studio) keeps the original flat, hallway-less
+        # behavior unchanged (see the `back_start == len(names)` branch).
+        return _layout_private_zone(names, weights, 0.0, 0.0, length, width, unit, split_along_width=False)
+    if back_start == 0 or back_start == len(names):
+        # No circulation/private rooms at all (a pure-public floor, or a
+        # single-storey building with no staircase) - unchanged.
         return _slice_reserving_garage(names, weights, 0.0, 0.0, length, width, sum(weights), unit, garage_cars)
 
-    front_names, private_names = names[:private_start], names[private_start:]
-    front_weights, private_weights = weights[:private_start], weights[private_start:]
-    front_total, private_total = sum(front_weights), sum(private_weights)
-    front_fraction = front_total / (front_total + private_total) if (front_total + private_total) else 0.5
+    front_names, back_names = names[:back_start], names[back_start:]
+    front_weights, back_weights = weights[:back_start], weights[back_start:]
+    front_total, back_total = sum(front_weights), sum(back_weights)
+    front_fraction = front_total / (front_total + back_total) if (front_total + back_total) else 0.5
+
+    # MINIMUM BACK-ZONE DEPTH FLOOR (2026-09-29, found while verifying the
+    # staircase carve-out fix above) - a real, separate gap: when the back
+    # zone is JUST a staircase (no private rooms on this floor, e.g. a
+    # ground floor whose only "back" room is the staircase), its own target
+    # weight/area is tiny next to the front zone's (public rooms can
+    # legitimately claim almost the ENTIRE plot), so the pure weight-ratio
+    # front_fraction above could squeeze the back zone down to a near-zero
+    # depth regardless of the staircase carve-out logic in
+    # _layout_private_zone() - confirmed live: a 60x80ft plot produced a
+    # back zone only 0.58ft deep. Clamping front_fraction so the back zone
+    # always gets at least MIN_ROW_DEPTH_M of real depth fixes this the
+    # same way the MINIMUM-AREA GUARANTEE already protects individual rooms
+    # within a zone - a weight only ever controls how much EXTRA depth the
+    # front zone gets beyond leaving the back zone usable, never whether
+    # the back zone gets a usable depth at all.
+    min_back_depth = to_plot_unit(MIN_ROW_DEPTH_M, unit)
+    if width > 0:
+        front_fraction = min(front_fraction, max(0.0, 1 - min_back_depth / width))
 
     # TRUE FRONT-TO-BACK ZONING (2026-09-04, see module docstring) - this ONE
-    # top-level public-vs-private split always cuts along the plot's y-axis
-    # (front/low-y for public, back/high-y for private), regardless of which
-    # side of the box is longer. Every NESTED split (_slice() within each
-    # zone, the hallway placement in _layout_private_zone()) is unaffected -
-    # they still pick whichever axis suits that sub-region.
-    front_box, private_box, split_along_width = _split_box_along_y(0.0, 0.0, length, width, front_fraction)
+    # top-level public-vs-back split always cuts along the plot's y-axis
+    # (front/low-y for public, back/high-y for circulation+private),
+    # regardless of which side of the box is longer. Every NESTED split
+    # (_slice() within each zone, the hallway/staircase placement in
+    # _layout_private_zone()) is unaffected - they still pick whichever axis
+    # suits that sub-region.
+    front_box, back_box, split_along_width = _split_box_along_y(0.0, 0.0, length, width, front_fraction)
     front_rects = _slice_reserving_garage(front_names, front_weights, *front_box, front_total, unit, garage_cars)
-    private_rects = _layout_private_zone(
-        private_names, private_weights, *private_box, unit, split_along_width
-    )
-    return front_rects + private_rects
+    back_rects = _layout_private_zone(back_names, back_weights, *back_box, unit, split_along_width)
+    return front_rects + back_rects
 
 
 def _split_box(
@@ -804,13 +893,20 @@ def _layout_private_zone(
     unit: str,
     split_along_width: bool,
 ) -> list[dict]:
-    """Lays out the private zone's own box - either with a real hallway
-    corridor (see module docstring) when there's enough room count/space to
-    justify one, or falling back to the original plain _slice() otherwise
-    (small private zones, e.g. a single bedroom+bathroom, keep direct
-    adjacency - there's no benefit to a corridor there, and this is what
-    keeps the pre-existing "master bedroom next to its own ensuite bathroom"
-    test passing unchanged).
+    """Lays out the "back" (circulation + private) box - either with a real
+    hallway corridor (see module docstring) when there's enough room count/
+    space to justify one, or falling back to the original plain _slice()
+    otherwise (small private zones, e.g. a single bedroom+bathroom, keep
+    direct adjacency - there's no benefit to a corridor there, and this is
+    what keeps the pre-existing "master bedroom next to its own ensuite
+    bathroom" test passing unchanged).
+
+    `names`/`weights` may include a staircase room (circulation zone,
+    classify_room_category() == "staircase") - see module docstring's "REAL
+    STAIRCASE CARVE-OUT" section. It's extracted up front and handled
+    separately from the regular weighted room list; everything else in this
+    function (suite arranging, the corridor-vs-no-corridor decision) only
+    ever concerns the REAL private rooms, exactly as before this feature.
 
     split_along_width tells us which edge of THIS box borders the
     public/circulation zone (see _split_box()'s docstring) - the hallway is
@@ -821,6 +917,17 @@ def _layout_private_zone(
     suites (_arrange_suites) so each bathroom lands next to its own bedroom
     with a shared suite tag, instead of all bathrooms clustering on one side.
     """
+    stair_index = next((i for i, n in enumerate(names) if classify_room_category(n) == "staircase"), None)
+    stair_name = names[stair_index] if stair_index is not None else None
+    if stair_index is not None:
+        names = names[:stair_index] + names[stair_index + 1 :]
+        weights = weights[:stair_index] + weights[stair_index + 1 :]
+
+    if not names:
+        # The whole back region is just a staircase/landing - no real rooms,
+        # no hallway needed. Give it the entire box.
+        return [{"name": stair_name, "x": x, "y": y, "w": w, "h": h}] if stair_name else []
+
     min_row_depth = to_plot_unit(MIN_ROW_DEPTH_M, unit)
     # The row's depth is the box's dimension PERPENDICULAR to the corridor's
     # run direction - that's h when the corridor runs along the width axis
@@ -849,6 +956,12 @@ def _layout_private_zone(
         # docstring), so the suite ids line up positionally with the
         # returned rects with no extra matching needed.
         names, weights, suite_ids = _arrange_suites(names, weights)
+        if stair_name is not None:
+            # No real corridor here - the staircase just rejoins the room
+            # list as an ordinary pinned room (shape not specially
+            # guaranteed in this lower-priority small-zone fallback path).
+            stair_weight = min(weights) if weights else 1.0
+            names, weights, suite_ids = [stair_name] + names, [stair_weight] + weights, [None] + suite_ids
         rects = _slice(names, weights, x, y, w, h, sum(weights))
         for rect, suite_id in zip(rects, suite_ids):
             if suite_id is not None:
@@ -862,8 +975,24 @@ def _layout_private_zone(
         # - hallway is a vertical strip along that left edge, rooms stack
         # vertically (packed along y) to its right.
         hallway_rect = {"name": "Hallway", "x": x, "y": y, "w": hallway_width, "h": h}
+        row_x, row_y, row_w, row_h = x + hallway_width, y, w - hallway_width, h
+        stair_rect = None
+        if stair_name is not None:
+            # Real staircase carve-out (see module docstring) - flush
+            # against the hallway's near end (the row's start) and spanning
+            # the row's FULL cross-dimension, same convention every other
+            # packed room in this row already uses (a narrow along-axis
+            # width x the row's full depth) - using the staircase's own
+            # real narrow-run width (room_specs.staircase_dimensions()'s
+            # first value, ~1.2m/~3.9ft) as that along-axis span, capped so
+            # a tiny private box never has the staircase eat more than half
+            # the remaining row.
+            stair_width, _ = staircase_dimensions(unit)
+            stair_span = min(stair_width, row_h * 0.5)
+            stair_rect = {"name": stair_name, "x": row_x, "y": row_y, "w": row_w, "h": stair_span}
+            row_y, row_h = row_y + stair_span, row_h - stair_span
         room_rects = _pack_row(
-            names, weights, x + hallway_width, y, w - hallway_width, h, total_weight,
+            names, weights, row_x, row_y, row_w, row_h, total_weight,
             along_width=False, suite_ids=suite_ids,
         )
     else:
@@ -871,12 +1000,26 @@ def _layout_private_zone(
         # hallway is a horizontal strip along that top edge, rooms line up
         # horizontally (packed along x) below it.
         hallway_rect = {"name": "Hallway", "x": x, "y": y, "w": w, "h": hallway_width}
+        row_x, row_y, row_w, row_h = x, y + hallway_width, w, h - hallway_width
+        stair_rect = None
+        if stair_name is not None:
+            # Same convention as the split_along_width branch above (see its
+            # comment) - the staircase's own real narrow-run width as the
+            # along-axis span, the row's full cross-dimension (row_h) kept,
+            # same as every sibling room packed in this row.
+            stair_width, _ = staircase_dimensions(unit)
+            stair_span = min(stair_width, row_w * 0.5)
+            stair_rect = {"name": stair_name, "x": row_x, "y": row_y, "w": stair_span, "h": row_h}
+            row_x, row_w = row_x + stair_span, row_w - stair_span
         room_rects = _pack_row(
-            names, weights, x, y + hallway_width, w, h - hallway_width, total_weight,
+            names, weights, row_x, row_y, row_w, row_h, total_weight,
             along_width=True, suite_ids=suite_ids,
         )
 
-    return [hallway_rect] + room_rects
+    result = [hallway_rect] + room_rects
+    if stair_rect is not None:
+        result = [stair_rect] + result
+    return result
 
 
 def _pack_row(

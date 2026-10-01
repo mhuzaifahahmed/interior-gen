@@ -2368,6 +2368,94 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     the direct, most likely explanation for "no stairs" showing up in the real render. This is NOT
     something v20's two fixes above touch (Staircase was already pinned/bounded before this pass) and was
     NOT included in this pass's scope - flagged for a follow-up, not silently fixed.
+- **v21 (2026-09-29): the staircase follow-up - real shape, connects to the hallway, plus a THIRD real bug
+  found in the same pass - the front door/entrance was being drawn on EVERY floor, not just the ground
+  floor.** Direct continuation of v20's flagged "no stairs" follow-up, triggered by the user's own precise
+  report: "why is there no staircase when it is 2 floors... the staircase should connect hallways... no
+  entrance on 2nd floor."
+  - **Root cause #1 (no staircase), confirmed by reading `floor_layout.py` directly, not just reproducing
+    the symptom**: the staircase (circulation zone) was grouped into the PUBLIC-zone split (`front_names`)
+    purely because the old `private_start` search only looked for zone==2 (private) - a staircase (zone 1)
+    always landed in "everything before that," alongside garage/living/kitchen. On a typical UPPER floor
+    with no public rooms at all (just bedrooms/bathrooms + the staircase), this made the staircase become
+    the ENTIRE "front" box on its own - the front/back split then used the staircase's own tiny weight as
+    `front_fraction`, producing a degenerate full-width, near-zero-depth sliver (confirmed: 60ft wide x
+    0.58ft deep on a real 60x80ft test case) - almost certainly too thin for `blueprint_svg.py`'s
+    `_FURNITURE_MIN_BOX_H` gate to draw the stair symbol at all. On the GROUND floor (which does have
+    public rooms), the staircase instead became one more item inside the public zone's own weighted
+    `_slice()` call, landing somewhere architecturally arbitrary (next to the garage/living room, not the
+    hallway it's supposed to connect to) with no shape guarantee either.
+  - **Fix, two parts** (`app/pipeline/floor_layout.py`):
+    1. `_layout_floor_core()`'s top-level split now groups circulation (staircase) WITH private, not with
+       public - `back_start` (renamed from `private_start`) is the first room whose zone is 1 OR 2, so the
+       staircase always ends up in the same "back" region as the bedrooms/hallway it actually serves. When
+       a floor has NO public rooms at all AND has a staircase (the typical upper-floor case), the ENTIRE
+       box now routes through `_layout_private_zone()` (previously fell through to the flat, hallway-less
+       `_slice_reserving_garage()` path) so it still gets a real hallway + staircase carve-out. Scoped
+       narrowly to floors that actually HAVE a staircase - a floor with no public rooms and no staircase
+       either (e.g. a single open studio) keeps the original flat behavior unchanged, verified by
+       `test_layout_floor_no_staircase_and_no_public_rooms_unaffected`.
+    2. `_layout_private_zone()` now extracts any staircase room BEFORE suite arranging/packing and, when a
+       real hallway corridor is built, carves it a REAL rectangle (`room_specs.staircase_dimensions()`,
+       same "give it real dims, don't just reserve an area" precedent `garage_dimensions()` already
+       established) flush against the hallway's own near end, spanning the row's FULL cross-dimension with
+       its own real narrow-run width (~1.2m/~3.9ft) as the along-corridor span - same convention every
+       other packed room in that row already uses (full depth x a narrow along-axis width), so the
+       staircase reads as a normal, visible room rather than a special case. **Real bug caught and fixed
+       mid-implementation**: the first version sized the staircase using its real along-corridor DEPTH
+       (~2.7m/~8.9ft) as the span while ALSO giving it the row's full cross-dimension - on a 71ft-deep
+       private zone that produced an 8.9ft x 71ft rectangle (634 sq ft, comically oversized), not the
+       intended small stairwell; fixed by using the staircase's narrow WIDTH dimension for the along-axis
+       span instead, matching how every sibling room (e.g. a 3.6ft-wide bathroom spanning the same 71ft
+       depth) is already packed. When no corridor is built (a small private zone), the staircase rejoins
+       the plain weighted room list as an ordinary pinned room - shape not specially guaranteed in that
+       lower-priority small-zone case.
+    3. **A second, independent gap found while verifying fix #2**: even with the staircase carve-out
+       working, a ground floor whose ONLY "back"-zone room is the staircase (no bedrooms on the ground
+       floor - a common real layout) still got squeezed to near-zero depth, because the top-level public-
+       vs-back FRACTION is purely weight-ratio-based, and public rooms can legitimately claim almost the
+       entire plot's weight/target area, leaving the staircase's own tiny pinned weight nothing to work
+       with. Fixed with a MINIMUM BACK-ZONE DEPTH FLOOR - `front_fraction` is now clamped so the back zone
+       always gets at least `MIN_ROW_DEPTH_M` (2m/~6.56ft) of real depth, the same "a weight only ever
+       controls EXTRA space beyond a guaranteed usable minimum" principle the existing per-room
+       MINIMUM-AREA GUARANTEE already applies one level down.
+    4. `blueprint_svg.py` gained a staircase-specific furniture-render threshold
+       (`_STAIRCASE_MIN_BOX_W`/`_H`, 30x30px, same precedent as the existing `_GARAGE_MIN_BOX_W`/`_H`) -
+       even with a correctly-shaped real rectangle, the staircase's own narrow ~3.9ft dimension can still
+       scale down under the GENERAL `_FURNITURE_MIN_BOX_W` (70px) on a large plot, same category of problem
+       the garage fix already solved once.
+  - **Root cause #2 (entrance on every floor), found while re-verifying the whole fix end-to-end**:
+    `_front_door_opening()` (the function that decides where the front-door gap goes) is floor-agnostic by
+    design - it only looks at a floor's own rects/facing - but NONE of its three call sites
+    (`blueprint_svg.render_floor_blueprint()`, `blueprint_dxf.render_floor_blueprint_dxf()`,
+    `conditioning_image.render_conditioning_edge_map()`, plus `kaggle_autocad.py`'s `_door_specs_for_floor()`
+    for the AI Concept Layout's door overlay) ever gated it by `floor_number` - so an "ENTRANCE" opening
+    was being cut on EVERY floor of a multi-storey building, including upper floors that have no real
+    exterior walk-in door at all. Fixed by gating all four call sites on `floor_number == 1` (the
+    `render_conditioning_edge_map()` signature gained a new `floor_number: int = 1` param, defaulting to
+    "ground floor" so an existing caller that doesn't pass it keeps its prior behavior unchanged;
+    `kaggle_autocad.py` threads the real per-floor value through from its own `for floor_number in
+    ordered_floors` loop, which already had the value available).
+  - **Honestly still NOT fully solved**: exact PIXEL alignment of the hallway/staircase across floors
+    (e.g. floor 1's stair landing exactly under floor 2's) isn't guaranteed - the ground floor's "back" box
+    legitimately starts at a different y-position than an upper floor's, since the ground floor reserves
+    real area for public rooms before the back zone begins and an upper floor with no public rooms has no
+    such offset. A true stacking-aware algorithm is a genuinely harder problem, already tracked in the
+    module docstring's "plumbing-zone vertical stacking across floors" line. What THIS pass fixes: the
+    staircase is now always a real, usable, correctly-shaped room that visibly connects to its OWN floor's
+    hallway (the user's "keep it practical" framing), instead of an invisible sliver in an architecturally
+    arbitrary spot.
+  - **Verification**: visually rendered and inspected a real 2-floor 60x80ft house end-to-end (not just
+    unit-tested, this project's own standing rule for layout-engine changes) - ground floor shows a real,
+    labeled Staircase room with doors to Dining/Kitchen and a correctly-placed south-facing "ENTRANCE"; the
+    upper floor shows the staircase as a clean vertical strip directly connected (shared door) to the real
+    hallway, with a "DN" arrow (top floor) and correctly NO entrance drawn anywhere on that floor. Also
+    confirmed a single-storey house (no staircase at all) renders byte-for-byte as before this change.
+    New tests: `tests/test_floor_layout.py` (sliver-no-longer-degenerate, staircase-connects-to-hallway,
+    ground-floor-staircase-alone-not-squeezed, exact-tiling across all 4 facings, no-staircase-floor
+    unaffected - 5 new), `tests/test_blueprint_dxf.py::test_render_floor_blueprint_dxf_no_entrance_on_an_upper_floor`,
+    `tests/test_conditioning_image.py::test_render_conditioning_edge_map_no_entrance_gap_on_an_upper_floor`.
+    756/756 tests passing (7 new).
 
 ## Subscription plans, quotas, admin panel, and payments
 

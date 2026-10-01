@@ -108,3 +108,20 @@ def test_render_conditioning_edge_map_different_facings_produce_different_gaps()
     north_png = render_conditioning_edge_map(north_rects, dimensions, facing="north")
     south_png = render_conditioning_edge_map(south_rects, dimensions, facing="south")
     assert north_png != south_png
+
+
+def test_render_conditioning_edge_map_no_entrance_gap_on_an_upper_floor():
+    # Real, live-reported bug (2026-09-29): the front-door gap used to be
+    # cut on every floor's boundary regardless of floor_number - an upper
+    # floor has no real exterior walk-in door, so the AI Concept Layout
+    # model shouldn't be conditioned to trace one there either.
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    rects = layout_floor(
+        [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}], dimensions, facing="north"
+    )
+    ground_floor = render_conditioning_edge_map(rects, dimensions, facing="north", floor_number=1)
+    upper_floor = render_conditioning_edge_map(rects, dimensions, facing="north", floor_number=2)
+    closed_boundary = render_conditioning_edge_map(rects, dimensions)
+
+    assert ground_floor != closed_boundary
+    assert upper_floor == closed_boundary

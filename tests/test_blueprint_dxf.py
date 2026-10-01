@@ -240,6 +240,32 @@ def test_render_floor_blueprint_dxf_front_entrance_moves_with_facing():
     assert len(south_front_doors) >= 1
 
 
+def test_render_floor_blueprint_dxf_no_entrance_on_an_upper_floor():
+    # Real, live-reported bug (2026-09-29): the front-door gap used to be
+    # drawn on EVERY floor regardless of floor_number, so a 2-floor building
+    # showed an "entrance" on the upper floor too - which doesn't exist in
+    # reality (only the ground floor has a real exterior walk-in door).
+    dimensions = {"length": 40, "width": 60, "unit": "ft"}
+    rooms = [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]
+    rects = layout_floor(rooms, dimensions, facing="north")
+
+    ground_floor = _parse(render_floor_blueprint_dxf(1, rects, dimensions, facing="north"))
+    upper_floor = _parse(render_floor_blueprint_dxf(2, rects, dimensions, facing="north"))
+
+    ground_front_doors = [
+        a
+        for a in ground_floor.modelspace().query("ARC")
+        if a.dxf.layer == "DOORS" and round(a.dxf.center.y, 3) == 0.0
+    ]
+    upper_front_doors = [
+        a
+        for a in upper_floor.modelspace().query("ARC")
+        if a.dxf.layer == "DOORS" and round(a.dxf.center.y, 3) == 0.0
+    ]
+    assert len(ground_front_doors) >= 1
+    assert len(upper_front_doors) == 0
+
+
 def test_render_floor_blueprint_dxf_still_valid_with_facing():
     dimensions = {"length": 40, "width": 60, "unit": "ft"}
     rects = layout_floor([{"name": "Living Room", "area": 1}], dimensions, facing="west")
