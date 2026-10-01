@@ -2532,6 +2532,41 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     a spy confirming `extra_rooms` actually reaches `generate_room_layout()`),
     `tests/test_floor_layout.py::test_layout_floor_staircase_stays_visible_on_a_large_plot`. 768/768 tests
     passing (12 new).
+- **v23 (2026-09-30), same day, direct follow-up: a guaranteed lounge on every upper floor, plus
+  confirming two rules the user explicitly asked to double-check are still real guarantees.** User's
+  follow-up: "we do need some rules no? for example no garage on 2nd floor. and no entrance from the
+  outside on the second floor... and yes i want a lounge area to be on the floors above the first one."
+  - **Confirmed, no code change needed (already real, already tested)**: a garage is still unconditionally
+    forbidden above the ground floor - `ROOM_LAYOUT_PROMPT_TEMPLATE`'s v22 softening only relaxed the
+    kitchen/dining/living half of that rule for an explicit user override; the garage half stayed absolute
+    (`test_room_layout_prompt_allows_an_explicit_user_override_for_kitchen_placement` asserts the exact
+    "NEVER place a garage on any floor above the ground floor" wording survived). The front entrance is
+    still only ever drawn on the ground floor (v21's `floor_number == 1` gate across all three renderers +
+    the Concept Layout door payload - `test_render_floor_blueprint_dxf_no_entrance_on_an_upper_floor`/
+    `test_render_conditioning_edge_map_no_entrance_gap_on_an_upper_floor` guard this).
+  - **New: `app/pipeline/generate_house.py`'s `_ensure_upper_floor_lounge(room_layout)`** - every floor
+    with `floor_number > 1` is guaranteed a real living-category room (labeled "Lounge" - distinct from the
+    ground floor's "Living Room" label, though both classify identically via `classify_room_category()`).
+    Same unconditional-guarantee treatment as `_ensure_ground_floor_public_rooms()`'s own handling of
+    Living/Kitchen/Dining on the ground floor - the OLD prompt wording only said upper floors could
+    "optionally" hold a lounge, which is exactly the probabilistic-LLM-judgement problem v22 already fixed
+    for kitchen/dining; this makes it a real, deterministic guarantee instead. A no-op when a lounge
+    already exists on that floor (via Gemini's own response or an explicit `extra_rooms` request) - never
+    duplicates. `ROOM_LAYOUT_PROMPT_TEMPLATE`'s upper-floor line updated from "optionally a study or family
+    lounge" to "MUST ALSO include a lounge/family sitting area - this is required... not optional" (defense
+    in depth, same pattern as every other guarantee in this file - the prompt fix narrows what the
+    deterministic backstop has to correct, it's never trusted alone). Called in `run_house_pipeline()`
+    right after `_ensure_ground_floor_public_rooms()`, before the explicit-extra-rooms backstop.
+  - **Verification**: rendered and visually inspected a real 2-floor house (`FakeProvider` subclass whose
+    floor 2 response has only a bedroom+bathroom, no lounge at all) - floor 2 shows a real, labeled
+    "LOUNGE" room (2885 sq ft on a 60x80ft plot), correctly connected via the hallway/staircase, furniture
+    symbol correctly suppressed only because its door sits on the same wall `_furnish_living()`'s sofa
+    would otherwise anchor to (pre-existing door-avoidance behavior, not a new bug). New tests:
+    `tests/test_house_pipeline.py` (`_ensure_upper_floor_lounge()` unit tests - adds-to-every-upper-floor/
+    never-touches-ground-floor/noop-when-present/noop-for-single-storey, plus an end-to-end pipeline
+    guarantee test). 773/773 tests passing (5 new) - full-suite run also hit one already-documented,
+    unrelated SQLite-lock-contention flake (`test_house_api_exposes_one_floor_plan_url_per_floor`,
+    confirmed to pass cleanly in isolation and on a clean full-suite rerun).
 
 ## Subscription plans, quotas, admin panel, and payments
 

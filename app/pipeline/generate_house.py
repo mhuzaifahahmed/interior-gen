@@ -195,6 +195,34 @@ def _ensure_requested_rooms_by_floor(room_layout: dict, extra_rooms: list[tuple[
             rooms.append({"name": label, "area": avg_weight})
 
 
+# Guaranteed upper-floor lounge (2026-09-30, explicit user request, direct
+# follow-up to the two fixes above: "i want a lounge area to be on the
+# floors above the first one"). ROOM_LAYOUT_PROMPT_TEMPLATE already
+# mentioned a lounge as something upper floors could "optionally" hold -
+# optional is exactly the problem, same probabilistic-LLM-judgement issue
+# _ensure_requested_rooms_by_floor() above exists to avoid. This makes it a
+# real, unconditional guarantee instead, mirroring
+# _ensure_ground_floor_public_rooms()'s own unconditional treatment of
+# Living/Kitchen/Dining on the ground floor - every upper floor gets a real
+# lounge regardless of whether the user's own text happened to ask for one.
+def _ensure_upper_floor_lounge(room_layout: dict) -> None:
+    """Guarantees every floor with floor_number > 1 contains a real
+    living-category room (labeled "Lounge" - distinct from the ground
+    floor's "Living Room" label, though both classify identically via
+    classify_room_category()) - mutates room_layout["floors"] in place. A
+    no-op for a floor that already has one (via Gemini's own response, an
+    explicit extra_rooms request, etc.) - never duplicates. A single-storey
+    building (no floor_number > 1 at all) is entirely unaffected."""
+    for floor in room_layout.get("floors") or []:
+        if (floor.get("floor_number") or 1) <= 1:
+            continue
+        rooms = floor.setdefault("rooms", [])
+        has_lounge = any(classify_room_category(str(r.get("name") or "")) == "living" for r in rooms)
+        if not has_lounge:
+            avg_weight = sum(float(r.get("area") or 1) for r in rooms) / len(rooms) if rooms else 1.0
+            rooms.append({"name": "Lounge", "area": avg_weight})
+
+
 # v3: enriched photoreal prompt vocabulary, floor-count hard constraint, a
 # researched negative-prompt block.
 # v4: removed the second, blueprint-sourced 3D isometric render; briefly
@@ -623,6 +651,11 @@ def run_house_pipeline(
                 # room_specs.ROOM_MAX_MULTIPLIER["default"] no longer being
                 # unbounded.
                 _ensure_ground_floor_public_rooms(room_layout)
+
+                # Deterministic upper-floor lounge guarantee (2026-09-30,
+                # explicit user request) - see _ensure_upper_floor_lounge()'s
+                # own docstring.
+                _ensure_upper_floor_lounge(room_layout)
 
                 # Deterministic backstop for the explicit per-floor room
                 # requests parsed above - see _ensure_requested_rooms_by_

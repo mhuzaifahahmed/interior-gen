@@ -1503,6 +1503,94 @@ def test_ensure_ground_floor_public_rooms_noop_for_empty_floors():
     assert room_layout == {"floors": []}
 
 
+# ---- _ensure_upper_floor_lounge() - explicit user request (2026-09-30):  ----
+# ---- "i want a lounge area to be on the floors above the first one"     ----
+
+
+def test_ensure_upper_floor_lounge_adds_a_lounge_to_every_upper_floor():
+    room_layout = {
+        "floors": [
+            {"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}]},
+            {"floor_number": 2, "rooms": [{"name": "Bedroom 1", "area": 2}]},
+            {"floor_number": 3, "rooms": [{"name": "Bedroom 2", "area": 2}]},
+        ]
+    }
+    generate_house_module._ensure_upper_floor_lounge(room_layout)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    for floor in room_layout["floors"][1:]:
+        categories = {classify_room_category(r["name"]) for r in floor["rooms"]}
+        assert "living" in categories
+
+
+def test_ensure_upper_floor_lounge_never_touches_the_ground_floor():
+    room_layout = {
+        "floors": [
+            {"floor_number": 1, "rooms": [{"name": "Bedroom 1", "area": 2}]},
+            {"floor_number": 2, "rooms": [{"name": "Bedroom 2", "area": 2}]},
+        ]
+    }
+    generate_house_module._ensure_upper_floor_lounge(room_layout)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    ground_categories = {classify_room_category(r["name"]) for r in room_layout["floors"][0]["rooms"]}
+    assert "living" not in ground_categories
+
+
+def test_ensure_upper_floor_lounge_is_noop_when_already_present():
+    room_layout = {
+        "floors": [
+            {"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}]},
+            {"floor_number": 2, "rooms": [{"name": "Family Lounge", "area": 1.5}, {"name": "Bedroom 1", "area": 2}]},
+        ]
+    }
+    before = json.loads(json.dumps(room_layout))
+    generate_house_module._ensure_upper_floor_lounge(room_layout)
+    assert room_layout == before
+
+
+def test_ensure_upper_floor_lounge_noop_for_single_storey():
+    room_layout = {"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}]}]}
+    before = json.loads(json.dumps(room_layout))
+    generate_house_module._ensure_upper_floor_lounge(room_layout)
+    assert room_layout == before
+
+
+def test_run_house_pipeline_guarantees_a_lounge_on_every_upper_floor(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hlounge1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hlounge1", status="queued", plot_image_key="hlounge1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = IgnoresExtraRoomRequestProvider()  # floor 2: just bedroom + bathroom, no lounge
+    run_house_pipeline(
+        "hlounge1",
+        provider,
+        storage,
+        {"length": 60, "width": 80, "unit": "ft"},
+        prompt="2 floors",
+        floor_count=2,
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hlounge1")
+        assert house_project.status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    floor2_rooms = room_layout["floors"][1]["rooms"]
+    assert any(classify_room_category(r["name"]) == "living" for r in floor2_rooms)
+
+
 class HallwayDominatedProvider(FakeProvider):
     """Reproduces the real, live-reported bug (2026-09-29): a ground floor
     whose room list is almost entirely a generic, unrecognized "Hallway"
