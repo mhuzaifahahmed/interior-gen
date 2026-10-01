@@ -31,7 +31,14 @@ class FakeProvider:
         return self._floor_plan_images
 
     def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
@@ -375,7 +382,14 @@ def test_run_house_pipeline_stops_when_cancelled_before_render(monkeypatch):
 
     class CancellingProvider(FakeProvider):
         def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
             with Session(engine) as cancel_session:
                 hp = cancel_session.get(HouseProject, "hcancel2")
@@ -457,7 +471,14 @@ def test_run_house_pipeline_passes_room_layout_into_generate_floor_plan(monkeypa
 
     class OrderTrackingProvider(FakeProvider):
         def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
             call_order.append("room_layout")
             return super().generate_room_layout(dimensions, prompt, plot_description, floor_count)
@@ -493,7 +514,14 @@ def test_run_house_pipeline_falls_back_to_plot_photo_when_blueprint_generation_f
 
     class FailingRoomLayoutProvider(FakeProvider):
         def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
             raise RuntimeError("Gemini quota exceeded")
 
@@ -569,7 +597,14 @@ def test_run_house_pipeline_renders_elevation_without_a_photo_for_text_to_image_
             return False
 
         def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
             self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
             # Two floors, so the resolved story count handed to
@@ -819,7 +854,14 @@ class ManyRoomsProvider(FakeProvider):
     the feasibility hard gate (2026-08-27)."""
 
     def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
         rooms = [
             {"name": "Bedroom 1", "area": 1},
@@ -941,7 +983,14 @@ class GeminiAddsUnrequestedGarageProvider(FakeProvider):
     full-depth strip that cramped every other room)."""
 
     def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
@@ -1025,7 +1074,14 @@ class GeminiAddsUnrequestedUtilityProvider(FakeProvider):
     above - used to verify an unrequested utility/laundry room is stripped."""
 
     def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
@@ -1078,7 +1134,14 @@ class TwoFloorProvider(FakeProvider):
     (2026-08-29)."""
 
     def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
@@ -1244,7 +1307,14 @@ class DeficientFloorProvider(FakeProvider):
     bathrooms at all, despite the user asking for 3 bedrooms/2 bathrooms."""
 
     def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
@@ -1311,7 +1381,14 @@ class SurplusBedroomProvider(FakeProvider):
     verifies _enforce_room_counts() trims surplus, not just pads shortfalls."""
 
     def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
@@ -1436,7 +1513,14 @@ class HallwayDominatedProvider(FakeProvider):
     redistribution."""
 
     def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
         self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
         return {
@@ -1504,6 +1588,113 @@ def test_run_house_pipeline_guarantees_living_kitchen_dining_and_caps_the_hallwa
     rects = layout_floor(rooms, {"length": 50, "width": 40, "unit": "ft"})
     hallway_total_area = sum(r["w"] * r["h"] for r in rects if classify_room_category(r["name"]) == "default")
     assert hallway_total_area < hallway_cap * 2.5
+
+
+# ---- Explicit per-floor room requests (2026-09-30) - real user complaint:  ----
+# ---- "you are hardcoding everything... make it not hallucinate when I     ----
+# ---- tell it to add a kitchen on 2nd floor or a dining room on 3rd floor" ----
+
+
+class IgnoresExtraRoomRequestProvider(FakeProvider):
+    """Simulates Gemini NOT honoring the user's explicit per-floor request -
+    floor 2 comes back with only bedrooms/bathrooms, no Kitchen at all,
+    despite the user's prompt asking for one there. This is the realistic
+    failure mode this feature protects against (the LLM call is inherently
+    probabilistic) - the deterministic backstop must still guarantee it."""
+
+    def generate_room_layout(
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
+    ):
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+        return {
+            "floors": [
+                {"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}]},
+                {
+                    "floor_number": 2,
+                    "rooms": [{"name": "Bedroom 1", "area": 2}, {"name": "Bathroom 1", "area": 1}],
+                },
+            ]
+        }
+
+
+def test_run_house_pipeline_guarantees_an_explicit_kitchen_on_floor_2(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hextraroom1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hextraroom1", status="queued", plot_image_key="hextraroom1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = IgnoresExtraRoomRequestProvider()
+    run_house_pipeline(
+        "hextraroom1",
+        provider,
+        storage,
+        {"length": 60, "width": 80, "unit": "ft"},
+        prompt="2 floors. Extras: kitchen on the 2nd floor",
+        floor_count=2,
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hextraroom1")
+        assert house_project.status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    floor2_rooms = room_layout["floors"][1]["rooms"]
+    assert any(classify_room_category(r["name"]) == "kitchen" for r in floor2_rooms)
+
+
+def test_run_house_pipeline_passes_extra_rooms_to_generate_room_layout(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hextraroom2/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hextraroom2", status="queued", plot_image_key="hextraroom2/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    captured = []
+    real_fake = FakeProvider()
+
+    def spy_generate_room_layout(
+        dimensions, prompt, plot_description=None, floor_count=None,
+        floor_bedrooms=None, floor_bathrooms=None, extra_rooms=None,
+    ):
+        captured.append(extra_rooms)
+        return real_fake.generate_room_layout(
+            dimensions, prompt, plot_description, floor_count, floor_bedrooms, floor_bathrooms, extra_rooms
+        )
+
+    provider = FakeProvider()
+    provider.generate_room_layout = spy_generate_room_layout
+
+    run_house_pipeline(
+        "hextraroom2",
+        provider,
+        storage,
+        {"length": 60, "width": 80, "unit": "ft"},
+        prompt="2 floors. Extras: dining room on floor 2",
+        floor_count=2,
+    )
+
+    assert captured
+    assert ("dining", "Dining Room", 2) in captured[0]
 
 
 def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):

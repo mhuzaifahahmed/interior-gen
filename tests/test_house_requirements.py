@@ -3,6 +3,7 @@ from app.pipeline.house_requirements import (
     mentions_front_yard,
     mentions_garage,
     mentions_utility,
+    parse_extra_rooms_by_floor,
     parse_front_yard_depth,
     parse_garage_cars,
 )
@@ -72,3 +73,58 @@ def test_parse_front_yard_depth_extracts_explicit_value_in_feet():
 def test_parse_front_yard_depth_extracts_explicit_value_with_unit_word():
     result = parse_front_yard_depth("Extras: front yard 5 meters", "m")
     assert abs(result - 5.0) < 1e-6
+
+
+# ---- parse_extra_rooms_by_floor() - real, confirmed user complaint: "you ----
+# ---- are hardcoding everything... make it not hallucinate when I tell it ----
+# ---- to add a kitchen on 2nd floor or a dining room on 3rd floor" (2026-09-30) ----
+
+
+def test_parse_extra_rooms_by_floor_finds_kitchen_on_an_upper_floor():
+    result = parse_extra_rooms_by_floor("Extras: kitchen on the 2nd floor")
+    assert ("kitchen", "Kitchen", 2) in result
+
+
+def test_parse_extra_rooms_by_floor_finds_dining_room_with_floor_n_phrasing():
+    result = parse_extra_rooms_by_floor("Extras: add a dining room on floor 3")
+    assert ("dining", "Dining Room", 3) in result
+
+
+def test_parse_extra_rooms_by_floor_finds_living_room_synonym_lounge():
+    result = parse_extra_rooms_by_floor("Extras: put a lounge on floor 2")
+    assert ("living", "Living Room", 2) in result
+
+
+def test_parse_extra_rooms_by_floor_finds_multiple_requests():
+    result = parse_extra_rooms_by_floor("Extras: kitchen on floor 2, dining room on floor 3")
+    assert ("kitchen", "Kitchen", 2) in result
+    assert ("dining", "Dining Room", 3) in result
+
+
+def test_parse_extra_rooms_by_floor_ignores_a_room_keyword_with_no_nearby_floor_reference():
+    # A plain "kitchen" mention with no floor number anywhere nearby is left
+    # to Gemini's own judgement, same as before this function existed - not
+    # every room mention is a per-floor placement request.
+    result = parse_extra_rooms_by_floor("Extras: modern kitchen, open layout")
+    assert result == []
+
+
+def test_parse_extra_rooms_by_floor_does_not_false_positive_on_floor_count_phrasing():
+    # "2 floors. Floor 1: 2 bedrooms..." (the composed requirements text's
+    # own standard phrasing) must never be mistaken for an extra-room
+    # request - bedroom/bathroom are deliberately NOT in the eligible
+    # category set (already fully owned by the per-floor count system).
+    text = "2 floors. Floor 1: 2 bedrooms, 2 bathrooms. Floor 2: 2 bedrooms, 2 bathrooms."
+    assert parse_extra_rooms_by_floor(text) == []
+
+
+def test_parse_extra_rooms_by_floor_returns_empty_for_empty_text():
+    assert parse_extra_rooms_by_floor("") == []
+    assert parse_extra_rooms_by_floor(None) == []
+
+
+def test_parse_extra_rooms_by_floor_deduplicates_and_sorts():
+    text = "Extras: kitchen on floor 2, a kitchen on the 2nd floor too, study on floor 1"
+    result = parse_extra_rooms_by_floor(text)
+    assert result.count(("kitchen", "Kitchen", 2)) == 1
+    assert result[0][2] <= result[-1][2]  # sorted by floor number

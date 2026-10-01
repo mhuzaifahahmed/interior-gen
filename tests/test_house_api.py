@@ -32,7 +32,14 @@ class FakeProvider:
         return None
 
     def generate_room_layout(
-        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
     ):
         return {"floors": [{"floor_number": 1, "rooms": [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]}]}
 

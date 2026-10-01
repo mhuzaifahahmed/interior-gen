@@ -2456,6 +2456,82 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     unaffected - 5 new), `tests/test_blueprint_dxf.py::test_render_floor_blueprint_dxf_no_entrance_on_an_upper_floor`,
     `tests/test_conditioning_image.py::test_render_conditioning_edge_map_no_entrance_gap_on_an_upper_floor`.
     756/756 tests passing (7 new).
+- **v22 (2026-09-30): two more real bugs found via a live generation on a large plot - staircase still
+  invisible at a different scale, and explicit "kitchen on 2nd floor"-style requests were being silently
+  overridden by a hardcoded prompt rule.** Both reported together: "no staircase and only 2 rooms and
+  bathrooms on 2nd floor? no lounge area... you are hard coding everything make the pipeline in a way that
+  it doesn't hallucinate when i tell it to add a kitchen on 2nd floor or a dining room on 3rd floor."
+  - **Bug 1 - staircase STILL invisible, but for a DIFFERENT reason than v21's sliver bug.** Reproduced
+    directly against the user's actual DB-stored project (150x90ft plot, 2 floors, 2 bed/2 bath each):
+    `room_layout_json` genuinely DID contain a real "Staircase" room (v21's injection worked), and
+    `layout_floor()` genuinely DID give it a correctly-shaped real rectangle (~3.9ft x 80ft, not a sliver) -
+    but at this project's render scale (`TARGET_PLOT_LONGEST_SIDE_PX=780` over a 150ft longest side,
+    ~5.2px/ft), that real-world-correct 3.9ft width rendered as only ~20px wide - below both the label-fit
+    threshold and v21's own `_STAIRCASE_MIN_BOX_W=30px` furniture gate, so it was visually indistinguishable
+    from nothing. This is the EXACT lesson this codebase already learned and documented for room labels
+    (`_fit_room_name()`) and the garage icon (`_GARAGE_MIN_BOX_W`/`_H`) - "whether a real-world size
+    overflows/disappears depends on the WHOLE PLOT's scale, not the room's real feet alone" - just not yet
+    applied to the staircase's CARVE-OUT span itself (v21 only fixed its real-world proportions, not its
+    on-screen size). Fixed with `floor_layout.py`'s new `_min_visible_staircase_span(unit,
+    plot_longest_side)` - the staircase's along-row carve-out span is now the LARGER of its real
+    `staircase_dimensions()` width and whatever real-world span renders as at least
+    `_STAIRCASE_MIN_VISIBLE_PX` (42px) at this specific plot's scale. `_RENDER_SCALE_REFERENCE_PX` (780,
+    must stay equal to `blueprint_svg.TARGET_PLOT_LONGEST_SIDE_PX`) is deliberately DUPLICATED rather than
+    imported - `blueprint_svg.py` already imports `_zone_key` from `floor_layout.py`, so importing the
+    other direction would create a circular import. `_layout_private_zone()` gained a `plot_longest_side`
+    param (threaded from both of `_layout_floor_core()`'s call sites) to make this scale-aware calculation
+    possible. Visually re-verified against the user's exact reported plot/room mix: the staircase is now
+    clearly visible (steps + DN arrow) on both floors, directly connected to each floor's hallway.
+  - **Bug 2 - the REAL root cause of "hallucinating" explicit room requests, confirmed by reading the
+    prompt text directly, not guessed.** `ROOM_LAYOUT_PROMPT_TEMPLATE` (`app/providers/gemini.py`) used to
+    flatly state "NEVER place a garage or a kitchen on any floor above the ground floor" - a hardcoded rule
+    with NO exception for an explicit user request, so asking for "kitchen on 2nd floor" was fighting the
+    model's own instructions, not just its probabilistic judgement. This is the user's "you are hardcoding
+    everything" complaint taken literally and correctly - confirmed true. Fixed two ways, the same "prompt
+    fix + deterministic backstop" pattern used throughout this file:
+    1. **Prompt fix**: the garage half of the rule stays absolute (a garage above ground floor is never
+       sensible, never user-overridable), but the kitchen/dining/living half now explicitly says the user's
+       own stated placement always wins over the general convention. A new `house_requirements.
+       parse_extra_rooms_by_floor(text)` deterministically parses "<room type> on/in floor N" (or "Nth
+       floor <room type>") requests from the free text - scoped to "amenity" room types a user might
+       reasonably ADD to a specific floor (kitchen/dining/living/study/laundry/closet), deliberately
+       EXCLUDING bedroom/bathroom (already fully owned by the existing per-floor COUNT system -
+       `_enforce_room_counts()`) and garage/staircase/foyer (already have their own more specific
+       deterministic handling - "garage on floor 2" isn't a supported, sensible request). Uses a
+       clause-based parse (splits text on `,`/`.`/`;`/"and" and requires the room keyword and a floor
+       reference in the SAME clause) rather than a sliding character window - a real bug caught via a
+       direct test: a naive character-distance window matched "dining room on floor 3" against the
+       WRONG, earlier "floor 2" from a preceding "kitchen on floor 2" clause, since that floor reference
+       was textually closer by raw character count despite belonging to a different clause entirely.
+       Threaded through the whole provider seam (`base.py`/`hybrid.py`/`gemini.py`'s `generate_room_layout()`,
+       new optional `extra_rooms` param, `None` default) and folded into the prompt via a new
+       `_format_extra_rooms_block()` (same pattern as the existing `_format_room_targets_block()` for
+       bedroom/bathroom counts) - `"- Floor 2 MUST also include a Kitchen."` as its own explicit,
+       structured instruction, not just hoping Gemini notices it buried in free text.
+    2. **The actual guarantee**: `generate_house.py`'s new `_ensure_requested_rooms_by_floor(room_layout,
+       extra_rooms)` - called right after the existing `_ensure_ground_floor_public_rooms()` - mutates the
+       room list to GUARANTEE each parsed (category, label, floor_number) tuple is genuinely present on its
+       requested floor, regardless of what Gemini's own response actually contains (same "deterministic
+       injection, don't trust an LLM's probabilistic judgement" pattern as every other guarantee in this
+       module - garage/entry/utility/staircase/ground-floor-public-rooms). A request naming a floor that
+       doesn't exist on the building (e.g. "kitchen on floor 5" on a 2-floor house) is silently skipped -
+       nothing to add it to. `_ensure_ground_floor_public_rooms()`'s own unconditional ground-floor
+       guarantee is UNCHANGED (every house still gets a ground-floor kitchen/living/dining by default) -
+       an explicit upper-floor request is purely ADDITIVE on top of that sensible default, not a
+       replacement for it.
+  - **Verification**: reproduced end-to-end with a fake provider that deliberately OMITS the requested
+    kitchen from floor 2's response (the realistic "LLM didn't honor it" failure mode) and confirmed the
+    persisted `room_layout_json` still has a real Kitchen on floor 2 regardless; also rendered and visually
+    inspected the actual blueprint PNG (floor 2 shows a labeled, correctly-sized Kitchen alongside the
+    bedrooms, with the staircase still correctly connected to the hallway). New tests:
+    `tests/test_house_requirements.py` (8 new - finds kitchen/dining/lounge-as-living on the stated floor,
+    multiple requests in one string, no-false-positive on plain room mentions with no floor nearby, no
+    false-positive on the composed "2 floors. Floor 1: 2 bedrooms..." phrasing, empty/dedup/sort cases),
+    `tests/test_gemini_house.py` (prompt no longer has the absolute kitchen ban, states the user-override
+    rule), `tests/test_house_pipeline.py` (end-to-end guarantee against a provider that omits the request,
+    a spy confirming `extra_rooms` actually reaches `generate_room_layout()`),
+    `tests/test_floor_layout.py::test_layout_floor_staircase_stays_visible_on_a_large_plot`. 768/768 tests
+    passing (12 new).
 
 ## Subscription plans, quotas, admin panel, and payments
 

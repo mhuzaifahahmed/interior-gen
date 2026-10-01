@@ -413,7 +413,8 @@ class HybridProvider(Provider):
         floor_count: int | None = None,
         floor_bedrooms: list[int] | None = None,
         floor_bathrooms: list[int] | None = None,
+        extra_rooms: list[tuple[str, str, int]] | None = None,
     ) -> dict:
         return self._gemini.generate_room_layout(
-            dimensions, prompt, plot_description, floor_count, floor_bedrooms, floor_bathrooms
+            dimensions, prompt, plot_description, floor_count, floor_bedrooms, floor_bathrooms, extra_rooms
         )

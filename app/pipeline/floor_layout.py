@@ -261,6 +261,32 @@ MIN_ROOMS_FOR_CORRIDOR = 3
 # own minimum, since the row holds a mix of room types).
 MIN_ROW_DEPTH_M = 2.0
 
+# Real, live-reported bug (2026-09-30): the staircase carve-out's along-row
+# span used ONLY its real-world narrow-run width (room_specs.
+# staircase_dimensions(), ~1.2m/~3.9ft) - correctly SHAPED in real feet, but
+# on a large plot (e.g. 150x90ft) that real width renders as only ~20px wide,
+# invisible in practice (no label fits, furniture symbol suppressed) even
+# though the room technically exists with the right real-world proportions.
+# This is the EXACT lesson this codebase already learned once for room-name
+# labels (`_fit_room_name()`/blueprint_svg.py's own docstring: "whether a
+# real-world room size overflows... depends on the WHOLE PLOT's scale... not
+# the room's real feet alone") - applied here too. `_RENDER_SCALE_REFERENCE_PX`
+# MUST be kept equal to blueprint_svg.TARGET_PLOT_LONGEST_SIDE_PX - duplicated
+# rather than imported to avoid a circular import (blueprint_svg.py already
+# imports `_zone_key` from this module).
+_RENDER_SCALE_REFERENCE_PX = 780
+_STAIRCASE_MIN_VISIBLE_PX = 42
+
+
+def _min_visible_staircase_span(unit: str, plot_longest_side: float) -> float:
+    """The real-world span (in the plot's unit) that renders as AT LEAST
+    _STAIRCASE_MIN_VISIBLE_PX pixels wide on this specific plot's scale -
+    the staircase's along-row carve-out span is the larger of this and its
+    own real staircase_dimensions() width, so it's always both real-world
+    plausible AND actually visible regardless of how large the plot is."""
+    scale = _RENDER_SCALE_REFERENCE_PX / max(plot_longest_side, 1.0)
+    return _STAIRCASE_MIN_VISIBLE_PX / scale if scale else 0.0
+
 MIN_WEIGHT = 0.01
 
 # Same category vocabulary as blueprint_svg.py's furniture dispatcher, reused
@@ -508,7 +534,10 @@ def _layout_floor_core(rooms: list[dict], dimensions: dict, garage_cars: int | N
         # a floor with no public rooms and no staircase either (e.g. a
         # single open studio) keeps the original flat, hallway-less
         # behavior unchanged (see the `back_start == len(names)` branch).
-        return _layout_private_zone(names, weights, 0.0, 0.0, length, width, unit, split_along_width=False)
+        return _layout_private_zone(
+            names, weights, 0.0, 0.0, length, width, unit, split_along_width=False,
+            plot_longest_side=max(length, width),
+        )
     if back_start == 0 or back_start == len(names):
         # No circulation/private rooms at all (a pure-public floor, or a
         # single-storey building with no staircase) - unchanged.
@@ -547,7 +576,9 @@ def _layout_floor_core(rooms: list[dict], dimensions: dict, garage_cars: int | N
     # suits that sub-region.
     front_box, back_box, split_along_width = _split_box_along_y(0.0, 0.0, length, width, front_fraction)
     front_rects = _slice_reserving_garage(front_names, front_weights, *front_box, front_total, unit, garage_cars)
-    back_rects = _layout_private_zone(back_names, back_weights, *back_box, unit, split_along_width)
+    back_rects = _layout_private_zone(
+        back_names, back_weights, *back_box, unit, split_along_width, plot_longest_side=max(length, width)
+    )
     return front_rects + back_rects
 
 
@@ -892,6 +923,7 @@ def _layout_private_zone(
     h: float,
     unit: str,
     split_along_width: bool,
+    plot_longest_side: float = 0.0,
 ) -> list[dict]:
     """Lays out the "back" (circulation + private) box - either with a real
     hallway corridor (see module docstring) when there's enough room count/
@@ -984,10 +1016,14 @@ def _layout_private_zone(
             # packed room in this row already uses (a narrow along-axis
             # width x the row's full depth) - using the staircase's own
             # real narrow-run width (room_specs.staircase_dimensions()'s
-            # first value, ~1.2m/~3.9ft) as that along-axis span, capped so
-            # a tiny private box never has the staircase eat more than half
-            # the remaining row.
+            # first value, ~1.2m/~3.9ft), OR enough span to stay visibly
+            # on-screen on a large plot (see _min_visible_staircase_span()'s
+            # docstring - a real 3.9ft width can render as just ~20px on a
+            # 150ft+ plot, invisible in practice), whichever is BIGGER -
+            # capped so a tiny private box never has the staircase eat more
+            # than half the remaining row.
             stair_width, _ = staircase_dimensions(unit)
+            stair_width = max(stair_width, _min_visible_staircase_span(unit, plot_longest_side))
             stair_span = min(stair_width, row_h * 0.5)
             stair_rect = {"name": stair_name, "x": row_x, "y": row_y, "w": row_w, "h": stair_span}
             row_y, row_h = row_y + stair_span, row_h - stair_span
@@ -1004,10 +1040,11 @@ def _layout_private_zone(
         stair_rect = None
         if stair_name is not None:
             # Same convention as the split_along_width branch above (see its
-            # comment) - the staircase's own real narrow-run width as the
-            # along-axis span, the row's full cross-dimension (row_h) kept,
-            # same as every sibling room packed in this row.
+            # comment, including the pixel-visibility floor) - the row's
+            # full cross-dimension (row_h) kept, same as every sibling room
+            # packed in this row.
             stair_width, _ = staircase_dimensions(unit)
+            stair_width = max(stair_width, _min_visible_staircase_span(unit, plot_longest_side))
             stair_span = min(stair_width, row_w * 0.5)
             stair_rect = {"name": stair_name, "x": row_x, "y": row_y, "w": stair_span, "h": row_h}
             row_x, row_w = row_x + stair_span, row_w - stair_span

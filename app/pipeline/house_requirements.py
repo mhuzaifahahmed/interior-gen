@@ -32,6 +32,8 @@ correct real-world orientation - see future-plans if that's ever needed.
 
 import re
 
+from app.pipeline.room_specs import _CATEGORY_KEYWORDS
+
 _GARAGE_RE = re.compile(r"garage", re.IGNORECASE)
 _UTILITY_RE = re.compile(r"utility|laundry", re.IGNORECASE)
 _GARAGE_CAR_COUNT_RE = re.compile(r"(\d+)[\s-]*(?:car|vehicle)s?\s*garage|garage\s*(?:for)?\s*(\d+)", re.IGNORECASE)
@@ -111,3 +113,76 @@ def parse_front_yard_depth(text: str, unit: str) -> float | None:
         return value
 
     return to_plot_unit(DEFAULT_FRONT_YARD_DEPTH_M, unit)
+
+
+# Real, explicit per-floor room requests (2026-09-30, real user report: "you
+# are hardcoding everything, make the pipeline... not hallucinate when I
+# tell it to add a kitchen on 2nd floor or a dining room on 3rd floor").
+# ROOM_LAYOUT_PROMPT_TEMPLATE (app/providers/gemini.py) has a strong
+# baked-in "ground floor = public rooms, upper floors = bedrooms only"
+# convention bias - it used to flatly say "NEVER place a garage or a
+# kitchen on any floor above the ground floor," which silently overrode
+# even an explicit user request, a real, confirmed source of "hallucinated
+# away" rooms, not a one-off fluke. Same "real data, never guess" reasoning
+# as mentions_garage()/parse_garage_cars() above, extended to arbitrary room
+# types on arbitrary floors - this is the ACTUAL fix for the hallucination
+# complaint: generate_house.py's _ensure_requested_rooms_by_floor()
+# deterministically GUARANTEES each parsed (category, floor) pair exists,
+# regardless of what Gemini's own response happened to include.
+#
+# Deliberately scoped to "amenity" room types a user might reasonably want
+# ADDED to a specific floor beyond the default set (kitchen/dining/living/
+# study/laundry/closet) - NOT bedroom/bathroom (already fully owned by the
+# per-floor bedroom/bathroom COUNT system - see generate_house.py's
+# _enforce_room_counts()) and NOT garage/staircase/foyer (already have their
+# own dedicated, more specific deterministic handling elsewhere - a
+# "garage on floor 2" request would be architecturally nonsensical and is
+# intentionally not supported here).
+_EXTRA_ROOM_CATEGORIES = {"kitchen", "dining", "living", "study", "laundry", "closet"}
+_EXTRA_ROOM_LABELS = {
+    "kitchen": "Kitchen",
+    "dining": "Dining Room",
+    "living": "Living Room",
+    "study": "Study",
+    "laundry": "Laundry Room",
+    "closet": "Closet",
+}
+_FLOOR_REF_RE = re.compile(r"floor\s*(\d+)|(\d+)\s*(?:st|nd|rd|th)\s*floor", re.IGNORECASE)
+# Splits free text into clauses at common separators (comma/period/
+# semicolon/"and") - a room keyword is paired with a floor reference only
+# when BOTH appear in the SAME clause. Clause-based, not a sliding character
+# window: a real gap found via a direct test showed a pure character-
+# distance window picking the WRONG floor for "kitchen on floor 2, dining
+# room on floor 3" (the "floor 2" sitting right before the comma was
+# textually closer to "dining" than "floor 3" was, despite "dining room on
+# floor 3" being the one clause that's actually about dining) - splitting on
+# the comma first avoids this entirely.
+_CLAUSE_SPLIT_RE = re.compile(r"[,.;]|\band\b", re.IGNORECASE)
+
+
+def parse_extra_rooms_by_floor(text: str) -> list[tuple[str, str, int]]:
+    """Scans free text for explicit "<room type> on/in floor N" (or "Nth
+    floor <room type>") requests - returns deduplicated
+    (category, canonical_label, floor_number) tuples, sorted by floor then
+    category. Best-effort free-text parsing, not full NLP - only acts on
+    requests phrased plainly enough that the room keyword and a floor
+    reference share the same comma/period-separated clause; a vaguer
+    request (no floor number in the same clause) is left to Gemini's own
+    judgement, same as before this function existed."""
+    if not text:
+        return []
+    results: set[tuple[str, str, int]] = set()
+    for clause in _CLAUSE_SPLIT_RE.split(text):
+        floor_match = _FLOOR_REF_RE.search(clause)
+        if not floor_match:
+            continue
+        floor_number = int(floor_match.group(1) or floor_match.group(2))
+        if floor_number <= 0:
+            continue
+        for category, keywords in _CATEGORY_KEYWORDS:
+            if category not in _EXTRA_ROOM_CATEGORIES:
+                continue
+            label = _EXTRA_ROOM_LABELS[category]
+            if any(re.search(r"\b" + re.escape(keyword) + r"\b", clause, re.IGNORECASE) for keyword in keywords):
+                results.add((category, label, floor_number))
+    return sorted(results, key=lambda r: (r[2], r[0]))

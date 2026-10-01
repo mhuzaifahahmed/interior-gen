@@ -148,13 +148,18 @@ ROOM_LAYOUT_PROMPT_TEMPLATE = (
     "addition to those public rooms.\n"
     "- UPPER FLOORS should hold bedrooms, an ensuite or shared bathroom, and optionally a "
     "study or family lounge.\n"
-    "- NEVER place a garage or a kitchen on any floor above the ground floor.\n"
+    "- NEVER place a garage on any floor above the ground floor. A kitchen, dining room, or "
+    "living room normally belongs on the ground floor too - UNLESS the user's requirements "
+    "explicitly ask for one on a specific upper floor (e.g. \"kitchen on the 2nd floor\"), in "
+    "which case honor that exact request - the user's explicit, stated placement always wins "
+    "over this general convention.\n"
     "- Any floor that has one or more bedrooms must include at least one bathroom on that "
     "same floor.\n"
     "- Never collapse a floor's rooms down to a single generic room (e.g. just a "
     "'Hallway') - a hallway/corridor, if one is warranted, is in ADDITION to that floor's "
     "real rooms (bedrooms, bathrooms, etc.), never a replacement for them.\n\n"
     "{room_targets_block}"
+    "{extra_rooms_block}"
     "For each room, also give a relative area weight (bigger rooms get bigger numbers - the "
     "exact scale doesn't matter, only the proportions between rooms on the same floor).\n\n"
     'Respond with ONLY raw JSON, no markdown fences, in this exact shape: '
@@ -200,6 +205,34 @@ def _format_room_targets_block(
     return (
         "REQUIRED per-floor bedroom/bathroom counts (these override the general "
         "ground/upper convention above wherever they conflict):\n" + "\n".join(lines) + "\n\n"
+    )
+
+
+def _format_extra_rooms_block(extra_rooms: list[tuple[str, str, int]] | None) -> str:
+    """Builds an explicit, per-floor block for real user requests like
+    "kitchen on the 2nd floor" or "dining room on floor 3" - parsed
+    deterministically by house_requirements.parse_extra_rooms_by_floor(),
+    not left to Gemini to notice inside the free-text prompt on its own.
+    Real, confirmed user complaint this exists to fix (2026-09-30): the
+    template's own ground-floor-only convention (see the rule above) was
+    silently overriding even an explicit request - this block states the
+    exact requested floor/room pairs plainly, as its own dedicated
+    instruction, the same "a structured, explicit instruction is more
+    reliable than hoping the model notices it buried in free text" pattern
+    _format_room_targets_block() already established for bedroom/bathroom
+    counts. Returns "" when nothing was parsed (the template's general
+    convention applies unchanged, same as before this function existed).
+    This is defense in depth, not the actual guarantee -
+    generate_house.py's _ensure_requested_rooms_by_floor() is the real
+    deterministic backstop that GUARANTEES the room exists regardless of
+    what Gemini's response actually contains."""
+    if not extra_rooms:
+        return ""
+    lines = [f"- Floor {floor_number} MUST also include a {label}." for _, label, floor_number in extra_rooms]
+    return (
+        "The user explicitly requested these additional rooms on specific floors - honor them "
+        "exactly, even where they conflict with the general ground/upper convention above:\n"
+        + "\n".join(lines) + "\n\n"
     )
 
 # Real, user-reported bug this exists to fix: an uploaded image that isn't
@@ -599,6 +632,7 @@ class GeminiProvider(Provider):
         floor_count: int | None = None,
         floor_bedrooms: list[int] | None = None,
         floor_bathrooms: list[int] | None = None,
+        extra_rooms: list[tuple[str, str, int]] | None = None,
     ) -> dict:
         """floor_count, when given, is a REAL explicit value (from the
         structured "Floors" dropdown - see app/main.py's create_house_project)
@@ -610,6 +644,17 @@ class GeminiProvider(Provider):
         deterministic backstop that actually guarantees the returned layout
         has exactly that many floors, regardless of what Gemini's own
         response contains.
+
+        extra_rooms (2026-09-30), when given, is house_requirements.
+        parse_extra_rooms_by_floor()'s real, parsed (category, label,
+        floor_number) list - explicit "kitchen on the 2nd floor"-style user
+        requests. Folded into the prompt via _format_extra_rooms_block(),
+        same "structured instruction beats hoping the model notices it in
+        free text" reasoning as floor_bedrooms/floor_bathrooms below - and,
+        same as those, only a prompt-level improvement; generate_house.py's
+        _ensure_requested_rooms_by_floor() is the real deterministic
+        backstop that guarantees the room exists regardless of this call's
+        actual output.
 
         floor_bedrooms/floor_bathrooms, when given, are the REAL per-floor
         counts from the "Bedrooms / floor" / "Bathrooms / floor" inputs (see
@@ -629,6 +674,7 @@ class GeminiProvider(Provider):
             context_block=context_block,
             prompt_text=prompt.strip() if prompt else "no specific requirements given",
             room_targets_block=_format_room_targets_block(floor_bedrooms, floor_bathrooms),
+            extra_rooms_block=_format_extra_rooms_block(extra_rooms),
         )
 
         explicit_floor_count = floor_count if floor_count is not None else _explicit_floor_count(prompt)

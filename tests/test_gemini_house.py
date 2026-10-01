@@ -313,9 +313,20 @@ def test_fallback_room_layout_ignores_per_floor_counts_when_not_given():
 def test_room_layout_prompt_names_the_floor_placement_rules():
     assert "GROUND FLOOR" in ROOM_LAYOUT_PROMPT_TEMPLATE
     assert "garage" in ROOM_LAYOUT_PROMPT_TEMPLATE.lower()
-    assert "NEVER place a garage or a kitchen" in ROOM_LAYOUT_PROMPT_TEMPLATE
+    assert "NEVER place a garage" in ROOM_LAYOUT_PROMPT_TEMPLATE
     assert "EXACTLY that many floors" in ROOM_LAYOUT_PROMPT_TEMPLATE
     assert "{room_targets_block}" in ROOM_LAYOUT_PROMPT_TEMPLATE
+    assert "{extra_rooms_block}" in ROOM_LAYOUT_PROMPT_TEMPLATE
+
+
+def test_room_layout_prompt_allows_an_explicit_user_override_for_kitchen_placement():
+    # 2026-09-30: the OLD wording ("NEVER place a garage or a kitchen on any
+    # floor above the ground floor") silently overrode even an explicit user
+    # request - real, confirmed complaint. The garage rule stays absolute
+    # (never user-overridable), but kitchen/dining/living must now say the
+    # user's explicit placement wins.
+    assert "NEVER place a garage on any floor above the ground floor" in ROOM_LAYOUT_PROMPT_TEMPLATE
+    assert "user's explicit, stated placement always wins" in ROOM_LAYOUT_PROMPT_TEMPLATE
 
 
 # ---- _format_room_targets_block() - real fix for a live-reproduced bug: a ----

@@ -20,6 +20,7 @@ from app.pipeline.house_prompts import (
 from app.pipeline.house_requirements import (
     mentions_garage,
     mentions_utility,
+    parse_extra_rooms_by_floor,
     parse_front_yard_depth,
     parse_garage_cars,
 )
@@ -151,6 +152,43 @@ def _ensure_ground_floor_public_rooms(room_layout: dict) -> None:
     ground_floor = next((f for f in floors if (f.get("floor_number") or 1) == 1), floors[0])
     rooms = ground_floor.setdefault("rooms", [])
     for category, label in _GUARANTEED_PUBLIC_ROOMS:
+        has_room = any(classify_room_category(str(r.get("name") or "")) == category for r in rooms)
+        if not has_room:
+            avg_weight = sum(float(r.get("area") or 1) for r in rooms) / len(rooms) if rooms else 1.0
+            rooms.append({"name": label, "area": avg_weight})
+
+
+# Explicit per-floor room requests (2026-09-30, real user report: "you are
+# hardcoding everything, make the pipeline... not hallucinate when I tell it
+# to add a kitchen on 2nd floor or a dining room on 3rd floor"). Root cause:
+# ROOM_LAYOUT_PROMPT_TEMPLATE (app/providers/gemini.py) used to flatly
+# forbid a kitchen above the ground floor - a real, confirmed source of the
+# "hallucination" complaint, not just bad luck - and even with that fixed,
+# a PROMPT instruction alone is still only ever probabilistic. This is the
+# actual guarantee: house_requirements.parse_extra_rooms_by_floor() already
+# deterministically parsed the user's exact (category, label, floor_number)
+# requests from their free text; this function makes sure each one is
+# genuinely present on its requested floor regardless of what Gemini's
+# response contains, same "deterministic injection, don't leave it to an
+# LLM's probabilistic judgement" pattern as every other guarantee in this
+# module (garage/entry/utility/staircase/ground-floor public rooms above).
+def _ensure_requested_rooms_by_floor(room_layout: dict, extra_rooms: list[tuple[str, str, int]]) -> None:
+    """Mutates room_layout["floors"] in place - for each (category, label,
+    floor_number) tuple, guarantees a room of that category exists on that
+    exact floor, appending one (same average-weight formula as every other
+    injection in this module) only when genuinely missing. A request naming
+    a floor number that doesn't exist on this building (e.g. "kitchen on
+    floor 5" on a 2-floor house) is silently skipped - there's no floor to
+    add it to, and this isn't the place to invent one. No-op when
+    extra_rooms is empty/None."""
+    if not extra_rooms:
+        return
+    floors_by_number = {f.get("floor_number"): f for f in room_layout.get("floors") or []}
+    for category, label, floor_number in extra_rooms:
+        floor = floors_by_number.get(floor_number)
+        if floor is None:
+            continue
+        rooms = floor.setdefault("rooms", [])
         has_room = any(classify_room_category(str(r.get("name") or "")) == category for r in rooms)
         if not has_room:
             avg_weight = sum(float(r.get("area") or 1) for r in rooms) / len(rooms) if rooms else 1.0
@@ -544,6 +582,16 @@ def run_house_pipeline(
             facing = (facing_input or "south").strip().lower()
             if facing not in ("north", "south", "east", "west"):
                 facing = "south"
+            # Explicit "kitchen on the 2nd floor"-style requests, parsed
+            # deterministically from the user's own free text BEFORE the
+            # Gemini call so it can be folded into the prompt as a real,
+            # structured instruction - see house_requirements.
+            # parse_extra_rooms_by_floor()'s own docstring for why this
+            # exists (a real, confirmed complaint that these requests were
+            # being silently overridden by the prompt's own ground-floor-
+            # only convention). _ensure_requested_rooms_by_floor() below is
+            # the actual guarantee; this is only the prompt-level half.
+            extra_rooms = parse_extra_rooms_by_floor(requirements_text)
             try:
                 room_layout = provider.generate_room_layout(
                     dimensions,
@@ -552,6 +600,7 @@ def run_house_pipeline(
                     floor_count,
                     floor_bedrooms=floor_bedrooms,
                     floor_bathrooms=floor_bathrooms,
+                    extra_rooms=extra_rooms,
                 )
                 total_floors = len(room_layout["floors"])
 
@@ -574,6 +623,12 @@ def run_house_pipeline(
                 # room_specs.ROOM_MAX_MULTIPLIER["default"] no longer being
                 # unbounded.
                 _ensure_ground_floor_public_rooms(room_layout)
+
+                # Deterministic backstop for the explicit per-floor room
+                # requests parsed above - see _ensure_requested_rooms_by_
+                # floor()'s own docstring. This is the ACTUAL "doesn't
+                # hallucinate" guarantee, not just the prompt wording above.
+                _ensure_requested_rooms_by_floor(room_layout, extra_rooms)
 
                 # Garage/front-yard requirements are parsed deterministically
                 # from the free-text requirements string, NOT trusted to

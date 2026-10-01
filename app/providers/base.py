@@ -299,6 +299,7 @@ class Provider(ABC):
         floor_count: int | None = None,
         floor_bedrooms: list[int] | None = None,
         floor_bathrooms: list[int] | None = None,
+        extra_rooms: list[tuple[str, str, int]] | None = None,
     ) -> dict:
         """Return a structured room list per floor for the free algorithmic
         blueprint step (app/pipeline/floor_layout.py + blueprint_svg.py) - NOT
@@ -326,6 +327,16 @@ class Provider(ABC):
         exactly these counts is enforced deterministically downstream in
         app/pipeline/generate_house.py's _enforce_room_counts(), not by this
         method. None means no explicit per-floor counts were given.
+
+        extra_rooms, when given, is house_requirements.parse_extra_rooms_by_
+        floor()'s real, parsed (category, label, floor_number) list - explicit
+        "kitchen on the 2nd floor"-style requests parsed from the user's own
+        free text. Implementations may use this to steer generation (e.g.
+        GeminiProvider folds it into the prompt), but the actual guarantee
+        that the room exists on that floor is enforced deterministically
+        downstream in app/pipeline/generate_house.py's
+        _ensure_requested_rooms_by_floor(), not by this method. None/empty
+        means no explicit per-floor room requests were parsed.
 
         Must NEVER leave a floor without at least one room and must NEVER
         raise - this is a harder guarantee than analyze_plot's "best effort,

@@ -847,6 +847,31 @@ def test_layout_floor_staircase_tiles_exactly_with_every_facing():
             assert r["y"] + r["h"] <= 80 + 1e-6
 
 
+def test_layout_floor_staircase_stays_visible_on_a_large_plot():
+    # Real, live-reported bug (2026-09-30): the staircase's real-world
+    # narrow-run width (~3.9ft) is correctly SHAPED but renders as only
+    # ~20px wide on a large plot (e.g. 150x90ft at this project's render
+    # scale) - invisible in practice even though the room technically
+    # exists. A plot-scale-aware minimum visible width fixes this the same
+    # way room labels/garage icons already handle this exact lesson
+    # elsewhere in this codebase.
+    rooms = [
+        {"name": "Bedroom 1", "area": 1.5},
+        {"name": "Bedroom 2", "area": 1.5},
+        {"name": "Bathroom 1", "area": 0.8},
+        {"name": "Bathroom 2", "area": 0.8},
+        {"name": "Staircase", "area": 1.0},
+    ]
+    dimensions = {"length": 150.0, "width": 90.0, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, facing="south")
+    stair = _stair_rect(rects)
+    # At this project's render scale (TARGET_PLOT_LONGEST_SIDE_PX=780 over a
+    # 150ft longest side, ~5.2px/ft), a width below ~8ft would render under
+    # the _STAIRCASE_MIN_VISIBLE_PX floor - well above the bare real-world
+    # minimum (~3.9ft) this would have been without the fix.
+    assert min(stair["w"], stair["h"]) > 7.0
+
+
 def test_layout_floor_no_staircase_and_no_public_rooms_unaffected():
     # Scoped correctly: a floor with no public rooms AND no staircase (e.g.
     # a single open studio with many generic rooms) must keep the original
