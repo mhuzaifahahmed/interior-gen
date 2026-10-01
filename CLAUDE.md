@@ -2317,6 +2317,57 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   - **Deferred to future-plans, per explicit user request**: a third "high-rise" input mode (pick only a
     floor count, e.g. 20 floors, with no per-floor bedroom editing at all) - parked as too complex for this
     pass.
+- **v20 (2026-09-29): a SECOND, separate real bug found immediately after v19 shipped - "Hallway" (or any
+  other unrecognized room name) could balloon to dominate an entire floor, squeezing/omitting real rooms.**
+  Live-reproduced via a real running project + downloaded S3 blueprint PNGs (not just reasoned about): a
+  floor whose room list included a generic room `classify_room_category()` doesn't recognize (most often
+  "Hallway" - neither "hallway" nor "corridor" is a registered keyword, so it falls to the catch-all
+  `"default"` category) could absorb nearly all of `layout_floor()`'s weight-based redistribution once
+  every OTHER (bounded) room on that floor hit its own `ROOM_MAX_MULTIPLIER` cap - ballooning the Hallway to
+  roughly the size of the whole floor while real rooms were squeezed into unusable slivers or crowded out
+  of the room list entirely. Root cause: `room_specs.py`'s `ROOM_MAX_MULTIPLIER["default"]` was `math.inf`
+  ("no real-world size exists to bound an unrecognized room against") - every OTHER category has a finite
+  cap, so an unrecognized name was the one category the redistribution pass could pour unlimited leftover
+  area into. Two-part deterministic fix, same "cap it, then also guarantee the real content exists" pattern
+  already used elsewhere in this pipeline:
+  1. **`ROOM_MAX_MULTIPLIER["default"]` changed from `math.inf` to `4.0`** (same multiplier `"living"`
+     uses - the single highest real-category cap) - an unrecognized room still has no genuine functional
+     footprint to bound it against precisely, but a generous-but-finite ceiling is strictly better than
+     unbounded. `tests/test_floor_layout.py::test_layout_floor_areas_are_roughly_proportional_to_weights`
+     had to be updated (not just left to fail) - on a generously large plot, two equally-weighted
+     unrecognized rooms now BOTH legitimately hit the same finite cap and land exactly equal (ratio 1.0),
+     which is the new correct behavior, not a regression; the test now uses a smaller, near-minimum plot so
+     the 3:1 weight still shows through without either room reaching its cap.
+  2. **`app/pipeline/generate_house.py`'s new `_ensure_ground_floor_public_rooms()`** guarantees the ground
+     floor contains a real Living Room, Kitchen, and Dining Room - called right after `_enforce_room_counts()`
+     (v19's bedroom/bathroom guarantee), same "deterministic injection, don't leave it to an LLM's
+     probabilistic judgement" pattern already used for garage/entry/utility/staircase just below it in the
+     same function. Unlike those, injected **unconditionally** (not gated behind a requirements-text
+     mention) since every house needs these three regardless of whether the user's free-text prompt
+     happened to name them; a no-op for whichever of the three Gemini already provided (via
+     `classify_room_category()`), so nothing is ever duplicated.
+  - Both fixes are independent and compose: the cap bounds how large any ONE unrecognized room can grow,
+    the injection guarantees the floor actually CONTAINS its real public rooms in the first place - fixing
+    either one alone would have left the other failure mode (e.g. capping without injecting still leaves a
+    floor with zero Living Room if Gemini's response never listed one).
+  - **Tests**: `tests/test_room_specs.py::test_unrecognized_room_has_a_finite_max_area_not_unbounded`;
+    `tests/test_house_pipeline.py` gained pure unit tests for `_ensure_ground_floor_public_rooms()`
+    (adds-missing/no-op-when-present/ground-floor-only/empty-floors) plus a direct end-to-end reproduction,
+    `test_run_house_pipeline_guarantees_living_kitchen_dining_and_caps_the_hallway`, using a
+    `HallwayDominatedProvider` fake mirroring the real live-reported room mix. 749/749 tests passing (7
+    new).
+  - **A THIRD, related issue found while verifying this fix, NOT yet fixed - the user's original "there are
+    no stairs" report is a SEPARATE, pre-existing bug, not caused by (or fixed by) either change above.**
+    Reproduced directly: `layout_floor()` only ever guarantees a room's minimum AREA, never its
+    width/depth individually (an already-documented limitation elsewhere in this file, e.g. the pre-v16
+    garage-width bug) - and the Staircase room (pinned at exactly `1.0x` its minimum, in its own dedicated
+    "circulation" zone between the public and private zones) is especially exposed to this: on a real
+    60x80ft 2-floor test case, the Staircase rectangle came out as a 60ft x 0.58ft sliver (same guaranteed
+    ~35 sq ft area, wildly wrong shape) - thin enough that `blueprint_svg.py`'s
+    `_FURNITURE_MIN_BOX_W`/`_H` gate almost certainly suppresses the staircase symbol entirely, which is
+    the direct, most likely explanation for "no stairs" showing up in the real render. This is NOT
+    something v20's two fixes above touch (Staircase was already pinned/bounded before this pass) and was
+    NOT included in this pass's scope - flagged for a follow-up, not silently fixed.
 
 ## Subscription plans, quotas, admin panel, and payments
 

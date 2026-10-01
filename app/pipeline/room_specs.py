@@ -20,8 +20,6 @@ actual unit ("ft" or "m") via to_plot_unit() before use - so a size table
 edit never needs to know which unit a given house project happens to use.
 """
 
-import math
-
 METERS_TO_FEET = 3.280839895
 
 # min_width/min_depth: the smallest usable real-world footprint for this
@@ -83,12 +81,21 @@ ROOM_MAX_MULTIPLIER: dict[str, float] = {
     "closet": 1.4,
     "foyer": 1.6,
     "staircase": 1.0,
-    # No real cap for an UNCLASSIFIED room name - we don't know its actual
-    # function, so there's no real-world size to bound it against (unlike
-    # every category above, each backed by a genuine functional footprint
-    # limit). math.inf is exact and self-documenting here, not a made-up
-    # "big enough" number.
-    "default": math.inf,
+    # Was math.inf ("no real cap for an unclassified name") until a real,
+    # live-reproduced bug (2026-09-29): a floor whose room list included a
+    # generic "Hallway" (classify_room_category() has no "hallway"/
+    # "corridor" keyword, so it falls to "default") let that ONE room absorb
+    # effectively all of layout_floor()'s weight-based redistribution once
+    # every bounded room nearby hit its own cap - the hallway ballooned to
+    # roughly the size of the whole floor while real bedrooms/bathrooms were
+    # squeezed into slivers. An unrecognized room still has no genuine
+    # functional footprint limit to bound it against precisely, but
+    # "unbounded" is strictly worse than a generous-but-finite ceiling -
+    # capped at the same 4.0x multiplier `living` uses (the single highest
+    # real-category cap), since a hallway/corridor/unknown space is at most
+    # as dominant as the main social room, never larger than the floor
+    # itself.
+    "default": 4.0,
 }
 
 # Same category vocabulary/order as blueprint_svg.py's _draw_furniture()

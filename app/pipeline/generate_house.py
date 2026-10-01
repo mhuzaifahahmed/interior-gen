@@ -109,6 +109,54 @@ def _enforce_room_counts(
         if target_baths is not None:
             _enforce_room_type_count(rooms, "bathroom", target_baths, "Bathroom")
 
+
+# Guaranteed ground-floor public rooms (2026-09-29). Real, live-reproduced
+# bug: with room_specs.ROOM_MAX_MULTIPLIER["default"] previously uncapped
+# (math.inf - see that constant's own history note), a generic room name
+# classify_room_category() doesn't recognize (most often a Gemini-invented
+# "Hallway", since neither "hallway" nor "corridor" is a registered
+# keyword) could absorb nearly all of layout_floor()'s weight-based
+# redistribution once every bounded room nearby hit its own cap -
+# ballooning to roughly the size of the whole floor while the floor's real
+# rooms (sometimes including Living Room/Kitchen/Dining entirely, if
+# Gemini's own response simply never listed them) were squeezed into
+# slivers or omitted outright. Capping "default"'s multiplier (now 4.0,
+# same as `living`) bounds how large any ONE unrecognized room can grow,
+# but does nothing to guarantee the floor contains real public rooms in
+# the first place - that's what this function adds, a second guarantee
+# alongside it, same "deterministic injection, don't leave it to an LLM's
+# probabilistic judgement" pattern already used for garage/entry/
+# utility/staircase below. Unlike those, Living Room/Kitchen/Dining are
+# injected UNCONDITIONALLY (not gated behind a requirements-text mention)
+# since every house needs them regardless of whether the user's free-text
+# prompt happened to say so.
+_GUARANTEED_PUBLIC_ROOMS: tuple[tuple[str, str], ...] = (
+    ("living", "Living Room"),
+    ("kitchen", "Kitchen"),
+    ("dining", "Dining Room"),
+)
+
+
+def _ensure_ground_floor_public_rooms(room_layout: dict) -> None:
+    """Guarantees the ground floor (floor_number == 1, or floors[0] if that
+    field is missing) contains a real Living Room, Kitchen, and Dining Room -
+    mutates room_layout["floors"] in place. A no-op for whichever of the
+    three already has a matching room (classify_room_category()), so this
+    never duplicates a room Gemini already provided; only genuinely missing
+    ones are appended, using the same average-weight formula the garage/
+    entry/utility/staircase injection blocks in run_house_pipeline() use."""
+    floors = room_layout.get("floors") or []
+    if not floors:
+        return
+    ground_floor = next((f for f in floors if (f.get("floor_number") or 1) == 1), floors[0])
+    rooms = ground_floor.setdefault("rooms", [])
+    for category, label in _GUARANTEED_PUBLIC_ROOMS:
+        has_room = any(classify_room_category(str(r.get("name") or "")) == category for r in rooms)
+        if not has_room:
+            avg_weight = sum(float(r.get("area") or 1) for r in rooms) / len(rooms) if rooms else 1.0
+            rooms.append({"name": label, "area": avg_weight})
+
+
 # v3: enriched photoreal prompt vocabulary, floor-count hard constraint, a
 # researched negative-prompt block.
 # v4: removed the second, blueprint-sourced 3D isometric render; briefly
@@ -517,6 +565,15 @@ def run_house_pipeline(
                 # sees the corrected, guaranteed room counts. No-op when
                 # floor_bedrooms/floor_bathrooms are both None (legacy path).
                 _enforce_room_counts(room_layout, floor_bedrooms, floor_bathrooms)
+
+                # Deterministic ground-floor public-room guarantee - see
+                # _ensure_ground_floor_public_rooms()'s own docstring for the
+                # real bug (a Gemini-invented "Hallway" ballooning to
+                # dominate a floor, sometimes crowding out Living Room/
+                # Kitchen/Dining entirely) this closes alongside
+                # room_specs.ROOM_MAX_MULTIPLIER["default"] no longer being
+                # unbounded.
+                _ensure_ground_floor_public_rooms(room_layout)
 
                 # Garage/front-yard requirements are parsed deterministically
                 # from the free-text requirements string, NOT trusted to

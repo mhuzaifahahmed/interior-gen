@@ -1,4 +1,5 @@
 import json
+import math
 import tempfile
 import time
 import uuid
@@ -1363,6 +1364,146 @@ def test_run_house_pipeline_trims_surplus_bedrooms_to_the_requested_count(monkey
     rooms = room_layout["floors"][0]["rooms"]
     beds = [r for r in rooms if classify_room_category(r["name"]) == "bedroom"]
     assert len(beds) == 2
+
+
+# ---- _ensure_ground_floor_public_rooms() - pure unit tests + a direct    ----
+# ---- reproduction of the "Hallway balloons and crowds out real rooms"    ----
+# ---- bug (2026-09-29), the second, separate real bug found after the     ----
+# ---- bedroom/bathroom-count fix above shipped.                           ----
+
+
+def test_ensure_ground_floor_public_rooms_adds_missing_rooms():
+    room_layout = {"floors": [{"floor_number": 1, "rooms": [{"name": "Hallway", "area": 5}]}]}
+    generate_house_module._ensure_ground_floor_public_rooms(room_layout)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    rooms = room_layout["floors"][0]["rooms"]
+    categories = {classify_room_category(r["name"]) for r in rooms}
+    assert {"living", "kitchen", "dining"} <= categories
+    # The pre-existing Hallway is untouched, not replaced.
+    assert any(r["name"] == "Hallway" for r in rooms)
+
+
+def test_ensure_ground_floor_public_rooms_is_noop_when_already_present():
+    room_layout = {
+        "floors": [
+            {
+                "floor_number": 1,
+                "rooms": [
+                    {"name": "Living Room", "area": 3},
+                    {"name": "Kitchen", "area": 1},
+                    {"name": "Dining Room", "area": 1},
+                ],
+            }
+        ]
+    }
+    before = json.loads(json.dumps(room_layout))
+    generate_house_module._ensure_ground_floor_public_rooms(room_layout)
+    assert room_layout == before
+
+
+def test_ensure_ground_floor_public_rooms_only_touches_the_ground_floor():
+    room_layout = {
+        "floors": [
+            {"floor_number": 1, "rooms": [{"name": "Garage", "area": 2}]},
+            {"floor_number": 2, "rooms": [{"name": "Bedroom 1", "area": 2}]},
+        ]
+    }
+    generate_house_module._ensure_ground_floor_public_rooms(room_layout)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    floor2_categories = {classify_room_category(r["name"]) for r in room_layout["floors"][1]["rooms"]}
+    assert "living" not in floor2_categories
+    assert "kitchen" not in floor2_categories
+    assert "dining" not in floor2_categories
+
+
+def test_ensure_ground_floor_public_rooms_noop_for_empty_floors():
+    room_layout = {"floors": []}
+    generate_house_module._ensure_ground_floor_public_rooms(room_layout)
+    assert room_layout == {"floors": []}
+
+
+class HallwayDominatedProvider(FakeProvider):
+    """Reproduces the real, live-reported bug (2026-09-29): a ground floor
+    whose room list is almost entirely a generic, unrecognized "Hallway"
+    room, with real public rooms (Living Room/Kitchen/Dining) entirely
+    absent - exactly the shape that, before room_specs.py's "default"
+    category max-multiplier was capped, let the Hallway balloon to roughly
+    the size of the whole floor via layout_floor()'s weight-based
+    redistribution."""
+
+    def generate_room_layout(
+        self, dimensions, prompt, plot_description=None, floor_count=None, floor_bedrooms=None, floor_bathrooms=None
+    ):
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+        return {
+            "floors": [
+                {
+                    "floor_number": 1,
+                    "rooms": [
+                        {"name": "Hallway", "area": 10},
+                        {"name": "Bedroom 1", "area": 1},
+                        {"name": "Bathroom", "area": 1},
+                    ],
+                }
+            ]
+        }
+
+
+def test_run_house_pipeline_guarantees_living_kitchen_dining_and_caps_the_hallway(monkeypatch):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hhallway1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hhallway1", status="queued", plot_image_key="hhallway1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = HallwayDominatedProvider()
+    run_house_pipeline(
+        "hhallway1",
+        provider,
+        storage,
+        {"length": 50, "width": 40, "unit": "ft"},
+        prompt="1 floor",
+        floor_count=1,
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hhallway1")
+        assert house_project.status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+        blueprint_keys = json.loads(house_project.blueprint_keys_json)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    rooms = room_layout["floors"][0]["rooms"]
+    categories = {classify_room_category(r["name"]) for r in rooms}
+    assert {"living", "kitchen", "dining"} <= categories
+    assert len(blueprint_keys) == 1
+
+    # The Hallway's own ceiling is now bounded (room_specs.py's "default"
+    # category max-multiplier is finite, not math.inf) - the room mix as a
+    # whole may still legitimately put a lot of area into Living Room (its
+    # own 4.0x cap is deliberately generous - it's meant to be the dominant
+    # everyday social space, see room_specs.ROOM_MAX_MULTIPLIER's own
+    # docstring), but the unrecognized Hallway itself can no longer grow
+    # past its own finite ceiling (with a little slack for the redistribution
+    # pass's own tie-breaking) the way it could when it was uncapped.
+    from app.pipeline.floor_layout import layout_floor
+    from app.pipeline.room_specs import max_area_for_room
+
+    hallway_cap = max_area_for_room("Hallway", "ft")
+    assert math.isfinite(hallway_cap)
+    rects = layout_floor(rooms, {"length": 50, "width": 40, "unit": "ft"})
+    hallway_total_area = sum(r["w"] * r["h"] for r in rects if classify_room_category(r["name"]) == "default")
+    assert hallway_total_area < hallway_cap * 2.5
 
 
 def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):

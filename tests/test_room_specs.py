@@ -96,3 +96,19 @@ def test_a_room_merely_containing_master_in_an_unrelated_context_is_unaffected()
     # bedroom - a non-bedroom room happening to include the word shouldn't
     # get bedroom-shaped sizing at all.
     assert min_area_for_room("Master Suite Closet", "ft") == min_area_for_room("Closet", "ft")
+
+
+def test_unrecognized_room_has_a_finite_max_area_not_unbounded():
+    # Real, live-reproduced bug (2026-09-29): an unrecognized room name
+    # (e.g. a Gemini-invented "Hallway" - classify_room_category() has no
+    # "hallway" keyword, so it falls to "default") used to have NO cap at
+    # all (math.inf), letting it absorb nearly all of layout_floor()'s
+    # weight-based redistribution once every bounded room nearby hit its
+    # own cap - ballooning to roughly the size of the whole floor. A finite
+    # cap (same 4.0x multiplier "living" uses) bounds that.
+    import math
+
+    unrecognized_max = max_area_for_room("Hallway", "ft")
+    assert math.isfinite(unrecognized_max)
+    # Still generous relative to its own minimum, not clamped to nothing.
+    assert unrecognized_max > min_area_for_room("Hallway", "ft")

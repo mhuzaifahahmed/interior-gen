@@ -58,8 +58,20 @@ def test_layout_floor_areas_are_roughly_proportional_to_weights():
     # both minimums are reserved is split 3:1, which compresses the final
     # ratio below 3 (see floor_layout.py's MINIMUM-AREA GUARANTEE docstring
     # section - this is the intended, not accidental, behavior).
+    #
+    # A small, near-minimum plot is used deliberately (2026-09-29, following
+    # room_specs.ROOM_MAX_MULTIPLIER["default"] becoming a finite 4.0x
+    # instead of math.inf - see that constant's own history note): on a
+    # generously large plot, BOTH default-category rooms would have enough
+    # "remaining area" to redistribute into that they'd each hit their own
+    # (now finite) max-area cap and land EQUAL (ratio 1.0) - a real,
+    # expected consequence of fixing the "one unrecognized room balloons to
+    # swallow the floor" bug, not a regression in this test. A near-minimum
+    # plot keeps the redistributed excess small enough that neither room
+    # reaches its cap, so the 3:1 weight still shows through as a
+    # meaningfully bigger (but not exactly 3x) rectangle.
     rooms = [{"name": "Big Room", "area": 3}, {"name": "Small Room", "area": 1}]
-    rects = layout_floor(rooms, {"length": 40, "width": 40, "unit": "ft"})
+    rects = layout_floor(rooms, {"length": 10, "width": 20, "unit": "ft"})
 
     big = next(r for r in rects if r["name"] == "Big Room")
     small = next(r for r in rects if r["name"] == "Small Room")
