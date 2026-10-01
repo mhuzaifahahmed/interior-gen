@@ -71,15 +71,20 @@ more of this gets built.
     real (post-layout) aspect ratio - not a fixed shape, not a guess. UP/DN was already correct. Visually
     verified (both straight and L-shaped renders). No U-shaped variant (only straight/L) - a smaller gap,
     not pursued since straight/L already covers the vast majority of real compact-stair footprints.
-17. **Multi-floor coordination (wall/stair/plumbing alignment across floors)** — 🟡 Partial (2026-08-29).
+17. **Multi-floor coordination (wall/stair/plumbing alignment across floors)** — 🟡 Partial, **user
+    explicitly confirmed (2026-10-01) this still needs doing - not just a known gap, an active priority.**
     Exterior wall alignment was already exact (every floor renders the identical plot boundary at the
-    identical canvas position). The staircase now gets a dedicated "circulation" zone rank between public
-    and private (`floor_layout.py`), giving CONSISTENT relative placement + consistent guaranteed sizing
-    across floors. **Pixel-exact interior staircase alignment is NOT achieved** - stated plainly in
-    `floor_layout.py`'s own docstring: this project's rectangular slice-and-dice algorithm can't reserve
-    an arbitrary interior rectangle at the exact same coordinates on every floor without a fundamentally
-    different, non-rectangular-region layout algorithm. Plumbing-zone alignment (bathrooms/kitchens
-    stacking vertically) is still not attempted at all.
+    identical canvas position). **2026-09-29 (v21, see CLAUDE.md)**: the staircase now gets a REAL,
+    correctly-shaped rectangle (not a degenerate sliver) on every floor, flush against and sharing a door
+    with that floor's own hallway - a real, visible, usable stair on every floor, confirmed by rendering
+    and visually inspecting a real 2-floor house. **Still NOT achieved: PIXEL-exact staircase/hallway
+    alignment ACROSS floors** (floor 2's stair landing doesn't sit under floor 1's) - each floor's
+    circulation+private "back" zone independently starts at a different y-position depending on how much
+    depth THAT floor's own public rooms claim, since every floor is still laid out independently
+    (`_layout_floor_core()` has no notion of what any other floor decided). See
+    `future-plans/todo-and-pending-checks.md`'s matching entry for a concrete proposed approach (compute
+    the staircase footprint once, treat it as a shared pre-reserved void on every floor) - not started.
+    Plumbing-zone alignment (bathrooms/kitchens stacking vertically) is still not attempted at all either.
 18. **Room dimensions as min/preferred/max, not fixed** — 🟡 Minimum was already real. **2026-09-04**: a
     real MAXIMUM now also exists (`room_specs.ROOM_MAX_MULTIPLIER`/`max_area_for_room()`,
     `floor_layout._clamp_to_max_and_redistribute()`) - Gemini's relative weight still acts as the
@@ -134,8 +139,12 @@ done, #17 is partial** (2026-08-29 - real staircase room + circulation zone; see
 exactly what's still missing there: pixel-exact interior alignment and plumbing-zone stacking).
 **2026-09-04: #10/#11/#15/#18 all moved from open gaps to solid 🟡 (see CLAUDE.md's v14 entry)** - true
 front-to-back zoning, real min/max room proportions, kitchen-dining adjacency, and a garage buffered by a
-real Entry room. In priority order, the real remaining gaps are now: **#20/21 (a real post-generation
+real Entry room. **2026-09-29 (v21): #16's staircase is now real-shaped and hallway-connected on EVERY
+floor independently** (was previously degenerate on upper floors - see CLAUDE.md's v21 entry) - but #17's
+real remaining gap, PIXEL-level staircase/hallway alignment ACROSS floors, is still open, and the user
+explicitly confirmed (2026-10-01) it's wanted next, not just a known limitation to live with. In priority
+order, the real remaining gaps are now: **#17 (cross-floor staircase/hallway pixel alignment + plumbing
+stacking - see its own entry above for a concrete proposed approach)**, **#20/21 (a real post-generation
 validator + candidate scoring)**, **#13 (a real per-room exterior-wall/window guarantee, not just the
-existing heuristic)**, non-rectangular/L-shaped rooms (would unlock more realistic room shapes than the
-current pure rectangle slice-and-dice), and the remaining sliver of **#17 (plumbing-zone vertical
-alignment)**. Everything else is either done or a smaller polish item.
+existing heuristic)**, and non-rectangular/L-shaped rooms (would unlock more realistic room shapes than
+the current pure rectangle slice-and-dice). Everything else is either done or a smaller polish item.

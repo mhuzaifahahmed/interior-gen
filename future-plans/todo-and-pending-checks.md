@@ -166,8 +166,27 @@ improvement, not just a theoretical one:
 
 Full detail already recorded in `future-plans/house-layout-spec-checklist.md` - not duplicated here, just
 flagged as active work items the user wants to come back to:
-- [ ] #17 remainder - plumbing-zone vertical alignment (bathrooms/kitchens stacking between floors) -
-  not attempted at all yet.
+- [ ] **#17 remainder, user explicitly confirmed "WE NEED to do it" (2026-10-01)** - real, PIXEL-level
+  multi-floor staircase/hallway alignment (so e.g. floor 2's stair landing actually sits under floor 1's,
+  not just "same relative zone"), plus plumbing-zone vertical alignment (bathrooms/kitchens stacking
+  between floors). Root cause, documented in `floor_layout.py`'s own module docstring and CLAUDE.md's v21
+  entry: each floor's "back" (circulation+private) box starts at a different y-position depending on how
+  much area that SPECIFIC floor's public-zone rooms claim - the ground floor reserves real depth for
+  living/kitchen/garage before its back zone begins, while an upper floor with no public rooms at all has
+  no such offset, so the two floors' hallway/staircase zones start at genuinely different depths even
+  though the staircase itself is now correctly shaped and hallway-connected on EACH floor independently
+  (see v21 - that part IS done). Real fix needs a fundamentally different approach from today's per-floor-
+  independent rectangle slice-and-dice - something like: compute the staircase's (x, y, w, h) footprint
+  ONCE (e.g. from the ground floor, or from a plot-wide canonical position independent of any one floor's
+  room mix) and then treat that same rectangle as a FIXED, pre-reserved void on every other floor BEFORE
+  that floor's own `_slice()`/corridor logic runs - i.e. invert the current per-floor-first order to a
+  shared-footprint-first, per-floor-remainder-second order. Not started - real design work, likely touches
+  `floor_layout.layout_floor()`'s top-level entry point (would need to accept/return a shared staircase
+  rect across the whole `run_house_pipeline()` per-floor loop in `generate_house.py`, not just within one
+  floor's own `_layout_floor_core()` call) and `blueprint_svg.py`/`blueprint_dxf.py`/`conditioning_image.py`
+  (make sure the shared rect renders consistently in every renderer). Worth re-reading `floor_layout.py`'s
+  full module docstring (the "REAL STAIRCASE CARVE-OUT" and "TRUE FRONT-TO-BACK ZONING" sections) before
+  starting, since this builds directly on both.
 - [ ] #13 - a REAL per-room exterior-wall/window guarantee (currently just the existing placement
   heuristic, not an enforced constraint) - this is what "room ventilation intelligence" maps to.
 - [ ] #20/#21 - a real post-generation validator + candidate-layout scoring, instead of one deterministic
