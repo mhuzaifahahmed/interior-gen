@@ -276,6 +276,25 @@ class Settings(BaseSettings):
     # the normal production setting, only a temporary local toggle.
     house_render_enabled: bool = True
 
+    # Dev/testing escape hatch, same shape/purpose as house_render_enabled
+    # above - when False, run_house_pipeline() (generate_house.py) skips
+    # spawning the AI "Concept Layout" / AutoCAD floor-plan stage entirely
+    # (the friend-hosted Kaggle SDXL+ControlNet model, kaggle_autocad.py) -
+    # no call to that Kaggle tunnel happens at all, and floor_plan_status
+    # degrades to "not_configured" (the SAME expected, silent, non-fatal
+    # state already used when the vendor URL isn't set - see
+    # kaggle_autocad.py's module docstring), not an error. Added 2026-09-30
+    # at the user's explicit request to locally test "Model A"/"Model B"
+    # (room-redesign Kaggle vs. OpenAI) without also waiting on this
+    # separate, independently slow (~2min/floor, see CLAUDE.md's "Live-
+    # measured Kaggle Concept Layout timing" note) model every single run.
+    # Default True (always attempted) - deliberately NOT added to
+    # .env.example (same precedent as house_render_enabled, which also only
+    # ever lives in a local, gitignored .env) so this never accidentally
+    # ships as the Render/production default; set AUTOCAD_GENERATION_ENABLED=false
+    # only in your own local .env.
+    autocad_generation_enabled: bool = True
+
     # Set ONLY when the frontend is hosted on a different domain from this
     # backend (e.g. static/ deployed to Vercel, this FastAPI app deployed to
     # Render) - blank (the default) means same-origin, which is how local dev

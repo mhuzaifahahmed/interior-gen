@@ -574,6 +574,45 @@ def test_run_house_pipeline_skips_render_when_house_render_enabled_is_false(monk
         assert json.loads(house_project.blueprint_keys_json)
 
 
+def test_run_house_pipeline_skips_concept_layout_when_autocad_generation_enabled_is_false(monkeypatch):
+    # Dev-only escape hatch (app/config.py's autocad_generation_enabled) -
+    # added 2026-09-30 at the user's explicit request to locally test the
+    # Kaggle/OpenAI room-redesign model toggle ("Model A"/"Model B") without
+    # also waiting on the separate, slow AutoCAD Concept Layout stage every
+    # run. Mirrors house_render_enabled's own test exactly.
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "autocad_generation_enabled", False)
+
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hautocadtoggle1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hautocadtoggle1", status="queued", plot_image_key="hautocadtoggle1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = FakeProvider()
+    run_house_pipeline(
+        "hautocadtoggle1", provider, storage, {"length": 40, "width": 60, "unit": "ft"}, prompt="1 floor"
+    )
+
+    assert provider.floor_plan_calls == []
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hautocadtoggle1")
+        assert house_project.status == "done"
+        assert house_project.floor_plan_status == "not_configured"
+        # The rest of the pipeline (blueprint, DXF, and - unlike
+        # house_render_enabled=False - the exterior render) still ran
+        # normally; this toggle only ever skips the Concept Layout call.
+        assert house_project.blueprint_status == "done"
+        assert house_project.render_key is not None
+
+
 def test_run_house_pipeline_renders_elevation_without_a_photo_for_text_to_image_backend(monkeypatch):
     # 2026-09-14: the Kaggle backend is a TEXT-TO-IMAGE elevation model that
     # needs no plot photo. A provider reporting house_render_needs_photo()==

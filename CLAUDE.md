@@ -2567,6 +2567,30 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     guarantee test). 773/773 tests passing (5 new) - full-suite run also hit one already-documented,
     unrelated SQLite-lock-contention flake (`test_house_api_exposes_one_floor_plan_url_per_floor`,
     confirmed to pass cleanly in isolation and on a clean full-suite rerun).
+- **v24 (2026-09-30), same day: a dev-only `AUTOCAD_GENERATION_ENABLED` toggle for the AI "Concept
+  Layout" stage, mirroring `HOUSE_RENDER_ENABLED` exactly.** Real user request: testing the Kaggle/OpenAI
+  room-redesign model toggle locally kept getting slowed down by also waiting on this separate,
+  independently slow stage (~2min/floor - see this file's own "Live-measured Kaggle Concept Layout timing"
+  note) every single generation, and the user wanted a quick local on/off switch WITHOUT risking it ever
+  becoming the live/production default.
+  - **`Settings.autocad_generation_enabled`** (`app/config.py`, default `True`) - same shape and same
+    "escape hatch, not a production setting" framing as the pre-existing `house_render_enabled`.
+    Deliberately NOT added to `.env.example` (same precedent `house_render_enabled` already set - that one
+    also only ever lives in a local, gitignored `.env`) so there's no risk of it accidentally shipping as
+    the Render/production default; set `AUTOCAD_GENERATION_ENABLED=false` only in your own local `.env`.
+  - **`run_house_pipeline()`** (`app/pipeline/generate_house.py`): when `False`, the Concept Layout
+    thread-spawn is skipped ENTIRELY (no call to `provider.generate_floor_plan()`, no Kaggle tunnel hit at
+    all) and `floor_plan_status` degrades straight to `"not_configured"` - the SAME expected, silent,
+    non-fatal state already used when the vendor URL simply isn't set (`kaggle_autocad.py`'s existing
+    contract) - not a new status value, not an error. Everything else in the pipeline (blueprint, DXF
+    export, feasibility, and - unlike `house_render_enabled=False` - the real exterior render) runs exactly
+    as normal; this toggle is scoped to ONLY the Concept Layout call.
+  - **Frontend needed zero changes** - `floor_plan_status === "not_configured"` was already a fully
+    handled, silent state (no Concept Layout card renders, no error banner) before this toggle existed.
+  - **Tests**: `tests/test_house_pipeline.py::test_run_house_pipeline_skips_concept_layout_when_autocad_generation_enabled_is_false`
+    mirrors the existing `house_render_enabled` test exactly (asserts `provider.floor_plan_calls == []`,
+    `floor_plan_status == "not_configured"`, and that blueprint/render still complete normally).
+    774/774 tests passing (1 new).
 
 ## Subscription plans, quotas, admin panel, and payments
 

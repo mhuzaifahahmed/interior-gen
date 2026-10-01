@@ -896,7 +896,20 @@ def run_house_pipeline(
             # here; the pipeline moves straight on to the render step below
             # without waiting for it.
             is_infeasible = feasibility_result and feasibility_result["verdict"] == "not_feasible"
-            if is_infeasible:
+            if not settings.autocad_generation_enabled:
+                # Dev/testing escape hatch (see app/config.py's
+                # autocad_generation_enabled docstring) - skip the Kaggle
+                # AutoCAD/Concept Layout call entirely, same silent
+                # "not_configured" state already used when the vendor URL
+                # isn't set at all. Never the production behavior - default
+                # True, only ever flipped in a local, gitignored .env.
+                logger.info(
+                    "autocad_generation_enabled is False - skipping the Concept Layout stage for "
+                    "house project %s",
+                    house_project_id,
+                )
+                house_project.floor_plan_status = "not_configured"
+            elif is_infeasible:
                 # Same hard gate as the blueprint stage above - an infeasible
                 # program never gets an AI visualization either (it would be
                 # equally misleading), so this call is skipped entirely
