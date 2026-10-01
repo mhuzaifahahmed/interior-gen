@@ -356,6 +356,43 @@ user's bug report implied) - hover reliably scales the button (`transform` goes 
 `matrix(1.1, 0, 0, 1.1, 0, 0)`) every time, with zero residual inline `transform` on the button
 afterward. Backend suite unaffected (534/534 passing).
 
+## Planned: per-floor "extras" text box, gated to a specific plan (2026-09-30)
+
+Explicit user request, NOT built yet: an additional free-text input **for every floor** in Build a House
+(distinct from the existing single, whole-building `extras` field - see CLAUDE.md's "Build a House
+feature" v20/v22 entries for `house_requirements.parse_extra_rooms_by_floor()`, which already lets a user
+ask for e.g. "kitchen on the 2nd floor" via the ONE shared extras box, with the floor number stated inline
+in the text). The user wants this to go further: a genuinely **separate text box per floor row** - e.g.
+"kitchen and dining room" typed directly into Floor 1's own box, "dining room" typed into Floor 3's own
+box - rather than having to phrase every request with an explicit "...on floor N" suffix in one shared
+field.
+
+**Explicitly plan-gated** - the user's own words: "this feature unlock in specific plan only which we will
+also discuss later." Two real decisions are still open, to confirm with the user before building:
+- **Which plan(s) unlock it** - Pro, Studio, or Pro+Studio both? Not yet decided (the user deferred this
+  explicitly - "which we will also discuss later").
+- **UI treatment for a locked-out plan** - hidden entirely (same pattern as the Kaggle/OpenAI model toggle,
+  which the room-redesign tab already hides for Free - see CLAUDE.md's "Frontend: Pricing tab, model
+  toggle..." section) vs. visible-but-disabled with an upsell nudge (more discoverable, but a bigger UI
+  decision). Given this app already has a working precedent for hiding/showing form elements by plan
+  (`applyRoomPlanUI()`/`applyHousePlanUI()` in `static/app.js`), the hidden-for-ungated-plans approach is
+  the more consistent default - but worth confirming, not assumed.
+
+**Likely implementation shape, once scope is confirmed** (not started):
+- Frontend: `static/app.js`'s `renderPerFloorRows()` (already renders one row per floor dynamically - see
+  CLAUDE.md's Build a House v19 entry) gains an additional text `<input>`/`<textarea>` per row, gated by
+  the user's resolved plan (same `GET /api/plan` call every other plan-gated UI already uses).
+- Backend: `app/main.py`'s `create_house_project` would need a new per-floor extras field (e.g. a JSON-
+  array Form field, same convention as `floor_bedrooms`/`floor_bathrooms` - see `_parse_floor_counts_json()`
+  for the exact parsing/clamping pattern to mirror) - each floor's own extras text gets parsed via
+  `house_requirements.parse_extra_rooms_by_floor()` SCOPED to just that floor's own rooms (not searching
+  the whole building's combined text), then fed into `generate_house.py`'s existing
+  `_ensure_requested_rooms_by_floor()` guarantee - that deterministic backstop already works per-floor, so
+  it likely needs NO changes, only a new, better-targeted SOURCE of `extra_rooms` tuples per floor.
+- The plan-gate check itself (is the user's resolved plan allowed to use this field at all) would live
+  server-side too, not just hide the UI - same "don't trust the client" posture every other quota/plan
+  check in this codebase already takes (see `app/plans.py`'s `consume_quota()`/`resolve_preferred_backend()`).
+
 ## Open questions for whoever picks this up next
 
 - 7-day Pro trial: explicitly skipped for this build phase (2026-09-12 decision) — build Free/Pro/

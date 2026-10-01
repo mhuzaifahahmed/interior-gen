@@ -852,6 +852,13 @@ Ready to see your room <span class="italic text-home-gold-soft">reimagined?</spa
      with its own Bedrooms/Bathrooms morph-dropdown pair. Hidden unless the
      mode toggle above is set to "perfloor". -->
 <div id="house-per-floor-rows" class="hidden flex flex-col gap-4"></div>
+<!-- Real-time "does this fit my plot" guidance (2026-09-30), filled by
+     app.js's updateHouseRoomCapacityHint() from GET /api/house-room-requirements -
+     explains why the Bedrooms/Bathrooms dropdowns above only offer certain
+     counts once Length/Width are filled in, and states the real minimum
+     plot size needed to unlock the next count up. Hidden until there's
+     something real to say (no Length/Width entered yet). -->
+<p id="house-room-capacity-hint" class="font-body-md text-xs text-on-surface-variant mt-2" hidden></p>
 </div>
 <div>
 <label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Architectural style (optional)</label>

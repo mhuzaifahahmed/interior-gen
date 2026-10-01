@@ -200,3 +200,13 @@ for that pass: a user picks only a floor count (e.g. a 20-floor building) with N
 editing at all - the system would need to fill in sensible bedroom/bathroom counts itself rather than
 requiring N rows of manual entry. Not started - would need its own UX (e.g. a building "type" or density
 preset) and a real default-count-generation strategy, not just a UI toggle.
+
+## Planned: per-floor extras text box, gated to a specific plan (2026-09-30)
+
+Full detail in `future-plans/subscription-and-access-roadmap.md`'s matching entry - not duplicated here,
+just flagged as a real, explicitly-requested next item. User wants a SEPARATE free-text box per floor row
+(e.g. "kitchen and dining room" typed directly under Floor 1, "dining room" under Floor 3) instead of
+today's single shared extras field (which already supports "kitchen on floor 2"-style phrasing, just all
+in one box). Explicitly gated to a specific paid plan - which plan(s), and the exact UI treatment for a
+locked-out plan, are both still open questions to confirm with the user first ("which we will also discuss
+later") - not started.

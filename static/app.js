@@ -1007,18 +1007,28 @@ function setupMorphDropdown({ btnId, chevronId, menuId, hiddenInputId, placehold
     isOpen() ? close() : open();
   });
 
-  menu.querySelectorAll("[data-value]").forEach((opt) => {
-    opt.addEventListener("click", () => {
-      setValue(opt.dataset.value);
-      close();
+  // Re-queries menu's current children and (re)binds their click handlers -
+  // split out from setup so a caller that swaps menu.innerHTML in place
+  // (e.g. house-room-capacity's dynamic option filtering, 2026-09-30) can
+  // call refreshOptions() afterward instead of needing a whole fresh
+  // setupMorphDropdown() call. The menu DOM node itself is unchanged, only
+  // its children - old option buttons (and their listeners) are gone once
+  // innerHTML is reassigned, so the new ones need binding from scratch.
+  function bindOptions() {
+    menu.querySelectorAll("[data-value]").forEach((opt) => {
+      opt.addEventListener("click", () => {
+        setValue(opt.dataset.value);
+        close();
+      });
     });
-  });
+  }
+  bindOptions();
 
   document.addEventListener("click", (e) => {
     if (isOpen() && !menu.contains(e.target) && !btn.contains(e.target)) close();
   });
 
-  return { setValue, close };
+  return { setValue, close, refreshOptions: bindOptions };
 }
 
 const interiorStyleDropdown = setupMorphDropdown({
@@ -1163,7 +1173,14 @@ function setBedBathMode(mode) {
   });
   houseUniformBedBathBlock.classList.toggle("hidden", mode !== "uniform");
   housePerFloorRowsContainer.classList.toggle("hidden", mode !== "perfloor");
-  if (mode === "perfloor") renderPerFloorRows();
+  if (mode === "perfloor") {
+    renderPerFloorRows();
+    // Freshly-created rows start at the full static option range (see
+    // renderPerFloorRows()'s own comment) - narrow them to whatever
+    // actually fits the currently-typed plot right away, same as the
+    // uniform dropdowns already reflect.
+    updateHouseRoomCapacityOptions();
+  }
 }
 
 houseBedBathModeToggle.querySelectorAll(".model-toggle-btn").forEach((btn) => {
@@ -1185,15 +1202,16 @@ function renderPerFloorRows() {
   housePerFloorRowsContainer.innerHTML = "";
   Object.keys(perFloorDropdowns).forEach((k) => delete perFloorDropdowns[k]);
 
-  const bedroomOptions = [1, 2, 3, 4, 5, 6];
-  const bathroomOptions = [1, 2, 3, 4, 5];
-  const optionHtml = (values) =>
-    values
-      .map(
-        (n) =>
-          `<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="${n}" role="option">${n}</button>`
-      )
-      .join("");
+  // Real-time capacity guidance (2026-09-30) - see houseFeasibleOptionRange()
+  // below. At the moment this function runs, any already-fetched capacity
+  // table may be stale (e.g. the floor count itself just changed), but
+  // updateHouseRoomCapacityOptions() re-narrows every row's options right
+  // after this returns (see houseFloorCountInput's "change" listener) - this
+  // initial render just needs SOME reasonable starting range, not the final
+  // word.
+  const bedroomOptions = houseFeasibleOptionRange(HOUSE_BEDROOM_OPTION_CEILING, null);
+  const bathroomOptions = houseFeasibleOptionRange(HOUSE_BATHROOM_OPTION_CEILING, null);
+  const optionHtml = houseOptionButtonsHtml;
 
   for (let floorNum = 1; floorNum <= floorCount; floorNum++) {
     const row = document.createElement("div");
@@ -1245,12 +1263,208 @@ function renderPerFloorRows() {
   }
 }
 
+// ---- Real-time room-count capacity guidance (2026-09-30) ----
+//
+// Explicit user request: the Bedrooms/floor and Bathrooms/floor dropdowns
+// should only offer counts that actually fit the plot dimensions typed in,
+// plus a real "for N rooms you need at least YxY" message. Backed by
+// GET /api/house-room-requirements (app/main.py), which reuses the EXACT
+// same math as the real, authoritative hard feasibility gate
+// (app/pipeline/feasibility.py's check_feasibility()) - this is purely a
+// pre-submission UX hint layered on top; the hard gate at generation time
+// is completely unchanged and stays the real guarantee regardless of
+// anything computed here.
+//
+// The endpoint's own table doesn't depend on the CURRENT plot size at all
+// (only floor_count/unit - see its docstring), so it's fetched/cached once
+// per (floor_count, unit) pair and then compared against the typed-in
+// Length x Width entirely client-side - no network round trip on every
+// keystroke.
+
+const HOUSE_BEDROOM_OPTION_CEILING = 6; // matches the dropdown's original static option range
+const HOUSE_BATHROOM_OPTION_CEILING = 5;
+
+let houseRoomRequirementsCache = null; // { key: "floorCount|unit", table: {...} }
+
+async function getHouseRoomRequirementsTable() {
+  const floorCount = parseInt(houseFloorCountInput.value, 10) || 1;
+  const unit = houseUnitInput.value || "ft";
+  const key = `${floorCount}|${unit}`;
+  if (houseRoomRequirementsCache && houseRoomRequirementsCache.key === key) {
+    return houseRoomRequirementsCache.table;
+  }
+  try {
+    const res = await fetch(
+      `/api/house-room-requirements?floor_count=${floorCount}&unit=${encodeURIComponent(unit)}`
+    );
+    if (!res.ok) return null;
+    const table = await res.json();
+    houseRoomRequirementsCache = { key, table };
+    return table;
+  } catch (err) {
+    return null;
+  }
+}
+
+// rows: [{count, min_area, min_side}, ...] sorted ascending by count (the
+// API always returns them this way) - the largest count whose min_area
+// still fits within areaSqUnit.
+function maxFeasibleCount(rows, areaSqUnit) {
+  let max = 0;
+  for (const row of rows) {
+    if (row.min_area <= areaSqUnit) max = row.count;
+    else break;
+  }
+  return max;
+}
+
+function nextRequirementRow(rows, afterCount) {
+  return rows.find((r) => r.count === afterCount + 1) || null;
+}
+
+function houseOptionButtonsHtml(values) {
+  return values
+    .map(
+      (n) =>
+        `<button type="button" class="dropdown-option w-full text-left px-4 py-2.5 font-body-md text-on-surface hover:bg-surface-container-low transition-colors" data-value="${n}" role="option">${n}</button>`
+    )
+    .join("");
+}
+
+// The real option list to OFFER right now: 1..ceiling when no real plot
+// area is known yet (unchanged from this dropdown's original static
+// range), or 1..min(feasibleMax, ceiling) once one is - but never fewer
+// than 1 option. An empty dropdown would be a worse UX than a technically-
+// infeasible-but-still-selectable "1" - the hint text communicates the
+// real shortfall instead of silently removing every choice.
+function houseFeasibleOptionRange(ceiling, feasibleMax) {
+  if (feasibleMax === null) return Array.from({ length: ceiling }, (_, i) => i + 1);
+  const max = Math.max(1, Math.min(ceiling, feasibleMax));
+  return Array.from({ length: max }, (_, i) => i + 1);
+}
+
+// Shared by the uniform dropdowns, every per-floor row, and the hint text,
+// so all three can never disagree about what currently fits.
+async function computeHouseRoomCapacity() {
+  const length = parseFloat(houseLengthInput.value);
+  const width = parseFloat(houseWidthInput.value);
+  if (!length || !width || length <= 0 || width <= 0) {
+    return { bedroomsMax: null, bathroomsMax: null, table: null };
+  }
+  const table = await getHouseRoomRequirementsTable();
+  if (!table) return { bedroomsMax: null, bathroomsMax: null, table: null };
+  const area = length * width;
+  return {
+    bedroomsMax: maxFeasibleCount(table.bedrooms, area),
+    bathroomsMax: maxFeasibleCount(table.bathrooms, area),
+    table,
+  };
+}
+
+function updateHouseRoomCapacityHint(capacity) {
+  const hintEl = document.getElementById("house-room-capacity-hint");
+  if (!capacity.table || capacity.bedroomsMax === null) {
+    hintEl.hidden = true;
+    hintEl.textContent = "";
+    return;
+  }
+  const unit = houseUnitInput.value || "ft";
+  const { bedroomsMax, bathroomsMax, table } = capacity;
+  let text =
+    `Your ${houseLengthInput.value}x${houseWidthInput.value}${unit} plot fits up to ${bedroomsMax} ` +
+    `bedroom${bedroomsMax === 1 ? "" : "s"} and ${bathroomsMax} bathroom${bathroomsMax === 1 ? "" : "s"} per floor.`;
+  if (bedroomsMax < HOUSE_BEDROOM_OPTION_CEILING) {
+    const next = nextRequirementRow(table.bedrooms, bedroomsMax);
+    if (next) {
+      text +=
+        ` For ${next.count} bedroom${next.count === 1 ? "" : "s"}, you'll need at least ` +
+        `${next.min_side}x${next.min_side}${unit}.`;
+    }
+  }
+  hintEl.textContent = text;
+  hintEl.hidden = false;
+}
+
+// Rebuilds one dropdown's option list in place (menu.innerHTML swap +
+// refreshOptions() to rebind listeners - see setupMorphDropdown's own
+// comment on why a plain innerHTML swap alone loses the click handlers),
+// clamping the current selected value down to the new range's top when it
+// no longer fits, rather than leaving a now-invalid value selected with
+// nothing in the visible list matching it.
+function applyHouseRoomOptionRange(menuId, dropdown, hiddenInputId, ceiling, feasibleMax) {
+  const values = houseFeasibleOptionRange(ceiling, feasibleMax);
+  document.getElementById(menuId).innerHTML = houseOptionButtonsHtml(values);
+  dropdown.refreshOptions();
+  const hiddenInput = document.getElementById(hiddenInputId);
+  const current = parseInt(hiddenInput.value, 10);
+  if (!values.includes(current)) dropdown.setValue(String(values[values.length - 1]));
+}
+
+async function updateHouseRoomCapacityOptions() {
+  const capacity = await computeHouseRoomCapacity();
+
+  applyHouseRoomOptionRange(
+    "house-bedrooms-menu",
+    houseBedroomsDropdown,
+    "house-bedrooms",
+    HOUSE_BEDROOM_OPTION_CEILING,
+    capacity.bedroomsMax
+  );
+  applyHouseRoomOptionRange(
+    "house-bathrooms-menu",
+    houseBathroomsDropdown,
+    "house-bathrooms",
+    HOUSE_BATHROOM_OPTION_CEILING,
+    capacity.bathroomsMax
+  );
+
+  if (houseBedBathModeSelect.value === "perfloor") {
+    Object.keys(perFloorDropdowns).forEach((floorNum) => {
+      applyHouseRoomOptionRange(
+        `house-floor-${floorNum}-bedrooms-menu`,
+        perFloorDropdowns[floorNum].bedrooms,
+        `house-floor-${floorNum}-bedrooms`,
+        HOUSE_BEDROOM_OPTION_CEILING,
+        capacity.bedroomsMax
+      );
+      applyHouseRoomOptionRange(
+        `house-floor-${floorNum}-bathrooms-menu`,
+        perFloorDropdowns[floorNum].bathrooms,
+        `house-floor-${floorNum}-bathrooms`,
+        HOUSE_BATHROOM_OPTION_CEILING,
+        capacity.bathroomsMax
+      );
+    });
+  }
+
+  updateHouseRoomCapacityHint(capacity);
+}
+
+// Debounced so rapid typing in Length/Width doesn't trigger a rebuild on
+// every keystroke.
+let houseRoomCapacityDebounceTimer = null;
+function scheduleHouseRoomCapacityUpdate() {
+  if (houseRoomCapacityDebounceTimer) clearTimeout(houseRoomCapacityDebounceTimer);
+  houseRoomCapacityDebounceTimer = setTimeout(updateHouseRoomCapacityOptions, 350);
+}
+houseLengthInput.addEventListener("input", scheduleHouseRoomCapacityUpdate);
+houseWidthInput.addEventListener("input", scheduleHouseRoomCapacityUpdate);
+houseUnitInput.addEventListener("change", () => {
+  houseRoomRequirementsCache = null; // the cached table is for the wrong unit now
+  updateHouseRoomCapacityOptions();
+});
+
 // setValue() dispatches a synthetic "change" on the hidden input (see
 // setupMorphDropdown above) - re-render the per-floor rows whenever the
 // Floors count changes, but only when that mode is actually active (no
-// point building rows nobody sees).
+// point building rows nobody sees). The capacity table itself also depends
+// on floor_count (more floors = a mandatory staircase - see
+// min_area_for_room_count()'s own docstring), so its cache is invalidated
+// and every dropdown's options re-narrowed here too.
 houseFloorCountInput.addEventListener("change", () => {
+  houseRoomRequirementsCache = null;
   if (houseBedBathModeSelect.value === "perfloor") renderPerFloorRows();
+  updateHouseRoomCapacityOptions();
 });
 
 // Normalizes whichever mode is active into the two per-floor arrays the
@@ -3607,6 +3821,11 @@ function resetToHouseUpload() {
   houseLengthInput.value = "";
   houseWidthInput.value = "";
   houseExtrasInput.value = "";
+  // Length/Width just went blank - without this, the Bedrooms/Bathrooms
+  // dropdowns would stay narrowed to whatever the PREVIOUS plot size
+  // allowed instead of showing the full range again (direct .value
+  // assignment above doesn't fire the "input" event this normally reacts to).
+  updateHouseRoomCapacityOptions();
   showHouseState("upload");
   applyHousePlanUI();
 }

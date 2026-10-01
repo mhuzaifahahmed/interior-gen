@@ -108,3 +108,89 @@ def check_feasibility(
         "unit": unit,
         "explanation": None,
     }
+
+
+# Real-time "which room counts fit my plot" guidance (2026-09-30, explicit
+# user request): rather than only ever telling the user AFTER they submit
+# that their room program doesn't fit (check_feasibility()'s existing hard
+# gate), GET /api/house-room-requirements (app/main.py) exposes this table
+# so the Build a House form can pre-filter the Bedrooms/floor and
+# Bathrooms/floor dropdowns to only the counts that actually fit the
+# plot the user has typed in, plus a real "you need at least YxY" message -
+# same "real data, never guess" principle as every other deterministic
+# guarantee in this codebase, just surfaced BEFORE submission instead of
+# after.
+#
+# Deliberately checked against the GROUND FLOOR's room program, not an
+# upper floor's - the ground floor carries MORE fixed overhead (Living
+# Room + Kitchen + Dining Room, always guaranteed - see generate_house.py's
+# _ensure_ground_floor_public_rooms()) than an upper floor (just one
+# Sitting Area - see _ensure_upper_floor_lounge()), so for the SAME
+# bedroom/bathroom count applied to every floor (the common "Same on every
+# floor" input mode), the ground floor is always the binding constraint -
+# if it fits there, it fits everywhere.
+BEDROOM_COUNT_RANGE = range(0, 16)
+BATHROOM_COUNT_RANGE = range(0, 11)
+# A real bedroom count rarely comes with zero bathrooms in practice - held
+# fixed at this baseline while computing the BEDROOM table (and vice versa
+# for the BATHROOM table) since the two dropdowns are otherwise independent
+# inputs. A documented simplification, not a precise 2D feasibility solve
+# across every (bedroom, bathroom) pair - the real, binding guarantee stays
+# check_feasibility()'s own hard gate at generation time regardless.
+_BASELINE_OTHER_ROOM_COUNT = 1
+
+
+def min_area_for_room_count(category: str, count: int, other_count: int, total_floors: int, unit: str) -> float:
+    """Minimum GROUND FLOOR area (in the plot's unit, squared) needed to
+    feasibly fit `count` rooms of `category` ("bedroom" or "bathroom") -
+    `other_count` of the OTHER category held fixed alongside it - plus the
+    mandatory ground-floor public rooms and a staircase if `total_floors` >
+    1. Reuses the exact same min_area_for_room()/CIRCULATION_OVERHEAD_FRACTION
+    math check_feasibility() itself uses, so this can never disagree with
+    the real hard gate about what "fits" means."""
+    bedrooms = count if category == "bedroom" else other_count
+    bathrooms = count if category == "bathroom" else other_count
+    rooms = [{"name": "Living Room"}, {"name": "Kitchen"}, {"name": "Dining Room"}]
+    rooms += [{"name": f"Bedroom {i + 1}"} for i in range(bedrooms)]
+    rooms += [{"name": f"Bathroom {i + 1}"} for i in range(bathrooms)]
+    if total_floors and total_floors > 1:
+        rooms.append({"name": "Staircase"})
+    required_room_area = sum(min_area_for_room(r["name"], unit) for r in rooms)
+    return required_room_area * (1 + CIRCULATION_OVERHEAD_FRACTION)
+
+
+def room_count_requirements_table(total_floors: int, unit: str) -> dict:
+    """Returns {"bedrooms": [{"count", "min_area", "min_side"}, ...],
+    "bathrooms": [...]} across BEDROOM_COUNT_RANGE/BATHROOM_COUNT_RANGE -
+    `min_area` is the real minimum ground-floor area needed for that many
+    rooms (see min_area_for_room_count()); `min_side` is sqrt(min_area), a
+    simple "you need at least a YxY plot" figure assuming a roughly square
+    footprint (plots aren't always square, but a single number is far
+    easier to communicate in a UI hint than a family of length x width
+    pairs that all multiply to the same area)."""
+    return {
+        "bedrooms": [
+            {
+                "count": n,
+                "min_area": round(
+                    min_area_for_room_count("bedroom", n, _BASELINE_OTHER_ROOM_COUNT, total_floors, unit), 1
+                ),
+                "min_side": round(
+                    min_area_for_room_count("bedroom", n, _BASELINE_OTHER_ROOM_COUNT, total_floors, unit) ** 0.5, 1
+                ),
+            }
+            for n in BEDROOM_COUNT_RANGE
+        ],
+        "bathrooms": [
+            {
+                "count": n,
+                "min_area": round(
+                    min_area_for_room_count("bathroom", n, _BASELINE_OTHER_ROOM_COUNT, total_floors, unit), 1
+                ),
+                "min_side": round(
+                    min_area_for_room_count("bathroom", n, _BASELINE_OTHER_ROOM_COUNT, total_floors, unit) ** 0.5, 1
+                ),
+            }
+            for n in BATHROOM_COUNT_RANGE
+        ],
+    }

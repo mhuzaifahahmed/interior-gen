@@ -21,6 +21,7 @@ from app import payments
 from app.db import get_session, init_db
 from app import dynamic_settings
 from app.models import HouseProject, PaymentIntent, Project
+from app.pipeline.feasibility import room_count_requirements_table
 from app.pipeline.generate import TIERS, run_pipeline
 from app.pipeline.generate_house import run_house_pipeline
 from app.pipeline.house_prompts import USER_PROMPT_MAX_CHARS
@@ -305,6 +306,29 @@ def room_model_status():
 
     configured = settings.image_provider == "kaggle"
     return {"configured": configured, "connected": is_room_kaggle_connected() if configured else False}
+
+
+@app.get("/api/house-room-requirements")
+def house_room_requirements(floor_count: int = 1, unit: str = "ft"):
+    """Real-time "which bedroom/bathroom counts fit my plot" guidance for
+    the Build a House form (static/app.js's room-count dropdowns), shown
+    BEFORE submission instead of only after a hard feasibility-gate failure
+    - same underlying math as that hard gate (app/pipeline/feasibility.py's
+    check_feasibility()), just exposed as a lookup table the frontend can
+    compare its own typed-in plot dimensions against entirely client-side
+    (this endpoint doesn't need to know the plot's length/width at all -
+    only floor_count/unit, since the real minimum AREA for a given room
+    count doesn't depend on the plot's own size). Public/unauthenticated -
+    pure, deterministic, no per-user state, same low-stakes posture as
+    GET /api/room-model-status above.
+
+    floor_count is clamped to a sane range (1-10, matching the Floors
+    dropdown's own real bound) and unit falls back to "ft" for anything
+    unrecognized, rather than erroring - this is a UI hint, not a
+    validated, security-sensitive input."""
+    floor_count = max(1, min(floor_count, 10))
+    unit = unit if unit in ("ft", "m") else "ft"
+    return room_count_requirements_table(floor_count, unit)
 
 
 @app.post("/api/plan/cancel", response_model=PlanStatusResponse)

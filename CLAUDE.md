@@ -2645,6 +2645,67 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     Sitting Area shares the same row cross-dimension as every bedroom and genuinely borders the hallway,
     rather than asserting a specific area threshold - the sparse-room-on-huge-plot issue above means raw
     area alone isn't yet a fully solved/assertable number). 776/776 tests passing (3 new).
+- **v26 (2026-09-30): real-time "does this fit my plot" guidance for the Bedrooms/floor and
+  Bathrooms/floor dropdowns, explicit user request** - "the dropdown of the room only gives certain
+  numbers option when the input of the size of the plot is at least x... a text too that for X rooms you
+  need at least Y by Y plot."
+  - **`app/pipeline/feasibility.py`** gained `min_area_for_room_count(category, count, other_count,
+    total_floors, unit)` and `room_count_requirements_table(total_floors, unit)` - reuses the EXACT same
+    `min_area_for_room()`/`CIRCULATION_OVERHEAD_FRACTION` math `check_feasibility()` itself uses (so this
+    can never disagree with the real hard gate about what "fits" means), checked against the GROUND
+    FLOOR's room program specifically - it carries more fixed overhead (Living Room + Kitchen + Dining
+    Room, always guaranteed) than an upper floor (just one Sitting Area), so for the same bedroom/bathroom
+    count applied to every floor, the ground floor is always the binding constraint. `min_side` (a simple
+    "you need at least a YxY plot" number) is `sqrt(min_area)` - a deliberate simplification, since a
+    single number communicates far more easily in a UI hint than a family of length x width pairs that
+    all multiply to the same area, even though plots aren't always literally square. The OTHER room
+    category is held at a baseline of 1 while computing each table (not a precise 2D feasibility solve
+    across every (bedroom, bathroom) pair) - a documented simplification; the real, binding guarantee
+    stays `check_feasibility()`'s own hard gate at generation time regardless of anything this table says.
+  - **`GET /api/house-room-requirements?floor_count=N&unit=ft`** (`app/main.py`) - public/unauthenticated
+    (pure, deterministic, no per-user state, same posture as `GET /api/room-model-status`). Returns
+    `{"bedrooms": [{"count","min_area","min_side"}, ...], "bathrooms": [...]}` across counts 0-15
+    (bedrooms) / 0-10 (bathrooms). Deliberately does NOT take the plot's length/width as input at all - the
+    real minimum area needed for N bedrooms doesn't depend on the CURRENT plot size, only on floor_count/
+    unit (more floors = a mandatory staircase per floor) - so the frontend fetches this table ONCE per
+    (floor_count, unit) pair and compares it against whatever the user has typed into Length/Width entirely
+    client-side, with zero network round-trips on every keystroke. `floor_count` is clamped to 1-10,
+    `unit` falls back to "ft" for anything unrecognized - a UI hint, not a validated/security-sensitive
+    input.
+  - **Frontend** (`static/app.js`): `setupMorphDropdown()` gained a `refreshOptions()` method (re-queries
+    and rebinds a dropdown menu's `[data-value]` click handlers) - needed because swapping a dropdown
+    menu's `innerHTML` in place (to change its available options) destroys the old child elements' click
+    listeners along with them; the menu DOM node itself is untouched, only its children. A new
+    `updateHouseRoomCapacityOptions()` (triggered, debounced ~350ms, on Length/Width `input`, and
+    immediately on Floors/Unit `change`) rebuilds the Bedrooms/Bathrooms dropdown's option list to
+    `1..min(feasibleMax, ceiling)` (ceiling = 6 for bedrooms, 5 for bathrooms - the dropdown's own
+    original static range, never exceeded even on a huge plot) - but never fewer than 1 option, so the
+    dropdown is never literally empty; a real shortfall is communicated via the hint text instead of
+    silently removing every choice. The currently-SELECTED value is clamped down to the new range's top
+    when it no longer fits. Applies identically to the uniform-mode dropdowns AND every "Per floor" mode
+    row (`renderPerFloorRows()`'s own option lists now call the same `houseFeasibleOptionRange()` helper
+    instead of a hardcoded `[1,2,3,4,5,6]` array) - all three (uniform, per-floor rows, hint text) share
+    one `computeHouseRoomCapacity()` call so they can never disagree about what currently fits.
+    `#house-room-capacity-hint` (`static/index.html`, right below the Bedrooms & Bathrooms block) shows
+    e.g. *"Your 18x18ft plot fits up to 0 bedrooms and 0 bathrooms per floor. For 1 bedroom, you'll need at
+    least 22x22ft."* - hidden until real Length/Width values exist. Also wired into `resetToHouseUpload()`
+    (so clearing Length/Width back to blank restores the full option range instead of leaving it stuck
+    narrowed from the previous plot) and the 401-login-restore path (already covered for free, since
+    `houseFloorCountDropdown.setValue()`'s synthetic `"change"` event fires the same listener, and Length/
+    Width are restored before it runs).
+  - **Verification**: real browser testing via Playwright against a running local server (this project's
+    own standing rule for UI changes) - confirmed a 20x20ft plot narrows both dropdowns to just `["1"]`
+    with the correct hint text; a 150x150ft plot expands back to the full `1-6` range; shrinking from
+    150x150 back down to 18x18 correctly re-narrows AND clamps an already-selected value down to `"1"`;
+    "Per floor" mode's individual floor rows narrow identically to the uniform dropdowns. New tests:
+    `tests/test_feasibility.py` (6 new - increases with more bedrooms/bathrooms, includes staircase
+    overhead for multi-floor, agrees with `check_feasibility()` at the exact computed boundary, full-range
+    coverage, `min_side` is really `sqrt(min_area)`), `tests/test_api.py` (2 new - public/no-login-required,
+    clamps bad input instead of erroring). 784/784 tests passing (8 new).
+- **Planned, not built**: a per-floor "extras" text box (distinct from today's single shared extras field),
+  explicitly gated to a specific paid plan - see `future-plans/subscription-and-access-roadmap.md`'s
+  matching entry for the full detail and the two open decisions (which plan unlocks it, UI treatment for a
+  locked-out plan) still waiting on the user.
 
 ## Subscription plans, quotas, admin panel, and payments
 

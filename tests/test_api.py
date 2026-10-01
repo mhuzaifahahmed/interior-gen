@@ -322,6 +322,23 @@ def test_room_model_status_requires_no_login():
     assert res.status_code == 200
 
 
+def test_house_room_requirements_requires_no_login():
+    with TestClient(app) as client:
+        res = client.get("/api/house-room-requirements", params={"floor_count": 2, "unit": "ft"})
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["bedrooms"]) == 16
+    assert len(body["bathrooms"]) == 11
+    assert body["bedrooms"][0]["count"] == 0
+    assert body["bedrooms"][5]["min_area"] > body["bedrooms"][0]["min_area"]
+
+
+def test_house_room_requirements_clamps_bad_input_instead_of_erroring():
+    with TestClient(app) as client:
+        res = client.get("/api/house-room-requirements", params={"floor_count": 999, "unit": "parsecs"})
+    assert res.status_code == 200
+
+
 def test_input_metadata_json_written_to_storage(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
