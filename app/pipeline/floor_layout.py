@@ -229,6 +229,7 @@ from app.pipeline.room_specs import (
     garage_dimensions,
     max_area_for_room,
     min_area_for_room,
+    min_depth_for_room,
     min_width_for_room,
     staircase_dimensions,
     to_plot_unit,
@@ -907,8 +908,15 @@ def _slice_reserving_garage(
     # own weight happened to be small. When the partner IS the foyer/entry
     # room, its width here is clamped to a real, researched minimum instead
     # of being left to whatever the weight math alone would produce.
+    # The scorer (layout_quality.score_floor_layout) checks a foyer's
+    # governing dimension against min_depth_for_room(), not min_width_for_
+    # room() - room_specs.py's own "foyer" chart entry has a LARGER
+    # min_depth than min_width (a real, intentional entry shape, not a
+    # typo), so the real guarantee here must clear whichever of the two is
+    # larger, or this carve-out could satisfy its own narrower bar while
+    # still tripping the scorer's stricter one.
     min_partner_width = (
-        min_width_for_room(row_a_partner_name, unit)
+        max(min_width_for_room(row_a_partner_name, unit), min_depth_for_room(row_a_partner_name, unit))
         if classify_room_category(row_a_partner_name) == "foyer"
         else 0.0
     )
@@ -919,13 +927,54 @@ def _slice_reserving_garage(
 
     row_a_width = garage_width + partner_width
     column_c_name, column_c_weight = remaining_names[0], remaining_weights[0]
-    column_c_rect = {"name": column_c_name, "x": x + row_a_width, "y": y, "w": w - row_a_width, "h": h}
+    column_c_available_width = w - row_a_width
+
+    # Real, absolute cap on column C's width (2026-10) - this carve-out
+    # previously handed column C ALL remaining width unconditionally,
+    # bypassing max_area_for_room()'s cap entirely (a real, live-verified
+    # source of the "living room needs to be shortened" complaint: on a
+    # large plot, column C - typically the Living Room - could balloon to
+    # thousands of sq ft since nothing here ever consulted its own
+    # ABSOLUTE_MAX_AREA_SQM ceiling). The capped excess is never silently
+    # discarded - it becomes a real, separate "overflow" region (full
+    # height, immediately right of column C) populated by a proportional
+    # split of row B's own room list, so no room/area ever vanishes.
+    column_c_max_area = max_area_for_room(column_c_name, unit, garage_cars)
+    column_c_max_width = column_c_max_area / h if h > 0 else column_c_available_width
+    # Real minimum-WIDTH floor (2026-10) - capping purely by area/h can
+    # produce an unusably narrow sliver when h (the box's full height) is
+    # large (area-derived width shrinks as height grows) - min_width_for_
+    # room() keeps column C's real usable width even if that means its
+    # resulting AREA modestly exceeds the cap in a genuinely tall box (the
+    # same "residual overflow accepted" honesty _clamp_to_max_and_
+    # redistribute() already uses elsewhere in this module).
+    column_c_min_width = min_width_for_room(column_c_name, unit)
+    column_c_width = min(
+        column_c_available_width, max(column_c_max_width, garage_width * 0.5, column_c_min_width)
+    )
+    overflow_width = column_c_available_width - column_c_width
+    column_c_rect = {"name": column_c_name, "x": x + row_a_width, "y": y, "w": column_c_width, "h": h}
 
     row_b_names, row_b_weights = remaining_names[1:], remaining_weights[1:]
-    row_b_total = sum(row_b_weights)
-    row_b_rects = _slice(row_b_names, row_b_weights, x, y + garage_depth, row_a_width, h - garage_depth, row_b_total)
+    overflow_rects: list[dict] = []
+    if overflow_width > 0 and row_b_names:
+        split_idx = _balanced_split_index(row_b_weights) if len(row_b_names) > 1 else 1
+        overflow_names, overflow_weights = row_b_names[:split_idx], row_b_weights[:split_idx]
+        row_b_names, row_b_weights = row_b_names[split_idx:], row_b_weights[split_idx:]
+        if overflow_names:
+            overflow_total = sum(overflow_weights)
+            overflow_rects = _slice(
+                overflow_names, overflow_weights,
+                x + row_a_width + column_c_width, y, overflow_width, h, overflow_total,
+            )
 
-    return [garage_rect, partner_rect, column_c_rect] + row_b_rects
+    row_b_rects = (
+        _slice(row_b_names, row_b_weights, x, y + garage_depth, row_a_width, h - garage_depth, sum(row_b_weights))
+        if row_b_names
+        else []
+    )
+
+    return [garage_rect, partner_rect, column_c_rect] + row_b_rects + overflow_rects
 
 
 def _slice(

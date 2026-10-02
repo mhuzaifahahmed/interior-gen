@@ -4,8 +4,9 @@ from app.pipeline.floor_layout import (
     HALLWAY_MIN_WIDTH_M,
     _zone_key,
     layout_floor,
+    layout_floor_with_warnings,
 )
-from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, to_plot_unit
+from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, max_area_for_room, min_depth_for_room, to_plot_unit
 
 
 def _area(rect):
@@ -802,6 +803,56 @@ def test_layout_floor_garage_three_region_split_tiles_exactly():
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 60 + 1e-6
         assert r["y"] + r["h"] <= 50 + 1e-6
+
+
+def test_layout_floor_garage_entry_meets_the_real_foyer_min_depth():
+    # 2026-10, Measurements Model refinement - direct regression for the
+    # ORIGINAL reported "entrance is a 1-foot hallway" bug's exact code
+    # path (the garage carve-out's row-A partner). Also a regression for a
+    # bug found DURING this refinement's own verification: the first fix
+    # only guaranteed min_width_for_room("foyer"), but the scorer checks
+    # min_depth_for_room("foyer") - which is the LARGER of the two for this
+    # category - so the real guarantee must clear whichever is bigger.
+    rooms = [
+        {"name": "Entry", "area": 1},
+        {"name": "Living Room", "area": 3},
+        {"name": "Garage", "area": 1},
+        {"name": "Bedroom", "area": 2},
+    ]
+    dimensions = {"length": 50, "width": 45, "unit": "ft"}
+    rects, warnings = layout_floor_with_warnings(rooms, dimensions, garage_cars=1)
+    entry = next(r for r in rects if r["name"] == "Entry")
+    governing = min(entry["w"], entry["h"])
+    assert governing >= min_depth_for_room("Entry", "ft") - 1e-6
+    assert not any(v.kind == "foyer_shallow" for v in warnings)
+
+
+def test_layout_floor_garage_column_c_room_is_capped_not_unbounded():
+    # 2026-10 - direct regression for a real bug found during this
+    # refinement's own visual verification: the garage carve-out's
+    # "column C" room (the next room in line, typically Living Room) used
+    # to receive ALL remaining width unconditionally, bypassing
+    # max_area_for_room()'s absolute cap entirely - on a large plot this
+    # produced a multi-THOUSAND sq ft room (a direct instance of the
+    # reported "living room needs to be shortened" complaint). On a
+    # genuinely tall/narrow box, the real, documented min-width floor (see
+    # floor_layout.py's own comment) can still let the resulting AREA
+    # modestly exceed the cap - the point of this test is "meaningfully
+    # bounded, not literally whatever's left", not "exactly capped to the
+    # sq ft".
+    rooms = [
+        {"name": "Entry", "area": 1},
+        {"name": "Living Room", "area": 3},
+        {"name": "Garage", "area": 1},
+        {"name": "Kitchen", "area": 1},
+    ]
+    dimensions = {"length": 150, "width": 150, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions, garage_cars=1)
+    living = next(r for r in rects if r["name"] == "Living Room")
+    living_area = living["w"] * living["h"]
+    uncapped_hypothetical = 150 * 150  # roughly what the old, uncapped behavior could produce
+    assert living_area < uncapped_hypothetical * 0.2  # a real, meaningful reduction, not "whatever's left"
+    assert living["w"] < 50  # a real, narrow-column width, not the whole remaining span of the plot
 
 
 # ---- Real staircase carve-out (2026-09-29) - real, live-reported bug:    ----
