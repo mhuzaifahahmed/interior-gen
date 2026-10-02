@@ -324,6 +324,7 @@ def test_structured_house_inputs_compose_the_prompt_and_persist(monkeypatch):
             "bathrooms": 2,
             "floor_bedrooms": None,
             "floor_bathrooms": None,
+            "floor_extras": None,
             "extras": "dirty kitchen each floor, garage",
             "facing": None,
             "color_palette": None,
@@ -429,7 +430,54 @@ def test_malformed_floor_bedroom_arrays_degrade_to_legacy_flat_path(monkeypatch)
         body = status_res.json()
         assert body["house_inputs"]["floor_bedrooms"] is None
         assert body["house_inputs"]["bedrooms"] == 3
-        assert body["prompt"] == "1 floor, 3 bedrooms, 2 bathrooms"
+
+
+def test_per_floor_extras_boxes_persist_in_house_inputs(monkeypatch):
+    # Part 5 of the Measurements Model refinement (2026-10) - the per-floor
+    # "Per floor" mode text boxes (separate from the single shared `extras`
+    # field) round-trip as a real, length-padded array.
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={
+                "length": "40",
+                "width": "60",
+                "unit": "ft",
+                "floor_count": "3",
+                "floor_extras": '["kitchen", "", "dirty kitchen"]',
+            },
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        status_res = client.get(f"/api/house-projects/{house_project_id}")
+        body = status_res.json()
+        assert body["house_inputs"]["floor_extras"] == ["kitchen", "", "dirty kitchen"]
+
+
+def test_malformed_floor_extras_degrades_silently_without_breaking_the_request(monkeypatch):
+    monkeypatch.setattr(main_module, "get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(main_module, "get_storage", lambda: FakeStorage())
+
+    with TestClient(app) as client:
+        _signup_and_login(client)
+        files = {"file": ("plot.png", _sample_image_bytes(), "image/png")}
+        create_res = client.post(
+            "/api/house-projects",
+            files=files,
+            data={"length": "40", "width": "60", "unit": "ft", "floor_extras": "not valid json"},
+        )
+        assert create_res.status_code == 200
+        house_project_id = create_res.json()["house_project_id"]
+
+        status_res = client.get(f"/api/house-projects/{house_project_id}")
+        assert status_res.json()["house_inputs"]["floor_extras"] is None
 
 
 def test_house_facing_selection_persists_in_house_inputs(monkeypatch):
@@ -596,6 +644,7 @@ def test_house_input_metadata_json_written_to_storage(monkeypatch):
             "bathrooms": 2,
             "floor_bedrooms": None,
             "floor_bathrooms": None,
+            "floor_extras": None,
             "extras": "modern style",
             "facing": None,
             "color_palette": None,

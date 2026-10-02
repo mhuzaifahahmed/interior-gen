@@ -1,5 +1,6 @@
 from app.pipeline.house_requirements import (
     DEFAULT_FRONT_YARD_DEPTH_M,
+    extra_rooms_from_floor_text,
     mentions_front_yard,
     mentions_garage,
     mentions_utility,
@@ -128,3 +129,37 @@ def test_parse_extra_rooms_by_floor_deduplicates_and_sorts():
     result = parse_extra_rooms_by_floor(text)
     assert result.count(("kitchen", "Kitchen", 2)) == 1
     assert result[0][2] <= result[-1][2]  # sorted by floor number
+
+
+# ---- extra_rooms_from_floor_text() - Part 5 per-floor extras boxes ----
+
+
+def test_extra_rooms_from_floor_text_maps_known_floor_box_text_to_tuples():
+    # index 0 = floor 1, index 1 = floor 2, index 2 = floor 3 - no floor
+    # number needs to appear IN the text itself, unlike parse_extra_rooms_by_floor.
+    result = extra_rooms_from_floor_text(["kitchen and dining room", "", "dining room"])
+    assert ("kitchen", "Kitchen", 1) in result
+    assert ("dining", "Dining Room", 1) in result
+    assert ("dining", "Dining Room", 3) in result
+    assert not any(r[2] == 2 for r in result)  # the blank floor-2 box contributes nothing
+
+
+def test_extra_rooms_from_floor_text_resolves_regional_and_leisure_categories():
+    result = extra_rooms_from_floor_text(["dirty kitchen", "prayer room and a gym"])
+    assert ("dirty_kitchen", "Dirty Kitchen", 1) in result
+    assert ("prayer", "Prayer Room", 2) in result
+    assert ("family", "Family Room", 2) in result
+
+
+def test_extra_rooms_from_floor_text_handles_none_and_empty_list():
+    assert extra_rooms_from_floor_text(None) == []
+    assert extra_rooms_from_floor_text([]) == []
+    assert extra_rooms_from_floor_text(["", "", ""]) == []
+
+
+def test_extra_rooms_from_floor_text_ignores_bedroom_and_bathroom_mentions():
+    # Bedroom/bathroom counts are already fully owned by the per-floor COUNT
+    # system (floor_bedrooms/floor_bathrooms) - the extras box must not
+    # double-handle them.
+    result = extra_rooms_from_floor_text(["a cozy bedroom with ensuite bathroom"])
+    assert result == []

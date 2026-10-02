@@ -1919,6 +1919,57 @@ def test_run_house_pipeline_passes_extra_rooms_to_generate_room_layout(monkeypat
     assert ("dining", "Dining Room", 2) in captured[0]
 
 
+def test_run_house_pipeline_per_floor_extras_box_is_unioned_with_the_shared_box(monkeypatch):
+    # Part 5 of the Measurements Model refinement (2026-10) - a per-floor
+    # box ("dining room" typed under Floor 3) must reach generate_room_
+    # layout()'s extra_rooms the same way the shared box's "dining room on
+    # floor 3" phrasing already does, and the two sources must UNION (not
+    # replace each other) when both are given.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hextraroom3/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hextraroom3", status="queued", plot_image_key="hextraroom3/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    captured = []
+    real_fake = FakeProvider()
+
+    def spy_generate_room_layout(
+        dimensions, prompt, plot_description=None, floor_count=None,
+        floor_bedrooms=None, floor_bathrooms=None, extra_rooms=None,
+    ):
+        captured.append(extra_rooms)
+        return real_fake.generate_room_layout(
+            dimensions, prompt, plot_description, floor_count, floor_bedrooms, floor_bathrooms, extra_rooms
+        )
+
+    provider = FakeProvider()
+    provider.generate_room_layout = spy_generate_room_layout
+
+    run_house_pipeline(
+        "hextraroom3",
+        provider,
+        storage,
+        {"length": 60, "width": 80, "unit": "ft"},
+        prompt="3 floors. Extras: dining room on floor 2",
+        floor_count=3,
+        floor_extras=["", "", "dirty kitchen"],
+    )
+
+    assert captured
+    # From the shared box's free-text phrasing.
+    assert ("dining", "Dining Room", 2) in captured[0]
+    # From the per-floor box (floor 3, index 2) - a category the shared-box
+    # parser's floor-reference regex never needed to find, since this one
+    # arrives already knowing its own floor number.
+    assert ("dirty_kitchen", "Dirty Kitchen", 3) in captured[0]
+
+
 def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):
     # A requested front yard must reduce the actual building footprint
     # passed to layout_floor()/the blueprint renderers - reserved BEFORE any

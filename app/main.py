@@ -1108,6 +1108,7 @@ async def create_house_project(
     bathrooms: int | None = Form(None),
     floor_bedrooms: str | None = Form(None),
     floor_bathrooms: str | None = Form(None),
+    floor_extras: str | None = Form(None),
     extras: str = Form(""),
     facing: str | None = Form(None),
     color_palette: str | None = Form(None),
@@ -1226,6 +1227,13 @@ async def create_house_project(
         bedrooms = sum(floor_bedrooms_list)
     if floor_bathrooms_list is not None:
         bathrooms = sum(floor_bathrooms_list)
+    # Per-floor free-text extras boxes (2026-10, Part 5 - "Per floor" mode's
+    # own text input per row, SEPARATE from the single shared `extras`
+    # field above). Same JSON-array-of-strings parse as floor_bedrooms/
+    # floor_bathrooms, length-clamped/padded to floor_count, None on any
+    # parse problem - house_requirements.extra_rooms_from_floor_text()
+    # (app/pipeline/generate_house.py) is the actual consumer.
+    floor_extras_list = _parse_floor_extras_json(floor_extras, floor_count)
 
     house_inputs = {
         "floor_count": floor_count,
@@ -1233,6 +1241,7 @@ async def create_house_project(
         "bathrooms": bathrooms,
         "floor_bedrooms": floor_bedrooms_list,
         "floor_bathrooms": floor_bathrooms_list,
+        "floor_extras": floor_extras_list,
         "extras": extras or None,
         "facing": facing or None,
         "color_palette": color_palette,
@@ -1341,6 +1350,7 @@ async def create_house_project(
         architectural_style,
         floor_bedrooms_list,
         floor_bathrooms_list,
+        floor_extras_list,
     )
 
     return HouseProjectCreateResponse(house_project_id=house_project.id)
@@ -1385,6 +1395,39 @@ def _parse_floor_counts_json(raw: str | None, floor_count: int | None) -> list[i
             counts.append(counts[-1])
 
     return counts
+
+
+def _parse_floor_extras_json(raw: str | None, floor_count: int | None) -> list[str] | None:
+    """Parses create_house_project's floor_extras Form field - a JSON array
+    of per-floor free-text strings (e.g. '["kitchen", "dining room"]' for a
+    2-floor house, index i is floor i+1), mirroring _parse_floor_counts_json()
+    above but for text rather than ints. Each element is capped at
+    USER_PROMPT_MAX_CHARS (same defensive re-truncation as every other
+    free-text field here); the list itself is length-clamped/padded (with
+    empty strings, not a repeated value - an unset floor has no extra
+    request, unlike a repeated bedroom count) to `floor_count` when known.
+    Returns None on any parse problem, same "silently correct obvious
+    nonsense" treatment as the rest of this endpoint."""
+    if not raw:
+        return None
+    try:
+        values = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(values, list):
+        return None
+    try:
+        texts = [str(v).strip()[:USER_PROMPT_MAX_CHARS] for v in values]
+    except (TypeError, ValueError):
+        return None
+
+    if floor_count is not None:
+        if len(texts) > floor_count:
+            texts = texts[:floor_count]
+        while len(texts) < floor_count:
+            texts.append("")
+
+    return texts
 
 
 def _compose_house_requirements(

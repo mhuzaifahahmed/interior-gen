@@ -1191,11 +1191,13 @@ setBedBathMode("uniform");
 function renderPerFloorRows() {
   const floorCount = parseInt(houseFloorCountInput.value, 10) || 1;
 
-  // Snapshot current values BEFORE wiping the DOM below.
+  // Snapshot current values BEFORE wiping the DOM below (bed/bath dropdowns
+  // + the per-floor extras text box - Part 5, 2026-10).
   Object.keys(perFloorDropdowns).forEach((floorNum) => {
     perFloorBedBathValues[floorNum] = {
       bedrooms: document.getElementById(`house-floor-${floorNum}-bedrooms`)?.value,
       bathrooms: document.getElementById(`house-floor-${floorNum}-bathrooms`)?.value,
+      extras: document.getElementById(`house-floor-${floorNum}-extras`)?.value,
     };
   });
 
@@ -1215,8 +1217,9 @@ function renderPerFloorRows() {
 
   for (let floorNum = 1; floorNum <= floorCount; floorNum++) {
     const row = document.createElement("div");
-    row.className = "flex gap-4 items-end";
+    row.className = "flex flex-col gap-2";
     row.innerHTML = `
+<div class="flex gap-4 items-end">
 <span class="font-label-caps text-label-caps text-on-surface-variant pb-3 w-16 shrink-0">Floor ${floorNum}</span>
 <div class="flex-1">
 <label class="font-label-caps text-label-caps text-on-surface-variant mb-2 block">Bedrooms</label>
@@ -1239,6 +1242,10 @@ function renderPerFloorRows() {
 <div class="hidden absolute left-0 right-0 top-full mt-2 rounded-xl bg-surface border border-outline-variant shadow-[0_12px_32px_rgba(28,24,21,0.18)] overflow-hidden z-30" id="house-floor-${floorNum}-bathrooms-menu" role="listbox">${optionHtml(bathroomOptions)}</div>
 </div>
 <input type="hidden" id="house-floor-${floorNum}-bathrooms" value="2"/>
+</div>
+</div>
+<div class="pl-20">
+<input type="text" id="house-floor-${floorNum}-extras" maxlength="200" placeholder="Anything specific for Floor ${floorNum}? e.g. dining room, prayer room" class="w-full bg-transparent border-b border-outline-variant py-2 font-body-md text-sm text-on-surface focus:outline-none focus:border-primary transition-all duration-200"/>
 </div>`;
     housePerFloorRowsContainer.appendChild(row);
 
@@ -1259,6 +1266,8 @@ function renderPerFloorRows() {
     const preserved = perFloorBedBathValues[floorNum];
     bedroomsDropdown.setValue((preserved && preserved.bedrooms) || "3");
     bathroomsDropdown.setValue((preserved && preserved.bathrooms) || "2");
+    const extrasInput = document.getElementById(`house-floor-${floorNum}-extras`);
+    if (extrasInput && preserved && preserved.extras) extrasInput.value = preserved.extras;
     perFloorDropdowns[floorNum] = { bedrooms: bedroomsDropdown, bathrooms: bathroomsDropdown };
   }
 }
@@ -1490,6 +1499,24 @@ function collectFloorBedBathArrays() {
     bedrooms: Array(floorCount).fill(uniformBedrooms),
     bathrooms: Array(floorCount).fill(uniformBathrooms),
   };
+}
+
+// Per-floor extras boxes (Part 5, 2026-10) - only meaningful in "Per floor"
+// mode (each row has its own text box); "Same on every floor" mode has no
+// per-floor extras concept at all, the single shared #house-extras field
+// already covers house-wide requests in that mode. Returns null (meaning
+// "omit floor_extras from the request entirely") in uniform mode, or a real
+// floor-ordered array of strings (possibly containing blanks for floors
+// with nothing typed) in per-floor mode.
+function collectFloorExtrasArray() {
+  if (houseBedBathModeSelect.value !== "perfloor") return null;
+  const floorCount = parseInt(houseFloorCountInput.value, 10) || 1;
+  const extras = [];
+  for (let floorNum = 1; floorNum <= floorCount; floorNum++) {
+    const input = document.getElementById(`house-floor-${floorNum}-extras`);
+    extras.push((input && input.value.trim()) || "");
+  }
+  return extras;
 }
 
 const houseProgressCard = document.getElementById("house-progress-card");
@@ -1783,6 +1810,10 @@ async function restorePendingGeneration() {
       (pending.floorBathrooms || []).forEach((value, i) => {
         const dd = perFloorDropdowns[i + 1];
         if (dd) dd.bathrooms.setValue(String(value));
+      });
+      (pending.floorExtras || []).forEach((value, i) => {
+        const input = document.getElementById(`house-floor-${i + 1}-extras`);
+        if (input) input.value = value || "";
       });
     }
     houseFacingDropdown.setValue(pending.facing || "");
@@ -3304,6 +3335,11 @@ houseForm.addEventListener("submit", async (e) => {
   const { bedrooms: floorBedroomsArr, bathrooms: floorBathroomsArr } = collectFloorBedBathArrays();
   formData.append("floor_bedrooms", JSON.stringify(floorBedroomsArr));
   formData.append("floor_bathrooms", JSON.stringify(floorBathroomsArr));
+  // Per-floor extras boxes (Part 5, 2026-10) - only sent in "Per floor"
+  // mode (collectFloorExtrasArray() returns null in uniform mode, where
+  // the single shared #house-extras field below already covers it).
+  const floorExtrasArr = collectFloorExtrasArray();
+  if (floorExtrasArr) formData.append("floor_extras", JSON.stringify(floorExtrasArr));
   // Plot facing is optional - only sent when the user actually picked one;
   // the backend resolves an omitted/blank value to "south" by default (see
   // run_house_pipeline()'s docstring).
@@ -3344,6 +3380,7 @@ houseForm.addEventListener("submit", async (e) => {
         bedBathMode: houseBedBathModeSelect.value,
         floorBedrooms: floorBedroomsArr,
         floorBathrooms: floorBathroomsArr,
+        floorExtras: floorExtrasArr,
         facing: houseFacingInput.value,
         architecturalStyle: houseArchStyleInput.value,
         colorPalette: houseColorPaletteInput.value,

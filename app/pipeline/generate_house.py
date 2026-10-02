@@ -18,6 +18,7 @@ from app.pipeline.house_prompts import (
     house_style_words,
 )
 from app.pipeline.house_requirements import (
+    extra_rooms_from_floor_text,
     mentions_garage,
     mentions_utility,
     parse_extra_rooms_by_floor,
@@ -483,6 +484,7 @@ def run_house_pipeline(
     architectural_style: str | None = None,
     floor_bedrooms: list[int] | None = None,
     floor_bathrooms: list[int] | None = None,
+    floor_extras: list[str] | None = None,
 ) -> None:
     """Runs the "Build a House" pipeline for one HouseProject. Mirrors
     app/pipeline/generate.py's run_pipeline shape: its own DB session (runs as
@@ -553,6 +555,18 @@ def run_house_pipeline(
     reproduced bug where a floor came back containing only a single
     "Hallway" room. None means the legacy, house-wide-total-only path
     (unchanged behavior).
+
+    floor_extras (2026-10, Part 5 of the Measurements Model refinement,
+    optional) - per-floor free-text requests (index i is floor i+1 - see
+    static/index.html's "Per floor" mode, one text box per floor row),
+    SEPARATE from the single shared `extras` box folded into `prompt`
+    above. Parsed by house_requirements.extra_rooms_from_floor_text()
+    (known-floor, no floor-reference regex needed) and UNIONED with the
+    shared box's own parse_extra_rooms_by_floor(requirements_text) output
+    below - both feed the identical _ensure_requested_rooms_by_floor()
+    deterministic guarantee, so a per-floor box and the shared box behave
+    identically once parsed. None/empty means no per-floor requests at all
+    (the shared box alone still works exactly as before this param existed).
     """
     key_prefix = f"users/{username}/buildAHouse/output" if username else "local.output"
     with Session(engine) as session:
@@ -643,7 +657,15 @@ def run_house_pipeline(
             # being silently overridden by the prompt's own ground-floor-
             # only convention). _ensure_requested_rooms_by_floor() below is
             # the actual guarantee; this is only the prompt-level half.
-            extra_rooms = parse_extra_rooms_by_floor(requirements_text)
+            # Unioned with the per-floor boxes' own known-floor parse (Part 5,
+            # 2026-10) - a dict keyed by the tuple dedupes any request that
+            # happens to appear in both the shared box and a per-floor box.
+            extra_rooms = list(
+                {
+                    *parse_extra_rooms_by_floor(requirements_text),
+                    *extra_rooms_from_floor_text(floor_extras),
+                }
+            )
             try:
                 room_layout = provider.generate_room_layout(
                     dimensions,
