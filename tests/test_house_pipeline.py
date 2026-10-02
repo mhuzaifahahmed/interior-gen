@@ -1935,13 +1935,13 @@ def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):
         session.commit()
 
     captured_dimensions = []
-    real_layout_floor = generate_house_module.layout_floor
+    real_layout_floor = generate_house_module.layout_floor_with_warnings
 
     def spy_layout_floor(rooms, dimensions, garage_cars=None, facing=None):
         captured_dimensions.append(dict(dimensions))
         return real_layout_floor(rooms, dimensions, garage_cars, facing)
 
-    monkeypatch.setattr(generate_house_module, "layout_floor", spy_layout_floor)
+    monkeypatch.setattr(generate_house_module, "layout_floor_with_warnings", spy_layout_floor)
 
     provider = FakeProvider()
     run_house_pipeline(
@@ -1978,13 +1978,13 @@ def test_run_house_pipeline_defaults_facing_to_south_when_unspecified(monkeypatc
         session.commit()
 
     captured_facings = []
-    real_layout_floor = generate_house_module.layout_floor
+    real_layout_floor = generate_house_module.layout_floor_with_warnings
 
     def spy_layout_floor(rooms, dimensions, garage_cars=None, facing=None):
         captured_facings.append(facing)
         return real_layout_floor(rooms, dimensions, garage_cars, facing)
 
-    monkeypatch.setattr(generate_house_module, "layout_floor", spy_layout_floor)
+    monkeypatch.setattr(generate_house_module, "layout_floor_with_warnings", spy_layout_floor)
 
     provider = FakeProvider()
     run_house_pipeline("hfacing1", provider, storage, {"length": 40, "width": 60, "unit": "ft"})
@@ -2005,13 +2005,13 @@ def test_run_house_pipeline_honors_an_explicit_facing_selection(monkeypatch):
         session.commit()
 
     captured_facings = []
-    real_layout_floor = generate_house_module.layout_floor
+    real_layout_floor = generate_house_module.layout_floor_with_warnings
 
     def spy_layout_floor(rooms, dimensions, garage_cars=None, facing=None):
         captured_facings.append(facing)
         return real_layout_floor(rooms, dimensions, garage_cars, facing)
 
-    monkeypatch.setattr(generate_house_module, "layout_floor", spy_layout_floor)
+    monkeypatch.setattr(generate_house_module, "layout_floor_with_warnings", spy_layout_floor)
 
     provider = FakeProvider()
     run_house_pipeline(
@@ -2117,3 +2117,46 @@ def test_run_house_pipeline_does_not_wait_for_floor_plan_before_completing(monke
     # real headroom above that).
     house_project = wait_for_floor_plan_status(engine, "hconcurrent1", "done", timeout=4.0)
     assert house_project.floor_plan_key is not None
+
+
+def test_run_house_pipeline_downgrades_feasibility_on_hard_quality_violations(monkeypatch):
+    # 2026-10, Part 4 "intelligence loop" wiring: a floor whose best-scoring
+    # candidate layout STILL has real, hard layout_quality violations (a
+    # room genuinely too small/narrow/disconnected even after trying
+    # several layout variants) must downgrade the existing "feasible"
+    # verdict to "tight" with a real explanation - not silently ship a
+    # cramped plan as if nothing were wrong. Forces the violation
+    # deterministically via a spy (the scorer's own logic is already
+    # directly covered by tests/test_layout_quality.py) to test the WIRING
+    # in run_house_pipeline(), not re-derive a natural sliver geometry.
+    from app.pipeline.layout_quality import Violation
+
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["hquality1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="hquality1", status="queued", plot_image_key="hquality1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    real_layout_floor_with_warnings = generate_house_module.layout_floor_with_warnings
+
+    def spy_layout_floor_with_warnings(rooms, dimensions, garage_cars=None, facing=None):
+        rects, _real_warnings = real_layout_floor_with_warnings(rooms, dimensions, garage_cars, facing)
+        forced = [Violation("Bedroom", "narrow", True, "forced for test")]
+        return rects, forced
+
+    monkeypatch.setattr(generate_house_module, "layout_floor_with_warnings", spy_layout_floor_with_warnings)
+
+    provider = FakeProvider()
+    run_house_pipeline("hquality1", provider, storage, {"length": 60, "width": 80, "unit": "ft"})
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "hquality1")
+        assert house_project.status == "done"
+        feasibility = json.loads(house_project.feasibility_json)
+        assert feasibility["verdict"] == "tight"
+        assert "Bedroom" in feasibility["explanation"]

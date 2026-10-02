@@ -10,7 +10,7 @@ from app.models import HouseProject
 from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
 from app.pipeline.blueprint_svg import render_floor_blueprint
 from app.pipeline.feasibility import check_feasibility
-from app.pipeline.floor_layout import layout_floor
+from app.pipeline.floor_layout import layout_floor_with_warnings
 from app.pipeline.house_prompts import (
     build_house_elevation_prompt,
     build_house_prompt,
@@ -862,8 +862,23 @@ def run_house_pipeline(
                     )
                     house_project.blueprint_status = "infeasible"
                 else:
+                    # Honest failure (2026-10, Part 4 "intelligence loop"):
+                    # layout_floor_with_warnings() returns the best-scoring
+                    # candidate PLUS its real layout_quality violations - a
+                    # floor whose best candidate still has HARD violations
+                    # (a room genuinely too small/narrow/disconnected even
+                    # after trying several layout variants) collects them
+                    # here so the existing feasibility verdict can be
+                    # downgraded below, instead of silently shipping a
+                    # cramped plan as if nothing were wrong.
+                    hard_quality_issues: list[str] = []
                     for floor in room_layout["floors"]:
-                        rects = layout_floor(floor["rooms"], building_dimensions, garage_cars, facing)
+                        rects, quality_warnings = layout_floor_with_warnings(
+                            floor["rooms"], building_dimensions, garage_cars, facing
+                        )
+                        for v in quality_warnings:
+                            if v.hard:
+                                hard_quality_issues.append(f"Floor {floor['floor_number']}: {v.room} ({v.detail})")
                         png_bytes = render_floor_blueprint(
                             floor["floor_number"], rects, building_dimensions, total_floors, facing
                         )
@@ -889,6 +904,25 @@ def run_house_pipeline(
                                 floor["floor_number"],
                             )
                     house_project.blueprint_status = "done"
+
+                    # Downgrade the existing feasibility verdict (reusing
+                    # the same plumbing/frontend banner "tight"/"not_feasible"
+                    # already use - no new DB column, no new schema field)
+                    # when the best-scoring candidate layout still has real,
+                    # hard practicality violations. Never OVERRIDES an
+                    # already-stronger "not_feasible"/"tight" verdict from
+                    # check_feasibility() itself - this is a second,
+                    # independent signal, not a replacement for the first.
+                    if hard_quality_issues and feasibility_result and feasibility_result["verdict"] == "feasible":
+                        detail = "; ".join(hard_quality_issues[:3])
+                        feasibility_result = {
+                            **feasibility_result,
+                            "verdict": "tight",
+                            "explanation": (
+                                "The computed layout fits the plot, but some rooms came out tighter than "
+                                f"their practical minimums even after trying several layout options: {detail}."
+                            ),
+                        }
             except Exception:
                 logger.exception(
                     "blueprint generation failed for house project %s; falling back to plot photo for the render",
