@@ -131,14 +131,20 @@ def parse_front_yard_depth(text: str, unit: str) -> float | None:
 # regardless of what Gemini's own response happened to include.
 #
 # Deliberately scoped to "amenity" room types a user might reasonably want
-# ADDED to a specific floor beyond the default set (kitchen/dining/living/
-# study/laundry/closet) - NOT bedroom/bathroom (already fully owned by the
-# per-floor bedroom/bathroom COUNT system - see generate_house.py's
-# _enforce_room_counts()) and NOT garage/staircase/foyer (already have their
-# own dedicated, more specific deterministic handling elsewhere - a
-# "garage on floor 2" request would be architecturally nonsensical and is
-# intentionally not supported here).
-_EXTRA_ROOM_CATEGORIES = {"kitchen", "dining", "living", "study", "laundry", "closet"}
+# ADDED to a specific floor beyond the default set - NOT bedroom/bathroom
+# (already fully owned by the per-floor bedroom/bathroom COUNT system - see
+# generate_house.py's _enforce_room_counts()) and NOT garage/staircase/foyer
+# (already have their own dedicated, more specific deterministic handling
+# elsewhere - a "garage on floor 2" request would be architecturally
+# nonsensical and is intentionally not supported here). Expanded 2026-10
+# (Measurements Model refinement, Part 1b's taxonomy) to cover the new
+# room_specs.py categories a user might reasonably name per floor - dirty
+# kitchen, pantry, prayer room, and the new "family" leisure category
+# (den/media/game/gym/bar/studio...).
+_EXTRA_ROOM_CATEGORIES = {
+    "kitchen", "dining", "living", "study", "laundry", "closet",
+    "dirty_kitchen", "pantry", "prayer", "family", "powder", "storage",
+}
 _EXTRA_ROOM_LABELS = {
     "kitchen": "Kitchen",
     "dining": "Dining Room",
@@ -146,6 +152,12 @@ _EXTRA_ROOM_LABELS = {
     "study": "Study",
     "laundry": "Laundry Room",
     "closet": "Closet",
+    "dirty_kitchen": "Dirty Kitchen",
+    "pantry": "Pantry",
+    "prayer": "Prayer Room",
+    "family": "Family Room",
+    "powder": "Powder Room",
+    "storage": "Storage Room",
 }
 _FLOOR_REF_RE = re.compile(r"floor\s*(\d+)|(\d+)\s*(?:st|nd|rd|th)\s*floor", re.IGNORECASE)
 # Splits free text into clauses at common separators (comma/period/
@@ -184,5 +196,34 @@ def parse_extra_rooms_by_floor(text: str) -> list[tuple[str, str, int]]:
                 continue
             label = _EXTRA_ROOM_LABELS[category]
             if any(re.search(r"\b" + re.escape(keyword) + r"\b", clause, re.IGNORECASE) for keyword in keywords):
+                results.add((category, label, floor_number))
+    return sorted(results, key=lambda r: (r[2], r[0]))
+
+
+def extra_rooms_from_floor_text(floor_extras: list[str] | None) -> list[tuple[str, str, int]]:
+    """Per-floor free-text box backstop (Part 5 of the Measurements Model
+    refinement, 2026-10) - a SEPARATE input from the single shared `extras`
+    box above: each box's text is already KNOWN to belong to a specific
+    floor by its position in the list (index i = floor i+1), so unlike
+    parse_extra_rooms_by_floor() this needs no floor-reference regex or
+    clause-splitting - just a direct keyword scan per box. Reuses the SAME
+    _CATEGORY_KEYWORDS/_EXTRA_ROOM_CATEGORIES/_EXTRA_ROOM_LABELS the shared
+    box already uses, so "dirty kitchen" typed in either place resolves
+    identically. Returns deduplicated (category, canonical_label,
+    floor_number) tuples, the same shape parse_extra_rooms_by_floor()
+    returns - both outputs are meant to be unioned and fed into
+    generate_house.py's _ensure_requested_rooms_by_floor() together."""
+    if not floor_extras:
+        return []
+    results: set[tuple[str, str, int]] = set()
+    for i, text in enumerate(floor_extras):
+        if not text:
+            continue
+        floor_number = i + 1
+        for category, keywords in _CATEGORY_KEYWORDS:
+            if category not in _EXTRA_ROOM_CATEGORIES:
+                continue
+            label = _EXTRA_ROOM_LABELS[category]
+            if any(re.search(r"\b" + re.escape(keyword) + r"\b", text, re.IGNORECASE) for keyword in keywords):
                 results.add((category, label, floor_number))
     return sorted(results, key=lambda r: (r[2], r[0]))

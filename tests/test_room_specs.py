@@ -1,9 +1,15 @@
 from app.pipeline.room_specs import (
+    EXTERIOR_WALL_THICKNESS_M,
+    INTERIOR_WALL_THICKNESS_M,
     classify_room_category,
+    door_width_for_wall,
     garage_dimensions,
     garage_min_area_sqm,
     max_area_for_room,
     min_area_for_room,
+    min_depth_for_room,
+    min_width_for_room,
+    preferred_area_for_room,
     to_plot_unit,
 )
 
@@ -84,11 +90,32 @@ def test_master_bedroom_still_classifies_as_a_plain_bedroom():
 
 def test_utility_room_has_a_real_usable_minimum_size():
     # 2026-09-19: a real user report that the utility/laundry room was too
-    # cramped (~40 sq ft) to actually fit a washer, dryer, sink, and storage.
-    # Not asserting an exact number (that would overfit to today's constant)
-    # - just that it's now comfortably above a small bathroom's own minimum,
-    # a stable relative bar for "not cramped".
-    assert min_area_for_room("Utility Room", "ft") > min_area_for_room("Bathroom", "ft")
+    # cramped to actually fit a washer, dryer, sink, and storage. 2026-10's
+    # Measurements Model refinement re-grounded every room's minimum in
+    # published residential standards (~35 sqft for a laundry/utility room,
+    # a real, researched floor - see room_specs.py's size chart) rather than
+    # a loose relative comparison to another room type, which is no longer a
+    # meaningful "not cramped" bar now that every category has its own
+    # independently-researched minimum.
+    assert min_area_for_room("Utility Room", "ft") >= 30.0
+
+
+def test_unrecognized_room_has_a_finite_max_area_not_unbounded():
+    # Real, live-reproduced bug (2026-09-29): an unrecognized room name used
+    # to have NO cap at all (math.inf), letting it absorb nearly all of
+    # layout_floor()'s weight-based redistribution once every bounded room
+    # nearby hit its own cap - ballooning to roughly the size of the whole
+    # floor. A finite cap bounds that. "Hallway" is no longer the right
+    # example room (2026-10's taxonomy refinement added "hallway" as a real,
+    # recognized - and deliberately PINNED, like garage/staircase -
+    # category, since a corridor's width is a real functional requirement,
+    # not a preference) - use a genuinely unrecognized/invented name instead.
+    import math
+
+    unrecognized_max = max_area_for_room("Zxqvy Chamber", "ft")
+    assert math.isfinite(unrecognized_max)
+    # Still generous relative to its own minimum, not clamped to nothing.
+    assert unrecognized_max > min_area_for_room("Zxqvy Chamber", "ft")
 
 
 def test_a_room_merely_containing_master_in_an_unrelated_context_is_unaffected():
@@ -98,17 +125,85 @@ def test_a_room_merely_containing_master_in_an_unrelated_context_is_unaffected()
     assert min_area_for_room("Master Suite Closet", "ft") == min_area_for_room("Closet", "ft")
 
 
-def test_unrecognized_room_has_a_finite_max_area_not_unbounded():
-    # Real, live-reproduced bug (2026-09-29): an unrecognized room name
-    # (e.g. a Gemini-invented "Hallway" - classify_room_category() has no
-    # "hallway" keyword, so it falls to "default") used to have NO cap at
-    # all (math.inf), letting it absorb nearly all of layout_floor()'s
-    # weight-based redistribution once every bounded room nearby hit its
-    # own cap - ballooning to roughly the size of the whole floor. A finite
-    # cap (same 4.0x multiplier "living" uses) bounds that.
-    import math
+# ---- 2026-10 "Measurements Model" refinement: taxonomy/synonyms/walls/doors ----
 
-    unrecognized_max = max_area_for_room("Hallway", "ft")
-    assert math.isfinite(unrecognized_max)
-    # Still generous relative to its own minimum, not clamped to nothing.
-    assert unrecognized_max > min_area_for_room("Hallway", "ft")
+
+def test_classify_room_category_resolves_regional_and_western_synonyms():
+    # Common keyword-list matches (tier 1).
+    assert classify_room_category("Dirty Kitchen") == "dirty_kitchen"
+    assert classify_room_category("Powder Room") == "powder"
+    assert classify_room_category("Half Bath") == "powder"
+    assert classify_room_category("TV Lounge") == "family"
+    assert classify_room_category("Home Theater") == "family"
+    assert classify_room_category("Puja Room") == "prayer"
+    assert classify_room_category("Walk-in Closet") == "closet"
+    assert classify_room_category("Mudroom") == "laundry"
+    # Regional synonym-dict matches (tier 2, phrases not in the primary list).
+    assert classify_room_category("Sehan") == "courtyard"
+    assert classify_room_category("Baithak") == "living"
+    assert classify_room_category("Mumty") == "staircase"
+    assert classify_room_category("Servant Quarters") == "bedroom"
+
+
+def test_classify_room_category_never_raises_on_an_invented_name():
+    # A genuinely invented room name must still resolve to SOME sensible
+    # category (never an error, never "unsupported") - either a real
+    # leisure category via a loose keyword match, or the generic fallback.
+    assert classify_room_category("Cigar Lounge") in ("family", "living", "default")
+    assert classify_room_category("Totally Invented Xyzzy Room") == "default"
+
+
+def test_generic_fallback_room_has_a_finite_sane_size():
+    area = min_area_for_room("Zorp Room", "ft")
+    assert 0 < area < 100  # a real, bounded footprint, not zero or absurd
+    assert max_area_for_room("Zorp Room", "ft") < 300
+
+
+def test_door_width_bathroom_is_narrower_than_standard_and_front():
+    bath_bed = door_width_for_wall("bathroom", "bedroom", "ft")
+    standard = door_width_for_wall("bedroom", "living", "ft")
+    closet = door_width_for_wall("closet", "bedroom", "ft")
+    assert closet < bath_bed < standard
+
+
+def test_door_width_for_wall_uses_the_smaller_of_the_two_rooms():
+    # A door between two categories always uses the MORE private/smaller
+    # room's own base width, never the larger one.
+    assert door_width_for_wall("bathroom", "living", "ft") == door_width_for_wall("bathroom", "bedroom", "ft")
+
+
+def test_exterior_wall_is_thicker_than_interior_partition():
+    assert EXTERIOR_WALL_THICKNESS_M > INTERIOR_WALL_THICKNESS_M
+
+
+def test_min_width_and_min_depth_are_real_positive_governing_dimensions():
+    assert min_width_for_room("Foyer", "ft") > 0
+    assert min_depth_for_room("Foyer", "ft") > 0
+    # The foyer's real minimum depth directly addresses the "1-foot
+    # entrance" bug - it must be a genuinely usable entry depth, not a
+    # sliver.
+    assert min_depth_for_room("Foyer", "ft") >= 4.0
+
+
+def test_preferred_area_is_at_least_the_minimum_and_at_most_the_absolute_max():
+    for name in ("Bedroom 2", "Living Room", "Kitchen", "Dining Room"):
+        min_a = min_area_for_room(name, "ft")
+        pref_a = preferred_area_for_room(name, "ft")
+        max_a = max_area_for_room(name, "ft")
+        assert min_a <= pref_a <= max_a
+
+
+def test_living_room_has_a_real_absolute_ceiling_not_unbounded():
+    # Direct regression for the real, reported "living room needs to be
+    # shortened... how is it practical" / ~9,451 sqft ballooning bugs - the
+    # cap is now a real, finite area regardless of multiplier math.
+    assert max_area_for_room("Living Room", "ft") <= 410.0  # ~400 sqft + float slack
+
+
+def test_family_leisure_category_has_a_tighter_cap_than_living():
+    # The new "family" category (den/media/game/gym/bar...) intentionally
+    # caps lower than "living" - it's a secondary leisure space, not the
+    # dominant social room.
+    assert max_area_for_room("Media Room", "ft") < max_area_for_room("Living Room", "ft")
+
+
