@@ -211,7 +211,15 @@ def render_floor_blueprint(
         interior_door_edges.append(edge)
         cat_a, cat_b = classify_room_category(a["name"]), classify_room_category(b["name"])
         door_m = door_width_for_wall(cat_a, cat_b, unit)
-        interior_door_widths_px.append(max(8.0, min(30.0, door_m * scale)))
+        # Real regression, found and fixed 2026-10: when this per-category
+        # sizing replaced the old single shared door_len_px formula, the
+        # pixel clamp was accidentally widened from the original [10, 26]
+        # to [8, 30] - on a smaller-scale (more px/ft) plot this made every
+        # door render 15-30% larger than before, unrelated to and
+        # undermining the actual point of per-category sizing (a bathroom
+        # door reads narrower than a bedroom's, but both got visually
+        # bigger than they used to be). Restored to the original ceiling.
+        interior_door_widths_px.append(max(10.0, min(26.0, door_m * scale)))
 
     facing_normalized = (facing or "").strip().lower()
     # The front entrance only ever exists on the GROUND floor (2026-09-29,
@@ -238,7 +246,10 @@ def render_floor_blueprint(
     for edge, width_px in zip(interior_door_edges, interior_door_widths_px):
         _draw_door(draw, edge, plot_x0, plot_y0, scale, width_px)
     if front_door_edge:
-        front_door_width_px = max(8.0, min(34.0, to_plot_unit(FRONT_DOOR_WIDTH_M, unit) * scale))
+        # Same restored-ceiling fix as the interior doors above - the front
+        # door previously shared the identical [10, 26] clamp as interior
+        # doors (there was no separate, wider allowance for it).
+        front_door_width_px = max(10.0, min(26.0, to_plot_unit(FRONT_DOOR_WIDTH_M, unit) * scale))
         _draw_front_door(
             draw, front_door_edge, facing_normalized, plot_x0, plot_y0, scale, front_door_width_px, small_font
         )

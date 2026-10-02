@@ -282,14 +282,17 @@ def _door_specs_for_floor(
             continue
         cat_a, cat_b = classify_room_category(a.get("name") or ""), classify_room_category(b.get("name") or "")
         door_m = door_width_for_wall(cat_a, cat_b, unit)
-        nominal_len_px = max(8.0, min(30.0, door_m * scale))
+        # Restored original [10, 26] ceiling (2026-10 regression fix) - see
+        # blueprint_svg.py's matching comment; this mirror had the same
+        # accidentally-widened [8, 30] clamp.
+        nominal_len_px = max(10.0, min(26.0, door_m * scale))
         spec = _interior_door_spec(edge, x0c, y0c, scale, nominal_len_px)
         if spec:
             specs.append(spec)
 
     front_edge = _front_door_opening(rects, length, width, facing_normalized, unit) if floor_number == 1 else None
     if front_edge:
-        front_nominal_len_px = max(8.0, min(34.0, to_plot_unit(FRONT_DOOR_WIDTH_M, unit) * scale))
+        front_nominal_len_px = max(10.0, min(26.0, to_plot_unit(FRONT_DOOR_WIDTH_M, unit) * scale))
         spec = _front_door_spec(front_edge, facing_normalized, x0c, y0c, scale, front_nominal_len_px)
         if spec:
             specs.append(spec)
