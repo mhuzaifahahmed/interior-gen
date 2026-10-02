@@ -1,0 +1,28 @@
+name: Keep Render backend awake
+
+# Render's free tier spins the backend down after ~15 min of no HTTP traffic;
+# the first request after that takes 30-60s to wake it back up, which is what
+# static/index.html's "cold-start-toast" pill exists to explain (see
+# app.js's fetchWithColdStartHint). This workflow pings a cheap, DB-free
+# health endpoint (app/main.py's GET /api/health) every 5 minutes so the
+# instance never goes idle long enough to sleep, and the toast never has a
+# real cold start to show for on real user traffic.
+#
+# GitHub's own cron scheduler is "best effort" and can be delayed under load
+# - see https://docs.github.com/actions/using-workflows/events-that-trigger-workflows#schedule
+# - so this isn't a hard guarantee, but it lands comfortably inside Render's
+# 15-minute idle window in practice. If pings start visibly lagging, switch
+# to a purpose-built free pinger (cron-job.org / UptimeRobot) hitting the
+# same URL instead - no app-side change needed either way.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /api/health
+        run: curl -fsS --max-time 20 https://interior-gen.onrender.com/api/health
