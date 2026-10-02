@@ -44,7 +44,13 @@ import ezdxf
 from ezdxf.enums import TextEntityAlignment
 
 from app.pipeline.blueprint_svg import _front_door_opening, _shared_edge, _should_suppress_direct_door
-from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, classify_room_category, to_plot_unit
+from app.pipeline.room_specs import (
+    EXTERIOR_WALL_THICKNESS_M,
+    FRONT_DOOR_WIDTH_M,
+    classify_room_category,
+    door_width_for_wall,
+    to_plot_unit,
+)
 
 # DXF's $INSUNITS header field - only the two units this app's dimension
 # inputs ever use (see static/index.html's unit <select>). Falls back to
@@ -90,7 +96,12 @@ def render_floor_blueprint_dxf(
     unit = dimensions.get("unit", "") or ""
 
     wall_thickness = to_plot_unit(WALL_THICKNESS_M, unit)
-    door_width = to_plot_unit(DOOR_WIDTH_M, unit)
+    # Front/exterior door width - the single shared room_specs.py source
+    # (2026-10, Part 2), same value interior doors fall back to as their
+    # "default" base. Kept as its own variable name (not reusing
+    # door_width_for_wall()) since the exterior door isn't "between two
+    # rooms" in the same sense an interior door is.
+    door_width = to_plot_unit(FRONT_DOOR_WIDTH_M, unit)
     window_width = to_plot_unit(WINDOW_WIDTH_M, unit)
     window_width_living = to_plot_unit(WINDOW_WIDTH_LIVING_M, unit)
     # 2026-10 net-envelope refinement - see _draw_exterior_walls_for_room()'s
@@ -150,7 +161,13 @@ def render_floor_blueprint_dxf(
         if edge is None:
             continue
         suppress_door = has_hallway and _should_suppress_direct_door(a, b)
-        _draw_interior_wall(msp, edge, wall_thickness, None if suppress_door else door_width)
+        # Proportional, per-category door width (2026-10, Part 2) - mirrors
+        # blueprint_svg.py's own per-edge door sizing so the PNG and the
+        # real .dxf export never disagree about how wide a given door is.
+        pair_door_width = door_width_for_wall(
+            classify_room_category(a.get("name") or ""), classify_room_category(b.get("name") or ""), unit
+        )
+        _draw_interior_wall(msp, edge, wall_thickness, None if suppress_door else pair_door_width)
 
     for rect in rects:
         _draw_room_text(msp, rect, unit)

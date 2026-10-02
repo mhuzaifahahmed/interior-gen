@@ -94,7 +94,7 @@ from app.pipeline.blueprint_svg import (
 )
 from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box, render_conditioning_edge_map
 from app.pipeline.floor_layout import layout_floor
-from app.pipeline.room_specs import classify_room_category
+from app.pipeline.room_specs import FRONT_DOOR_WIDTH_M, classify_room_category, door_width_for_wall, to_plot_unit
 from app.providers.session_errors import KaggleSessionUnavailableError, classify_kaggle_failure
 from app.providers.gemini import _explicit_floor_count
 
@@ -262,9 +262,10 @@ def _door_specs_for_floor(
     scale = box_w / length if length else 0.0
     if scale <= 0:
         return []
-    # Same nominal door length blueprint_svg.render_floor_blueprint() uses, so
-    # the Concept Layout's doors are proportioned like the Computed Layout's.
-    nominal_len_px = max(10.0, min(26.0, 2.6 * scale))
+    # Proportional, per-category door width (2026-10, Part 2) - same shared
+    # room_specs.door_width_for_wall() source blueprint_svg.render_floor_
+    # blueprint() uses, so the Concept Layout's doors are proportioned like
+    # the Computed Layout's (a bathroom door narrower than a bedroom's, etc).
     facing_normalized = (facing or "").strip().lower()
 
     has_hallway = any(r.get("name") == "Hallway" for r in rects)
@@ -279,13 +280,17 @@ def _door_specs_for_floor(
             continue
         if has_entry and _should_suppress_garage_direct_door(a, b):
             continue
+        cat_a, cat_b = classify_room_category(a.get("name") or ""), classify_room_category(b.get("name") or "")
+        door_m = door_width_for_wall(cat_a, cat_b, unit)
+        nominal_len_px = max(8.0, min(30.0, door_m * scale))
         spec = _interior_door_spec(edge, x0c, y0c, scale, nominal_len_px)
         if spec:
             specs.append(spec)
 
     front_edge = _front_door_opening(rects, length, width, facing_normalized, unit) if floor_number == 1 else None
     if front_edge:
-        spec = _front_door_spec(front_edge, facing_normalized, x0c, y0c, scale, nominal_len_px)
+        front_nominal_len_px = max(8.0, min(34.0, to_plot_unit(FRONT_DOOR_WIDTH_M, unit) * scale))
+        spec = _front_door_spec(front_edge, facing_normalized, x0c, y0c, scale, front_nominal_len_px)
         if spec:
             specs.append(spec)
 

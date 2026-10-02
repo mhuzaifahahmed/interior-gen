@@ -60,7 +60,13 @@ from itertools import combinations
 from PIL import Image, ImageDraw, ImageFont
 
 from app.pipeline.floor_layout import _zone_key
-from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, classify_room_category, to_plot_unit
+from app.pipeline.room_specs import (
+    EXTERIOR_WALL_THICKNESS_M,
+    FRONT_DOOR_WIDTH_M,
+    classify_room_category,
+    door_width_for_wall,
+    to_plot_unit,
+)
 
 # ---- Canvas layout ----
 TARGET_PLOT_LONGEST_SIDE_PX = 780
@@ -183,10 +189,17 @@ def render_floor_blueprint(
     # treated identically to an interior door for furniture-avoidance
     # purposes, then drawn separately below (it's not between two rooms,
     # so it can't go through the interior _draw_door() loop).
-    door_len_px = max(10.0, min(26.0, 2.6 * scale))
+    # Proportional, per-category door widths (2026-10, Part 2 of the
+    # Measurements Model refinement) - replaces the single, near-fixed door
+    # size every door used to share regardless of which room it led into
+    # (a bathroom got the same wide door as a bedroom, visibly eating a
+    # short wall). door_width_for_wall() is the one shared source every
+    # renderer (this file, blueprint_dxf.py, kaggle_autocad.py) reads, so a
+    # bathroom's door stays narrow everywhere consistently.
     has_hallway = any(r["name"] == "Hallway" for r in rects)
     has_entry = any(classify_room_category(r["name"]) == "foyer" for r in rects)
     interior_door_edges = []
+    interior_door_widths_px = []
     for a, b in combinations(rects, 2):
         edge = _shared_edge(a, b)
         if edge is None:
@@ -196,6 +209,9 @@ def render_floor_blueprint(
         if has_entry and _should_suppress_garage_direct_door(a, b):
             continue
         interior_door_edges.append(edge)
+        cat_a, cat_b = classify_room_category(a["name"]), classify_room_category(b["name"])
+        door_m = door_width_for_wall(cat_a, cat_b, unit)
+        interior_door_widths_px.append(max(8.0, min(30.0, door_m * scale)))
 
     facing_normalized = (facing or "").strip().lower()
     # The front entrance only ever exists on the GROUND floor (2026-09-29,
@@ -219,10 +235,13 @@ def render_floor_blueprint(
         door_walls = _room_door_walls(rect, all_door_edges)
         _draw_furniture(draw, rect, plot_x0, plot_y0, scale, small_font, stair_direction, door_walls)
 
-    for edge in interior_door_edges:
-        _draw_door(draw, edge, plot_x0, plot_y0, scale, door_len_px)
+    for edge, width_px in zip(interior_door_edges, interior_door_widths_px):
+        _draw_door(draw, edge, plot_x0, plot_y0, scale, width_px)
     if front_door_edge:
-        _draw_front_door(draw, front_door_edge, facing_normalized, plot_x0, plot_y0, scale, door_len_px, small_font)
+        front_door_width_px = max(8.0, min(34.0, to_plot_unit(FRONT_DOOR_WIDTH_M, unit) * scale))
+        _draw_front_door(
+            draw, front_door_edge, facing_normalized, plot_x0, plot_y0, scale, front_door_width_px, small_font
+        )
 
     for rect in rects:
         _draw_windows(draw, rect, length, width, plot_x0, plot_y0, scale, unit)

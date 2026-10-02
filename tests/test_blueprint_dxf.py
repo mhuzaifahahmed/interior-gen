@@ -292,3 +292,30 @@ def test_render_floor_blueprint_dxf_still_valid_with_facing():
     doc = _parse(render_floor_blueprint_dxf(1, rects, dimensions, facing="west"))
     audit_result = doc.audit()
     assert len(audit_result.errors) == 0
+
+
+def test_render_floor_blueprint_dxf_bathroom_door_is_narrower_than_living_door():
+    # 2026-10, Part 2 direct end-to-end regression: a bathroom's door into an
+    # adjacent room must come out narrower than a living room's, via the
+    # real rendering pipeline (not just the room_specs helper in isolation) -
+    # both rooms given identical, generously wide shared walls so wall-
+    # length capping can't be the reason for any size difference.
+    from app.pipeline.room_specs import door_width_for_wall
+
+    dimensions = {"length": 60, "width": 40, "unit": "ft"}
+    rects = [
+        {"name": "Bathroom", "x": 0, "y": 0, "w": 20, "h": 20},
+        {"name": "Hallway", "x": 20, "y": 0, "w": 20, "h": 40},
+        {"name": "Living Room", "x": 0, "y": 20, "w": 20, "h": 20},
+    ]
+    doc = _parse(render_floor_blueprint_dxf(1, rects, dimensions))
+    door_arcs = [a for a in doc.modelspace().query("ARC") if a.dxf.layer == "DOORS"]
+    radii = sorted(round(a.dxf.radius, 3) for a in door_arcs)
+
+    expected_bathroom_width = round(door_width_for_wall("bathroom", "hallway", "ft"), 3)
+    expected_living_width = round(door_width_for_wall("living", "hallway", "ft"), 3)
+
+    assert expected_bathroom_width < expected_living_width  # sanity: the fixture is actually testing something
+    assert expected_bathroom_width in radii
+    assert expected_living_width in radii
+    assert min(radii) < max(radii)
