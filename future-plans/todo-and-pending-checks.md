@@ -189,8 +189,14 @@ flagged as active work items the user wants to come back to:
   starting, since this builds directly on both.
 - [ ] #13 - a REAL per-room exterior-wall/window guarantee (currently just the existing placement
   heuristic, not an enforced constraint) - this is what "room ventilation intelligence" maps to.
-- [ ] #20/#21 - a real post-generation validator + candidate-layout scoring, instead of one deterministic
-  pass with no regenerate-if-invalid loop.
+- [x] **#20/#21 - DONE (2026-10, "Measurements Model" refinement, see CLAUDE.md's v27 entry).** A real
+  post-generation validator (`app/pipeline/layout_quality.py`'s `score_floor_layout()` - hard violations:
+  undersized area, too-narrow width, shallow foyer, a door wall too short for even a minimum door; soft:
+  slivers, imbalance) + bounded 5-candidate scoring (`layout_floor()` nudges the top-level public-vs-back
+  split fraction and keeps the best). **Partial, honestly scoped**: this is best-of-N candidate scoring
+  from ONE already-parameterized knob, not a full regenerate-with-different-room-ordering loop or a
+  genuine constraint solver - a true packing guarantee (width-aware, not just area) is still a future
+  item if this proves insufficient (see CLAUDE.md's v27 entry's own "Explicitly deferred" list).
 
 ## Deferred: "high-rise" bedrooms/bathrooms input mode (2026-09-28)
 
@@ -201,12 +207,9 @@ editing at all - the system would need to fill in sensible bedroom/bathroom coun
 requiring N rows of manual entry. Not started - would need its own UX (e.g. a building "type" or density
 preset) and a real default-count-generation strategy, not just a UI toggle.
 
-## Planned: per-floor extras text box, gated to a specific plan (2026-09-30)
+## Per-floor extras text box - BUILT (2026-10); plan-gating still open
 
-Full detail in `future-plans/subscription-and-access-roadmap.md`'s matching entry - not duplicated here,
-just flagged as a real, explicitly-requested next item. User wants a SEPARATE free-text box per floor row
-(e.g. "kitchen and dining room" typed directly under Floor 1, "dining room" under Floor 3) instead of
-today's single shared extras field (which already supports "kitchen on floor 2"-style phrasing, just all
-in one box). Explicitly gated to a specific paid plan - which plan(s), and the exact UI treatment for a
-locked-out plan, are both still open questions to confirm with the user first ("which we will also discuss
-later") - not started.
+Built as part of the "Measurements Model Major Refinement" branch - see CLAUDE.md's "Build a House
+feature" v27 entry and `future-plans/subscription-and-access-roadmap.md`'s matching (now updated) entry.
+Shipped UNGATED - the plan-gating decision (which plan(s), UI treatment for a locked-out plan) is still
+open, to confirm with the user ("which we will also discuss later").

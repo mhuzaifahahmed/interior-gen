@@ -2702,10 +2702,152 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     overhead for multi-floor, agrees with `check_feasibility()` at the exact computed boundary, full-range
     coverage, `min_side` is really `sqrt(min_area)`), `tests/test_api.py` (2 new - public/no-login-required,
     clamps bad input instead of erroring). 784/784 tests passing (8 new).
-- **Planned, not built**: a per-floor "extras" text box (distinct from today's single shared extras field),
-  explicitly gated to a specific paid plan - see `future-plans/subscription-and-access-roadmap.md`'s
-  matching entry for the full detail and the two open decisions (which plan unlocks it, UI treatment for a
-  locked-out plan) still waiting on the user.
+- **v27 (2026-10, "Measurements Model Major Refinement" branch): a real dimensional model, proportional
+  doors, honest capacity math, a best-of-N "intelligence loop," and per-floor extras boxes - the direct
+  response to a sustained, detailed user critique ("how is it practical... 50 by 50 plot can manage upto
+  15 bedrooms how the hell... the entrance pathway is just not there... the doors are taking all the
+  space... i can integrate gemini [but] i dont wanna do that so make it as close to intelligent to a
+  pipeline made for houses as you can") - explicit user requirement: stays 100% deterministic, NO Gemini
+  change anywhere (Room Redesign's calls, `analyze_plot`, `generate_room_layout`, the elevation render are
+  all untouched; only the deterministic pipeline got smarter). Root-cause diagnosis, confirmed by reading
+  the code, not guessed: the engine had only ever guaranteed room **area**, never **width/depth**, never an
+  **absolute size ceiling**, and never modeled **wall thickness** at all - one gap behind the 15-bedroom
+  fantasy, the sliver entrance, the wall-eating doors, and the ballooning living room simultaneously. Full
+  plan researched and grounded in real published standards (IRC minimums, standard door widths, IRC
+  hallway clear width, residential room-size surveys, masonry wall-thickness convention - this is a
+  Pakistan-market product, not US wood-frame).
+  - **Part 0 - wall thickness is now real, not ignored.** `app/pipeline/room_specs.py` gained
+    `EXTERIOR_WALL_THICKNESS_M` (0.23/9in brick) and `INTERIOR_WALL_THICKNESS_M` (0.115/4.5in half-brick) -
+    the single source every renderer derives from. `floor_layout.layout_floor()` (renamed internally to
+    wrap a new `layout_floor_with_warnings()`, see Part 4) now reserves a real exterior-wall band before
+    slicing - the algorithm only ever sees the smaller NET buildable envelope
+    (`length/width - 2*exterior`), and the result is shifted back into the real gross-plot coordinate
+    space afterward. Every room's minimum-area reservation is additionally inflated by
+    `INTERIOR_WALL_AREA_ALLOWANCE_FRACTION` (8%, a documented approximation, not a per-room perimeter
+    calc) so the NET clear area that remains after the renderer's own poché carve still meets the chart.
+    **Real, cascading downstream break, found and fixed the same pass**: rooms no longer touch the bare
+    plot boundary at exactly 0/length/width - every exterior-boundary-matching call site
+    (`_front_door_opening()`, `_draw_windows()`, `blueprint_dxf._draw_exterior_walls_for_room()`,
+    `conditioning_image._draw_plot_boundary()`) had to be updated to compare against the real wall-thickness
+    offset instead of a literal 0/length/width, or no room ever matched and doors/windows/the entrance
+    silently stopped being drawn at all.
+  - **Part 1 - a real NET dimensional chart, replacing the old area-only one.** `room_specs.py`'s
+    `ROOM_SIZE_SPECS_M` rewritten with real min width/depth per category (not just a derived area product);
+    new `PREFERRED_AREA_SQM`/`ABSOLUTE_MAX_AREA_SQM` dicts give every category a real, finite ceiling
+    **independent of `ROOM_MAX_MULTIPLIER`** - `max_area_for_room()` now takes the smaller of
+    (min × multiplier) and the absolute cap, the actual fix for unbounded ballooning on a large plot (a
+    multiplier alone has no ceiling independent of how big a room's own minimum already is). Living capped
+    at ~400 sq ft, the new "family" leisure category (den/media/game/gym/bar...) capped tighter at ~250.
+    New `DOOR_WIDTH_BY_CATEGORY_M` + `door_width_for_wall(cat_a, cat_b, unit)` - the smaller/more-private
+    room governs a shared door (front 0.9m, standard 0.8m, bathroom 0.7m, closet/powder 0.6m) - one shared
+    source every renderer reads.
+  - **Part 1b - a genuinely broad room taxonomy, "never unsupported" as an explicit product stance.**
+    `_CATEGORY_KEYWORDS` expanded to ~20 canonical categories covering the user's full supplied taxonomy
+    (dirty kitchen, pantry, powder room, the new "family" leisure bucket, prayer room, storage, mechanical,
+    hallway/corridor as its own PINNED category like garage/staircase, porch, courtyard) plus a new
+    `ROOM_SYNONYMS` dict for regional South-Asian terms (baithak→living, sehan→courtyard, mumty→staircase,
+    puja/pooja/namaz→prayer, servant quarters→bedroom...) and Western alternates (primary suite→bedroom,
+    jack-and-jill→bathroom, great room→living...). `classify_room_category()`'s resolution ladder: exact
+    keyword → synonym → generic "default" fallback - **never an error, never surfaced to the user as
+    "unsupported"** (an invented name like "Cigar Lounge" still resolves to a sensible category via a loose
+    keyword match or the generic fallback, always placed with a real, finite, sane size). "sitting" was
+    deliberately kept mapped to "living" (not moved to the new "family" category) - see v25's own
+    ballooning-prevention fix, which this would have silently broken.
+  - **Part 2 - proportional, per-category door widths, replacing one near-fixed size every door used to
+    share.** `blueprint_svg.py`, `blueprint_dxf.py`, and `kaggle_autocad.py` (the AI Concept Layout's door
+    overlay) all now compute each door's width via `door_width_for_wall()` per edge/pair instead of one
+    global `door_len_px`/`DOOR_WIDTH_M` constant - a bathroom's door is visibly narrower than a bedroom's
+    everywhere, consistently, and the PNG/DXF/Concept Layout can never disagree.
+  - **Part 3 - honest capacity math, the direct fix for the reported "50x50 fits 15 bedrooms" bug.**
+    Confirmed arithmetic behind the old number: `sum(bare-minimum room areas) × 1.20` vs the raw GROSS
+    plot area, no hallway, capped only by the lookup table's own arbitrary ceiling - mathematically
+    permitted ~22 bedrooms on 2,500 sq ft; "15" was purely the table's `range(0,16)` stopping point, not a
+    real constraint. `feasibility.py` rewritten: bedroom/bathroom capacity now uses **preferred** (not
+    bare-minimum) sizes; a real hallway area is added once the private-zone room count reaches
+    `floor_layout`'s own corridor threshold (`_estimated_hallway_area()`, approximating corridor length
+    from each served room's own min width, the same way the real `_pack_row()` packer works); the
+    comparison is against the real NET buildable envelope (mirroring Part 0 exactly); interior-wall
+    allowance and circulation overhead are explicit, separate, documented fractions instead of one
+    unexplained flat 20%. `BEDROOM_COUNT_RANGE`/`BATHROOM_COUNT_RANGE` lowered from `range(0,16)`/
+    `range(0,11)` to `range(0,9)`/`range(0,7)`. **Net, regression-guarded result for the exact reported
+    case**: a 50×50ft floor now reports a real, grounded ~8 bedroom / ~6 bathroom ceiling - still a
+    meaningful number (not artificially forced down to an unjustified "3-4"), but genuinely computed from
+    preferred sizes + a real hallway + real walls, not a fiction.
+  - **Part 4 - the "intelligence loop": a bounded, deterministic best-of-N candidate search, replacing one
+    blind pass.** New `app/pipeline/layout_quality.py` (pure, no I/O) scores a floor's rects for real
+    practicality: **hard** violations (undersized area, narrower than the category's real min width, a
+    foyer below its real min depth, a shared wall too short for even a 0.6m door, degenerate zero-size) and
+    **soft** ones (a visible sliver aspect ratio >2.8, well-under-preferred imbalance). `layout_floor()`
+    (now `layout_floor_with_warnings()` underneath, with `layout_floor()` kept as a thin, byte-compatible
+    wrapper for its ~15 existing callers) generates 5 candidates by nudging the ONE top-level public-vs-back
+    split fraction (an already-existing, already-parameterized knob) around its weight-derived value, scores
+    each, and keeps the highest - **ties prefer the original (delta=0) geometry**, so an already-fine layout
+    stays byte-identical to before this feature existed. `run_house_pipeline()` surfaces real hard
+    violations by downgrading the existing `feasibility_json` verdict from `"feasible"` to `"tight"` with a
+    real explanation naming the actual rooms (reusing the existing frontend banner - no new DB column, no
+    new schema field) - never silently ships a cramped plan. Explicitly best-of-SCORED-CANDIDATES, not a
+    mathematical packing guarantee - a genuinely infeasible program can still produce hard violations even
+    in its best candidate.
+  - **Part 5 - a real per-floor free-text extras box, built this same pass (the "Planned, not built" note
+    below is now obsolete).** "Per floor" mode gained a plain text input under each floor's bedroom/
+    bathroom dropdowns (`renderPerFloorRows()`, `static/app.js`) - SEPARATE from the single shared
+    `#house-extras` field, which still covers house-wide requests (garage, front yard, style). Uses the
+    structured seam (cleaner than re-parsing free text): each box's text is already known to belong to a
+    specific floor by its position (index i = floor i+1), so the new
+    `house_requirements.extra_rooms_from_floor_text()` needs no floor-reference regex at all - just a
+    direct keyword scan per box, reusing the same `_CATEGORY_KEYWORDS`/`_EXTRA_ROOM_CATEGORIES` the shared
+    box already uses (now expanded to cover dirty kitchen/pantry/prayer/family/powder/storage too). Its
+    output is UNIONED with the shared box's own `parse_extra_rooms_by_floor(requirements_text)` result and
+    fed into the existing `_ensure_requested_rooms_by_floor()` deterministic guarantee - zero changes to
+    that injection function or the Gemini prompt path. `app/main.py` gained `floor_extras: str | None` (a
+    JSON array of per-floor strings, parsed by the new `_parse_floor_extras_json()`, length-padded with
+    empty strings - not a repeated value, since an unset floor genuinely has no extra request). **Ungated**
+    in this branch - plan-gating a specific paid tier is tracked separately (see
+    `future-plans/subscription-and-access-roadmap.md`).
+  - **Two real bugs found during this pass's own visual verification (rendering the exact reported cases
+    and inspecting the PNGs - this project's standing rule for layout-engine changes, not just trusting
+    the tests)**, both fixed the same day:
+    1. The Part-2 foyer min-width clamp (in `_slice_reserving_garage()`'s row-A partner path, the exact
+       code path the ORIGINAL "1-foot entrance" bug lived in) guaranteed the WRONG, smaller dimension -
+       `room_specs.py`'s own "foyer" chart entry has a LARGER `min_depth` (1.86m/6.1ft) than `min_width`
+       (1.2m/3.94ft, an intentional real entry shape, not a typo) - so the clamp satisfied its own bar
+       while the `layout_quality` scorer (which checks `min_depth_for_room` for a foyer specifically)
+       still flagged a hard `foyer_shallow` violation. Fixed by clamping to whichever of the two is larger.
+    2. The garage carve-out's "column C" room (the next room in line, typically Living Room) was handed
+       **all** remaining width unconditionally - a pre-existing design (`_slice_reserving_garage()`'s own
+       docstring: "giving it real prominence instead of leftover space going to waste") that directly
+       defeated Part 1's new absolute-area cap. Live-reproduced: an 80×100ft plot produced a 4,433 sq ft
+       "Drawing Room" - a direct instance of the reported "living room needs to be shortened" complaint.
+       Fixed by capping column C's width via its own `max_area_for_room()` (with a `min_width_for_room()`
+       floor so the cap itself can't produce an unusably narrow sliver when the box is tall) - the freed
+       width becomes a real "overflow" region, populated by a proportional split of the OTHER remaining
+       rooms (`_balanced_split_index()`), never silently discarded.
+  - **Verification**: full suite green (815/815, up from 784 before this branch - 31 new tests across
+    `test_room_specs.py`, `test_floor_layout.py`, `test_layout_quality.py` (new file),
+    `test_feasibility.py`, `test_blueprint_svg.py`, `test_blueprint_dxf.py`, `test_house_pipeline.py`,
+    `test_house_api.py`, `test_house_requirements.py`, `test_api.py`). Plus the real visual pass this
+    project's doctrine requires: rendered and inspected the EXACT reported 50×50ft/2-floor case (real
+    foyer with a genuine ENTRANCE opening, bounded living room, visibly proportional doors, zero hard
+    violations on either floor); confirmed the capacity hint no longer says 15 (now a real, honest ~8);
+    rendered an 80×100ft plot with the user's full regional taxonomy (Dirty Kitchen, Prayer Room, Drawing
+    Room/baithak) - every name resolved and labelled correctly, no "unsupported" message anywhere; verified
+    the per-floor extras UI live via Playwright (3 boxes render correctly in "Per floor" mode,
+    `collectFloorExtrasArray()` returns the right values, survives a floor-count round-trip).
+  - **Explicitly deferred (NOT in this pass, tracked, not forgotten)**: #17 cross-floor pixel-exact
+    vertical alignment (staircase/hallway/plumbing stacking between floors) - the user's other confirmed
+    "WE NEED to do it" item, a separate, larger effort (`future-plans/todo-and-pending-checks.md`);
+    plan-gating the per-floor extras boxes; a full width-aware constraint-solver packer (this pass is
+    best-of-N scoring, not a packing guarantee); full outdoor/open-space render fidelity for the new
+    porch/courtyard categories (v1 recognizes/places/sizes/labels them sensibly, richer rendering - open-
+    to-sky geometry, perimeter attachment rules - iterates later); the already-documented, pre-existing
+    "zone-level (public-vs-private) area capping not attempted" limitation (a genuinely SPARSE room
+    program on a very large plot can still see one room absorb a disproportionate share via the general
+    excess-redistribution fallback - confirmed still present on an 8-room/8000sqft edge case during this
+    pass's own verification, not a regression this pass introduced).
+- ~~**Planned, not built**: a per-floor "extras" text box~~ **Built - see v27 above.** Plan-gating it to a
+  specific paid plan is still open - see `future-plans/subscription-and-access-roadmap.md`'s matching
+  entry for the two decisions (which plan unlocks it, UI treatment for a locked-out plan) still waiting on
+  the user.
 
 ## Subscription plans, quotas, admin panel, and payments
 
