@@ -56,7 +56,7 @@ from io import BytesIO
 from PIL import Image, ImageDraw
 
 from app.pipeline.blueprint_svg import _front_door_opening
-from app.pipeline.room_specs import classify_room_category
+from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, classify_room_category, to_plot_unit
 
 CANVAS_SIZE = 1024
 # Margin reserved on each side so the plot never touches the canvas edge -
@@ -239,6 +239,7 @@ def _draw_plot_boundary(
     length: float, width: float,
     scale_x: float, scale_y: float,
     front_door_edge: dict | None,
+    exterior: float = 0.0,
 ) -> None:
     """Draws the plot's outer boundary as 4 separate line segments instead
     of one closed rectangle, so a gap can be cut for the front entrance
@@ -256,7 +257,7 @@ def _draw_plot_boundary(
             return None
         return front_door_edge["start"], front_door_edge["end"]
 
-    top_gap = gap_on("horizontal", 0.0)
+    top_gap = gap_on("horizontal", exterior)
     if top_gap is None:
         draw.line([(x0, y0), (x1, y0)], fill=255, width=LINE_WIDTH_PX)
     else:
@@ -264,7 +265,7 @@ def _draw_plot_boundary(
         draw.line([(x0, y0), (gx0, y0)], fill=255, width=LINE_WIDTH_PX)
         draw.line([(gx1, y0), (x1, y0)], fill=255, width=LINE_WIDTH_PX)
 
-    bottom_gap = gap_on("horizontal", width)
+    bottom_gap = gap_on("horizontal", width - exterior)
     if bottom_gap is None:
         draw.line([(x0, y1), (x1, y1)], fill=255, width=LINE_WIDTH_PX)
     else:
@@ -272,7 +273,7 @@ def _draw_plot_boundary(
         draw.line([(x0, y1), (gx0, y1)], fill=255, width=LINE_WIDTH_PX)
         draw.line([(gx1, y1), (x1, y1)], fill=255, width=LINE_WIDTH_PX)
 
-    left_gap = gap_on("vertical", 0.0)
+    left_gap = gap_on("vertical", exterior)
     if left_gap is None:
         draw.line([(x0, y0), (x0, y1)], fill=255, width=LINE_WIDTH_PX)
     else:
@@ -280,7 +281,7 @@ def _draw_plot_boundary(
         draw.line([(x0, y0), (x0, gy0)], fill=255, width=LINE_WIDTH_PX)
         draw.line([(x0, gy1), (x0, y1)], fill=255, width=LINE_WIDTH_PX)
 
-    right_gap = gap_on("vertical", length)
+    right_gap = gap_on("vertical", length - exterior)
     if right_gap is None:
         draw.line([(x1, y0), (x1, y1)], fill=255, width=LINE_WIDTH_PX)
     else:
@@ -320,6 +321,11 @@ def render_conditioning_edge_map(
     """
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
+    unit = dimensions.get("unit") or "ft"
+    # 2026-10 net-envelope refinement - see _draw_plot_boundary()'s own use
+    # of this: rooms no longer touch the bare plot boundary at exactly
+    # 0/length/width, they're inset by the real exterior wall thickness.
+    exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
 
     canvas = Image.new("L", (canvas_size, canvas_size), 0)
     draw = ImageDraw.Draw(canvas)
@@ -332,8 +338,8 @@ def render_conditioning_edge_map(
         return (x0 + px * scale_x, y0 + py * scale_y)
 
     x1, y1 = to_canvas(length, width)
-    front_door_edge = _front_door_opening(rects, length, width, facing) if floor_number == 1 else None
-    _draw_plot_boundary(draw, x0, y0, x1, y1, length, width, scale_x, scale_y, front_door_edge)
+    front_door_edge = _front_door_opening(rects, length, width, facing, unit) if floor_number == 1 else None
+    _draw_plot_boundary(draw, x0, y0, x1, y1, length, width, scale_x, scale_y, front_door_edge, exterior)
 
     for rect in rects:
         rx0, ry0 = to_canvas(rect["x"], rect["y"])

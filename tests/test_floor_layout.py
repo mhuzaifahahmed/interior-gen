@@ -5,11 +5,29 @@ from app.pipeline.floor_layout import (
     _zone_key,
     layout_floor,
 )
-from app.pipeline.room_specs import to_plot_unit
+from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, to_plot_unit
 
 
 def _area(rect):
     return rect["w"] * rect["h"]
+
+
+def _exterior(unit="ft"):
+    """The real exterior-wall reservation (2026-10 net-envelope refinement) -
+    layout_floor() now slices a NET envelope that's smaller than the raw
+    plot dimensions by 2x this on each axis, so "tiles exactly" assertions
+    must compare against the NET area, not the raw length*width."""
+    return to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
+
+
+def _net_dims(length, width, unit="ft"):
+    ext = _exterior(unit)
+    return max(length - 2 * ext, 1.0), max(width - 2 * ext, 1.0)
+
+
+def _net_area(length, width, unit="ft"):
+    net_l, net_w = _net_dims(length, width, unit)
+    return net_l * net_w
 
 
 def test_layout_floor_returns_empty_for_no_rooms():
@@ -17,8 +35,18 @@ def test_layout_floor_returns_empty_for_no_rooms():
 
 
 def test_layout_floor_single_room_fills_entire_plot():
+    # A single room fills the entire NET envelope (not the gross plot) -
+    # the surrounding band is the real exterior wall (2026-10 refinement).
     result = layout_floor([{"name": "Studio", "area": 1}], {"length": 40, "width": 60, "unit": "ft"})
-    assert result == [{"name": "Studio", "x": 0.0, "y": 0.0, "w": 40.0, "h": 60.0}]
+    ext = _exterior("ft")
+    net_l, net_w = _net_dims(40, 60, "ft")
+    assert len(result) == 1
+    room = result[0]
+    assert room["name"] == "Studio"
+    assert abs(room["x"] - ext) < 1e-6
+    assert abs(room["y"] - ext) < 1e-6
+    assert abs(room["w"] - net_l) < 1e-6
+    assert abs(room["h"] - net_w) < 1e-6
 
 
 def test_layout_floor_rectangles_tile_the_plot_exactly():
@@ -41,14 +69,16 @@ def test_layout_floor_rectangles_tile_the_plot_exactly():
     rect_names = {r["name"] for r in rects}
     assert {r["name"] for r in rooms} <= rect_names
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - 40 * 60) < 1e-6
+    assert abs(total_area - _net_area(40, 60)) < 1e-6
 
-    # No rectangle extends outside the plot bounds.
+    # No rectangle extends outside the plot bounds (accounting for the real
+    # exterior-wall band every rect is now inset by).
+    ext = _exterior("ft")
     for r in rects:
-        assert r["x"] >= -1e-9
-        assert r["y"] >= -1e-9
-        assert r["x"] + r["w"] <= 40 + 1e-6
-        assert r["y"] + r["h"] <= 60 + 1e-6
+        assert r["x"] >= ext - 1e-6
+        assert r["y"] >= ext - 1e-6
+        assert r["x"] + r["w"] <= 40 - ext + 1e-6
+        assert r["y"] + r["h"] <= 60 - ext + 1e-6
 
 
 def test_layout_floor_areas_are_roughly_proportional_to_weights():
@@ -85,12 +115,20 @@ def test_layout_floor_handles_many_rooms_without_error():
     rects = layout_floor(rooms, {"length": 100, "width": 80, "unit": "ft"})
     assert len(rects) == 12
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - 100 * 80) < 1e-6
+    assert abs(total_area - _net_area(100, 80)) < 1e-6
 
 
 def test_layout_floor_defaults_missing_dimensions_to_one():
+    # A 1x1 plot is smaller than even the exterior-wall reservation, so the
+    # net envelope clamps to its own 1.0x1.0 floor (see layout_floor_with_
+    # warnings()'s max(..., 1.0) guard) - the room still fills a real,
+    # positive-area rectangle, just offset by the (clamped) exterior band.
     result = layout_floor([{"name": "Room", "area": 1}], {})
-    assert result == [{"name": "Room", "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0}]
+    assert len(result) == 1
+    room = result[0]
+    assert room["name"] == "Room"
+    assert room["w"] == 1.0 and room["h"] == 1.0
+    assert room["x"] > 0 and room["y"] > 0
 
 
 def _touch(a, b, tol=1e-6) -> bool:
@@ -346,7 +384,12 @@ def test_layout_floor_falls_back_when_no_room_for_a_corridor():
         {"name": "Bedroom 2", "area": 1},
         {"name": "Bathroom", "area": 1},
     ]
-    rects = layout_floor(rooms, {"length": 10, "width": 8, "unit": "ft"})
+    # 10x9 (was 10x8 before the 2026-10 net-envelope refinement) - the real
+    # exterior-wall reservation now eats into what used to be the plot's
+    # full usable area, so a plot this thin needs a touch more real size to
+    # avoid a genuinely degenerate rect while still being too tight for a
+    # corridor (the actual behavior this test guards).
+    rects = layout_floor(rooms, {"length": 10, "width": 9, "unit": "ft"})
     assert not any(r["name"] == "Hallway" for r in rects)
     for r in rects:
         assert r["w"] > 0 and r["h"] > 0
@@ -445,7 +488,7 @@ def test_layout_floor_rectangles_tile_the_plot_exactly_with_a_corridor():
     # overlaps from floating-point drift in _pack_row()'s sequential packing.
     rects = layout_floor(_private_room_mix(), {"length": 45, "width": 55, "unit": "ft"})
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - 45 * 55) < 1e-6
+    assert abs(total_area - _net_area(45, 55)) < 1e-6
 
 
 def test_layout_floor_public_zone_stays_in_the_front_low_y_band():
@@ -614,7 +657,7 @@ def test_layout_floor_every_facing_tiles_the_plot_exactly():
     for facing in ("north", "south", "east", "west"):
         rects = layout_floor(_facing_rooms(), dimensions, facing=facing)
         total_area = sum(_area(r) for r in rects)
-        assert abs(total_area - 37 * 53) < 1e-6, f"facing={facing} failed to tile exactly"
+        assert abs(total_area - _net_area(37, 53)) < 1e-6, f"facing={facing} failed to tile exactly"
         for r in rects:
             assert r["x"] >= -1e-6 and r["y"] >= -1e-6
             assert r["x"] + r["w"] <= 37 + 1e-6
@@ -676,7 +719,7 @@ def test_layout_floor_garage_carve_out_still_tiles_exactly():
     dimensions = {"length": 48, "width": 40, "unit": "ft"}
     rects = layout_floor(rooms, dimensions, garage_cars=1)
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - 48 * 40) < 1e-6
+    assert abs(total_area - _net_area(48, 40)) < 1e-6
     for r in rects:
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 48 + 1e-6
@@ -754,7 +797,7 @@ def test_layout_floor_garage_three_region_split_tiles_exactly():
     dimensions = {"length": 60, "width": 50, "unit": "ft"}
     rects = layout_floor(rooms, dimensions, garage_cars=1)
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - 60 * 50) < 1e-6
+    assert abs(total_area - _net_area(60, 50)) < 1e-6
     for r in rects:
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 60 + 1e-6
@@ -840,7 +883,7 @@ def test_layout_floor_staircase_tiles_exactly_with_every_facing():
     for facing in ("north", "south", "east", "west"):
         rects = layout_floor(rooms, dimensions, facing=facing)
         total_area = sum(_area(r) for r in rects)
-        assert abs(total_area - 60 * 80) < 1e-6
+        assert abs(total_area - _net_area(60, 80)) < 1e-6
         for r in rects:
             assert r["x"] >= -1e-6 and r["y"] >= -1e-6
             assert r["x"] + r["w"] <= 60 + 1e-6
@@ -894,7 +937,7 @@ def test_layout_floor_garage_sparse_room_program_falls_back_cleanly():
     dimensions = {"length": 50, "width": 45, "unit": "ft"}
     rects = layout_floor(rooms, dimensions, garage_cars=1)
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - 50 * 45) < 1e-6
+    assert abs(total_area - _net_area(50, 45)) < 1e-6
     for r in rects:
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 50 + 1e-6

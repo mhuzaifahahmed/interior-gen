@@ -222,14 +222,31 @@ weight-heavy public room list could still claim a disproportionate share of
 the total footprint before the private zone's own split).
 """
 
+from app.pipeline.layout_quality import score_floor_layout
 from app.pipeline.room_specs import (
+    EXTERIOR_WALL_THICKNESS_M,
     classify_room_category,
     garage_dimensions,
     max_area_for_room,
     min_area_for_room,
+    min_width_for_room,
     staircase_dimensions,
     to_plot_unit,
 )
+
+# Interior-wall area allowance (2026-10, Part 0 of the Measurements Model
+# refinement) - a room's guaranteed minimum area (room_specs.py's NET,
+# interior-clear chart value) is inflated by this fraction when reserved
+# here, approximating the real area a room loses to its own share of the
+# interior partition walls it ends up sharing with neighbors (a precise
+# per-room perimeter calc isn't possible until AFTER slicing - this is a
+# calibrated, documented approximation, not exact accounting). The EXTERIOR
+# wall band is handled separately and exactly (see layout_floor()'s net-
+# envelope reservation below) - this allowance covers ONLY interior
+# partitions. Applied to both the min AND max area guarantees so a pinned
+# room's (garage/staircase, multiplier 1.0) inflated minimum never exceeds
+# its own cap.
+INTERIOR_WALL_AREA_ALLOWANCE_FRACTION = 0.08
 
 # The hallway's width scales with the private zone's own cross-dimension
 # (see _layout_private_zone()'s `cross_dim` - a proxy for "how big are the
@@ -380,6 +397,21 @@ def _sort_key(room_name: str) -> tuple[int, int]:
 
 _VALID_FACINGS = ("north", "south", "east", "west")
 
+# Best-of-N candidate deltas (2026-10, Part 4 "intelligence loop" of the
+# Measurements Model refinement) - layout_floor() no longer computes exactly
+# ONE layout and ships it regardless of how impractical the result is. It
+# generates a small, BOUNDED, deterministic set of candidates by nudging the
+# public-vs-back split fraction (an already-existing, already-parameterized
+# knob - see _layout_floor_core's front_fraction) around the weight-derived
+# value, scores each with layout_quality.score_floor_layout(), and keeps the
+# highest-scoring one. 0.0 (today's exact original geometry) is listed
+# FIRST and strict improvement is required to replace it (see layout_floor()
+# below) - so a layout that was already fine keeps its EXACT original
+# geometry, byte-for-byte, and only a genuinely better-scoring alternative
+# ever wins. This is best-of-SCORED-CANDIDATES, not a guarantee of a valid
+# layout - see layout_quality.py's module docstring.
+_CANDIDATE_FRONT_FRACTION_DELTAS = (0.0, -0.05, 0.05, -0.1, 0.1)
+
 
 def layout_floor(
     rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None
@@ -421,8 +453,21 @@ def layout_floor(
     (the REAL, un-swapped dimensions - the length/width swap above is purely
     an internal computation detail, invisible to the caller).
     """
+    rects, _warnings = layout_floor_with_warnings(rooms, dimensions, garage_cars, facing)
+    return rects
+
+
+def layout_floor_with_warnings(
+    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None
+) -> tuple[list[dict], list]:
+    """Same as layout_floor(), but ALSO returns the winning candidate's
+    layout_quality violations (empty when the floor is genuinely clean).
+    Additive - layout_floor() itself keeps returning a plain list so none of
+    its many existing callers/tests need to change shape; callers that care
+    about honest "this floor is tight/impractical" signals (generate_house.py)
+    use this function instead."""
     if not rooms:
-        return []
+        return [], []
 
     facing = (facing or "north").strip().lower()
     if facing not in _VALID_FACINGS:
@@ -430,34 +475,65 @@ def layout_floor(
 
     real_length = float(dimensions.get("length") or 1)
     real_width = float(dimensions.get("width") or 1)
+    unit = dimensions.get("unit") or "ft"
+
+    # Real net-envelope reservation (2026-10, Part 0) - the plot's own outer
+    # band, EXTERIOR_WALL_THICKNESS_M wide on every side, is real exterior
+    # wall, not slice-able room area. The core algorithm only ever sees this
+    # smaller NET box; the result is shifted back into the real, gross plot
+    # coordinate space afterward (see the offset below) - this is what makes
+    # a "100 sq ft bedroom" genuinely ~100 sq ft of clear interior floor,
+    # not a gross rectangle that shrinks once the walls are actually drawn.
+    exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
+    net_length = max(real_length - 2 * exterior, 1.0)
+    net_width = max(real_width - 2 * exterior, 1.0)
 
     if facing in ("east", "west"):
-        core_dimensions = {
-            "length": real_width,
-            "width": real_length,
-            "unit": dimensions.get("unit"),
-        }
+        core_dimensions = {"length": net_width, "width": net_length, "unit": unit}
     else:
-        core_dimensions = dimensions
+        core_dimensions = {"length": net_length, "width": net_width, "unit": unit}
 
-    rects = _layout_floor_core(rooms, core_dimensions, garage_cars)
+    best_rects: list[dict] | None = None
+    best_warnings: list = []
+    best_score: float | None = None
+    for delta in _CANDIDATE_FRONT_FRACTION_DELTAS:
+        candidate = _layout_floor_core(rooms, core_dimensions, garage_cars, front_fraction_delta=delta)
+        scored = score_floor_layout(candidate, core_dimensions, garage_cars)
+        if best_score is None or scored.score > best_score:
+            best_score = scored.score
+            best_rects = candidate
+            best_warnings = scored.violations
+
+    rects = best_rects or []
 
     if facing in ("east", "west"):
         # Transpose back to real coordinates - the core algorithm's own x
-        # (spanning [0, real_width]) becomes the real y, and its own y
-        # (spanning [0, real_length], front at its low end) becomes the
+        # (spanning [0, net_width]) becomes the real y, and its own y
+        # (spanning [0, net_length], front at its low end) becomes the
         # real x, so front now sits at low real-x (west).
         rects = [{**r, "x": r["y"], "y": r["x"], "w": r["h"], "h": r["w"]} for r in rects]
+
+    # Shift out of the net-envelope-local coordinate space into the real,
+    # gross plot's coordinate space - every rect now sits inset by the
+    # exterior wall thickness on every side. Applying this BEFORE the
+    # south/east mirror below (rather than special-casing the mirror math)
+    # is correct because a plain reflection of the full GROSS span
+    # (real_width/real_length) maps the already-offset net region onto
+    # itself symmetrically - a room `exterior` away from the low edge ends
+    # up `exterior` away from the high edge after mirroring, unchanged.
+    rects = [{**r, "x": r["x"] + exterior, "y": r["y"] + exterior} for r in rects]
 
     if facing == "south":
         rects = [{**r, "y": real_width - r["y"] - r["h"]} for r in rects]
     elif facing == "east":
         rects = [{**r, "x": real_length - r["x"] - r["w"]} for r in rects]
 
-    return rects
+    return rects, best_warnings
 
 
-def _layout_floor_core(rooms: list[dict], dimensions: dict, garage_cars: int | None = None) -> list[dict]:
+def _layout_floor_core(
+    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, front_fraction_delta: float = 0.0
+) -> list[dict]:
     """The actual layout algorithm - always computes with the public/front
     zone at low-y, private/back zone at high-y (see layout_floor()'s
     docstring for how compass facing is applied as a coordinate transform
@@ -476,7 +552,15 @@ def _layout_floor_core(rooms: list[dict], dimensions: dict, garage_cars: int | N
     raw_weights = [max(float(r.get("area") or 0), MIN_WEIGHT) for r in rooms]
 
     total_area = length * width
-    min_areas = [min_area_for_room(name, unit, garage_cars) for name in names]
+    # Interior-wall allowance (2026-10, see INTERIOR_WALL_AREA_ALLOWANCE_
+    # FRACTION's own docstring) - the guaranteed reservation is slightly
+    # ABOVE room_specs.py's pure NET chart minimum, so the NET clear area
+    # that actually remains after the renderers carve out a real partition
+    # wall on each shared side still meets the chart.
+    min_areas = [
+        min_area_for_room(name, unit, garage_cars) * (1 + INTERIOR_WALL_AREA_ALLOWANCE_FRACTION)
+        for name in names
+    ]
     sum_min = sum(min_areas)
 
     if 0 < sum_min <= total_area:
@@ -496,7 +580,10 @@ def _layout_floor_core(rooms: list[dict], dimensions: dict, garage_cars: int | N
         # haven't hit their cap yet, so one heavily-weighted room (e.g.
         # dining) can no longer balloon just because Gemini assigned it a
         # large relative weight.
-        max_areas = [max_area_for_room(name, unit, garage_cars) for name in names]
+        max_areas = [
+            max_area_for_room(name, unit, garage_cars) * (1 + INTERIOR_WALL_AREA_ALLOWANCE_FRACTION)
+            for name in names
+        ]
         # PINNED rooms (garage/staircase, ROOM_MAX_MULTIPLIER == 1.0) must
         # never absorb redistributed excess - their size is a real
         # functional requirement (vehicle clearance / a stair run), not a
@@ -547,6 +634,11 @@ def _layout_floor_core(rooms: list[dict], dimensions: dict, garage_cars: int | N
     front_weights, back_weights = weights[:back_start], weights[back_start:]
     front_total, back_total = sum(front_weights), sum(back_weights)
     front_fraction = front_total / (front_total + back_total) if (front_total + back_total) else 0.5
+    # Best-of-N candidate knob (2026-10, Part 4) - nudges the ONE top-level
+    # public-vs-back split around its weight-derived value, clamped to a
+    # sane range so a delta can never flip the split's own meaning (front
+    # becoming the smaller side or vice versa in a degenerate way).
+    front_fraction = min(max(front_fraction + front_fraction_delta, 0.05), 0.95)
 
     # MINIMUM BACK-ZONE DEPTH FLOOR (2026-09-29, found while verifying the
     # staircase carve-out fix above) - a real, separate gap: when the back
@@ -809,7 +901,18 @@ def _slice_reserving_garage(
     # oversized-Entry regression this docstring describes above.
     partner_width_raw = row_a_partner_weight / garage_depth if garage_depth > 0 else 0.0
     max_partner_width = max((w - garage_width) * 0.5, garage_width)
-    partner_width = min(max(partner_width_raw, garage_width * 0.5), max_partner_width)
+    # Real foyer min-depth floor (2026-10, Part 2 of the Measurements Model
+    # refinement) - the ORIGINAL reported "entrance is a 1-foot hallway" bug
+    # was exactly this row-A partner collapsing to near-zero width when its
+    # own weight happened to be small. When the partner IS the foyer/entry
+    # room, its width here is clamped to a real, researched minimum instead
+    # of being left to whatever the weight math alone would produce.
+    min_partner_width = (
+        min_width_for_room(row_a_partner_name, unit)
+        if classify_room_category(row_a_partner_name) == "foyer"
+        else 0.0
+    )
+    partner_width = min(max(partner_width_raw, garage_width * 0.5, min_partner_width), max_partner_width)
     partner_rect = {
         "name": row_a_partner_name, "x": x + garage_width, "y": y, "w": partner_width, "h": garage_depth,
     }

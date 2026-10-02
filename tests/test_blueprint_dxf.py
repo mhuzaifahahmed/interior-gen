@@ -4,10 +4,18 @@ import ezdxf
 
 from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
 from app.pipeline.floor_layout import layout_floor
+from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, to_plot_unit
 
 
 def _parse(dxf_bytes: bytes):
     return ezdxf.read(io.StringIO(dxf_bytes.decode("utf-8")))
+
+
+def _ext(unit="ft"):
+    """Real exterior-wall offset (2026-10 net-envelope refinement) - rects
+    returned by layout_floor() no longer touch the bare plot boundary at
+    exactly 0/length/width, they're inset by this real amount."""
+    return to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
 
 
 def test_render_floor_blueprint_dxf_returns_valid_parseable_dxf():
@@ -55,19 +63,21 @@ def test_render_floor_blueprint_dxf_exterior_walls_cover_the_full_boundary():
     msp = doc.modelspace()
     wall_polylines = [p for p in msp.query("LWPOLYLINE") if p.dxf.layer == "WALLS"]
 
-    # At least one wall segment must touch each of the 4 plot boundary lines
-    # (x=0, x=length, y=0, y=width).
+    # At least one wall segment must touch each of the 4 real exterior
+    # boundary lines (x=exterior, x=length-exterior, y=exterior,
+    # y=width-exterior - 2026-10 net-envelope refinement, see _ext()).
+    ext = _ext()
     touches_left = touches_right = touches_top = touches_bottom = False
     for pl in wall_polylines:
         xs = [round(p[0], 3) for p in pl.get_points()]
         ys = [round(p[1], 3) for p in pl.get_points()]
-        if 0.0 in xs:
+        if round(ext, 3) in xs:
             touches_left = True
-        if round(40.0, 3) in xs:
+        if round(40.0 - ext, 3) in xs:
             touches_right = True
-        if 0.0 in ys:
+        if round(ext, 3) in ys:
             touches_top = True
-        if round(60.0, 3) in ys:
+        if round(60.0 - ext, 3) in ys:
             touches_bottom = True
 
     assert touches_left and touches_right and touches_top and touches_bottom
@@ -142,9 +152,14 @@ def test_render_floor_blueprint_dxf_living_room_gets_a_larger_window():
     # picture-window cap - the .dxf export must not disagree with the PNG
     # about how wide a living-room window is.
     dimensions = {"length": 60, "width": 40, "unit": "ft"}
+    ext = _ext()
+    # Hand-built rects using the SAME real exterior-wall-inset convention
+    # layout_floor() itself now produces (2026-10 net-envelope refinement) -
+    # a room's edge must sit at `ext`/`length-ext` to be recognized as the
+    # real exterior boundary.
     rects = [
-        {"name": "Living Room", "x": 0, "y": 0, "w": 30, "h": 40},
-        {"name": "Bedroom 1", "x": 30, "y": 0, "w": 30, "h": 40},
+        {"name": "Living Room", "x": ext, "y": ext, "w": 30 - ext, "h": 40 - 2 * ext},
+        {"name": "Bedroom 1", "x": 30, "y": ext, "w": 30 - ext, "h": 40 - 2 * ext},
     ]
 
     doc = _parse(render_floor_blueprint_dxf(1, rects, dimensions))
@@ -155,11 +170,12 @@ def test_render_floor_blueprint_dxf_living_room_gets_a_larger_window():
         start, end = line.dxf.start, line.dxf.end
         return ((start.x - end.x) ** 2 + (start.y - end.y) ** 2) ** 0.5
 
-    # Living Room's exterior edges are x=0 (left) and y=0/y=40 (top/bottom);
-    # Bedroom 1's exterior edges are x=60 (right) and y=0/y=40 - pick out
-    # each room's own window lines by which edge they sit on.
-    living_lengths = [_line_length(l) for l in window_lines if abs(l.dxf.start.x) < 1e-3 or l.dxf.start.x < 30]
-    bedroom_lengths = [_line_length(l) for l in window_lines if abs(l.dxf.start.x - 60) < 1e-3]
+    # Living Room's exterior edges are x=ext (left) and y=ext/y=40-ext
+    # (top/bottom); Bedroom 1's exterior edges are x=60-ext (right) and
+    # y=ext/y=40-ext - pick out each room's own window lines by which edge
+    # they sit on.
+    living_lengths = [_line_length(l) for l in window_lines if l.dxf.start.x < 30]
+    bedroom_lengths = [_line_length(l) for l in window_lines if abs(l.dxf.start.x - (60 - ext)) < 1e-3]
 
     assert living_lengths and bedroom_lengths
     assert max(living_lengths) > max(bedroom_lengths)
@@ -212,8 +228,9 @@ def test_render_floor_blueprint_dxf_draws_a_front_entrance_when_facing_given():
     with_facing = _parse(render_floor_blueprint_dxf(1, rects, dimensions, facing="north"))
     door_arcs_with = [a for a in with_facing.modelspace().query("ARC") if a.dxf.layer == "DOORS"]
 
-    # A real, new door arc on the y=0 (north/front) boundary line.
-    front_door_arcs = [a for a in door_arcs_with if round(a.dxf.center.y, 3) == 0.0]
+    # A real, new door arc on the real north/front exterior boundary line
+    # (y=ext, not literal 0 - see _ext()).
+    front_door_arcs = [a for a in door_arcs_with if round(a.dxf.center.y, 3) == round(_ext(), 3)]
     assert len(front_door_arcs) >= 1
     assert len(door_arcs_with) > len(door_arcs_without)
 
@@ -224,8 +241,10 @@ def test_render_floor_blueprint_dxf_front_entrance_moves_with_facing():
 
     north_rects = layout_floor(rooms, dimensions, facing="north")
     north_doc = _parse(render_floor_blueprint_dxf(1, north_rects, dimensions, facing="north"))
+    ext = _ext()
     north_front_doors = [
-        a for a in north_doc.modelspace().query("ARC") if a.dxf.layer == "DOORS" and round(a.dxf.center.y, 3) == 0.0
+        a for a in north_doc.modelspace().query("ARC")
+        if a.dxf.layer == "DOORS" and round(a.dxf.center.y, 3) == round(ext, 3)
     ]
 
     south_rects = layout_floor(rooms, dimensions, facing="south")
@@ -233,7 +252,7 @@ def test_render_floor_blueprint_dxf_front_entrance_moves_with_facing():
     south_front_doors = [
         a
         for a in south_doc.modelspace().query("ARC")
-        if a.dxf.layer == "DOORS" and round(a.dxf.center.y, 3) == round(dimensions["width"], 3)
+        if a.dxf.layer == "DOORS" and round(a.dxf.center.y, 3) == round(dimensions["width"] - ext, 3)
     ]
 
     assert len(north_front_doors) >= 1
@@ -252,10 +271,11 @@ def test_render_floor_blueprint_dxf_no_entrance_on_an_upper_floor():
     ground_floor = _parse(render_floor_blueprint_dxf(1, rects, dimensions, facing="north"))
     upper_floor = _parse(render_floor_blueprint_dxf(2, rects, dimensions, facing="north"))
 
+    ext = _ext()
     ground_front_doors = [
         a
         for a in ground_floor.modelspace().query("ARC")
-        if a.dxf.layer == "DOORS" and round(a.dxf.center.y, 3) == 0.0
+        if a.dxf.layer == "DOORS" and round(a.dxf.center.y, 3) == round(ext, 3)
     ]
     upper_front_doors = [
         a

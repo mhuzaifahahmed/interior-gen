@@ -19,7 +19,14 @@ from app.pipeline.blueprint_svg import (
     render_floor_blueprint,
 )
 from app.pipeline.floor_layout import layout_floor
-from app.pipeline.room_specs import to_plot_unit
+from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, to_plot_unit
+
+
+def _ext(unit="ft"):
+    """Real exterior-wall offset (2026-10 net-envelope refinement) - a room
+    touching the real exterior boundary now sits at x/y == this value, not
+    literal 0 (see floor_layout.layout_floor_with_warnings())."""
+    return to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
 
 
 def test_draw_windows_caps_length_regardless_of_room_size():
@@ -33,16 +40,20 @@ def test_draw_windows_caps_length_regardless_of_room_size():
     plot_length, plot_width = 400.0, 100.0
     image = Image.new("RGB", (int(plot_length) + 1, int(plot_width) + 1), PAPER)
     draw = ImageDraw.Draw(image)
+    ext = _ext()
     # Deliberately not "Living Room" - that gets a real, larger picture-
     # window cap (see test_draw_windows_gives_the_living_room_a_larger_
     # picture_window_cap below); this test covers the generic residential cap.
-    rect = {"name": "Bedroom 1", "x": 0, "y": 0, "w": plot_length, "h": plot_width}
+    # x/y sit at the real exterior-wall offset (2026-10), matching what
+    # layout_floor() itself now produces.
+    rect = {"name": "Bedroom 1", "x": ext, "y": ext, "w": plot_length - 2 * ext, "h": plot_width - 2 * ext}
 
     _draw_windows(draw, rect, plot_length, plot_width, 0.0, 0.0, scale, "ft")
 
     top_row = [image.getpixel((px, 0)) for px in range(int(plot_length))]
     window_px = sum(1 for p in top_row if p == WINDOW_COLOR)
     max_len_px = to_plot_unit(WINDOW_MAX_LENGTH_M, "ft") * scale
+    assert window_px > 0  # a real window was actually drawn, not silently skipped
     assert window_px <= max_len_px + 2  # small tolerance for line-width rounding
 
 
@@ -52,11 +63,12 @@ def test_draw_windows_gives_the_living_room_a_larger_picture_window_cap():
     # window" is a genuine architectural feature for that room specifically.
     scale = 1.0
     plot_length, plot_width = 400.0, 100.0
+    ext = _ext()
 
     def _window_px(room_name):
         image = Image.new("RGB", (int(plot_length) + 1, int(plot_width) + 1), PAPER)
         draw = ImageDraw.Draw(image)
-        rect = {"name": room_name, "x": 0, "y": 0, "w": plot_length, "h": plot_width}
+        rect = {"name": room_name, "x": ext, "y": ext, "w": plot_length - 2 * ext, "h": plot_width - 2 * ext}
         _draw_windows(draw, rect, plot_length, plot_width, 0.0, 0.0, scale, "ft")
         top_row = [image.getpixel((px, 0)) for px in range(int(plot_length))]
         return sum(1 for p in top_row if p == WINDOW_COLOR)
@@ -390,26 +402,27 @@ def test_front_door_opening_lands_on_the_correct_edge_for_each_facing():
         {"name": "Bedroom", "area": 2},
     ]
     length, width = dimensions["length"], dimensions["width"]
+    ext = _ext()
 
     north_rects = layout_floor(rooms, dimensions, facing="north")
     north_edge = _front_door_opening(north_rects, length, width, "north")
     assert north_edge["orientation"] == "horizontal"
-    assert north_edge["pos"] == 0.0
+    assert abs(north_edge["pos"] - ext) < 1e-6
 
     south_rects = layout_floor(rooms, dimensions, facing="south")
     south_edge = _front_door_opening(south_rects, length, width, "south")
     assert south_edge["orientation"] == "horizontal"
-    assert south_edge["pos"] == width
+    assert abs(south_edge["pos"] - (width - ext)) < 1e-6
 
     east_rects = layout_floor(rooms, dimensions, facing="east")
     east_edge = _front_door_opening(east_rects, length, width, "east")
     assert east_edge["orientation"] == "vertical"
-    assert east_edge["pos"] == length
+    assert abs(east_edge["pos"] - (length - ext)) < 1e-6
 
     west_rects = layout_floor(rooms, dimensions, facing="west")
     west_edge = _front_door_opening(west_rects, length, width, "west")
     assert west_edge["orientation"] == "vertical"
-    assert west_edge["pos"] == 0.0
+    assert abs(west_edge["pos"] - ext) < 1e-6
 
 
 def test_front_door_opening_prefers_the_entry_room():

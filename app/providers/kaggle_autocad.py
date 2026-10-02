@@ -257,6 +257,7 @@ def _door_specs_for_floor(
         return []
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
+    unit = dimensions.get("unit") or "ft"
     x0c, y0c, box_w, _box_h = plot_to_canvas_box(length, width)
     scale = box_w / length if length else 0.0
     if scale <= 0:
@@ -282,7 +283,7 @@ def _door_specs_for_floor(
         if spec:
             specs.append(spec)
 
-    front_edge = _front_door_opening(rects, length, width, facing_normalized) if floor_number == 1 else None
+    front_edge = _front_door_opening(rects, length, width, facing_normalized, unit) if floor_number == 1 else None
     if front_edge:
         spec = _front_door_spec(front_edge, facing_normalized, x0c, y0c, scale, nominal_len_px)
         if spec:

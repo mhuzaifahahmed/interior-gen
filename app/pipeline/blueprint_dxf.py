@@ -44,7 +44,7 @@ import ezdxf
 from ezdxf.enums import TextEntityAlignment
 
 from app.pipeline.blueprint_svg import _front_door_opening, _shared_edge, _should_suppress_direct_door
-from app.pipeline.room_specs import classify_room_category, to_plot_unit
+from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, classify_room_category, to_plot_unit
 
 # DXF's $INSUNITS header field - only the two units this app's dimension
 # inputs ever use (see static/index.html's unit <select>). Falls back to
@@ -93,10 +93,13 @@ def render_floor_blueprint_dxf(
     door_width = to_plot_unit(DOOR_WIDTH_M, unit)
     window_width = to_plot_unit(WINDOW_WIDTH_M, unit)
     window_width_living = to_plot_unit(WINDOW_WIDTH_LIVING_M, unit)
+    # 2026-10 net-envelope refinement - see _draw_exterior_walls_for_room()'s
+    # own docstring for why this real offset is needed.
+    exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
     # Ground floor only (2026-09-29) - see blueprint_svg.render_floor_
     # blueprint()'s matching gate for why; keeps the PNG and the DXF in
     # agreement about there being no front entrance on upper floors.
-    front_door_edge = _front_door_opening(rects, length, width, facing) if floor_number == 1 else None
+    front_door_edge = _front_door_opening(rects, length, width, facing, unit) if floor_number == 1 else None
 
     doc = ezdxf.new(dxfversion="R2010")
     doc.header["$INSUNITS"] = _INSUNITS_BY_UNIT.get(unit, 0)
@@ -135,6 +138,7 @@ def render_floor_blueprint_dxf(
             door_width,
             front_door_edge,
             facing_normalized,
+            exterior,
         )
 
     # Interior walls (with real door gaps where a door isn't suppressed) -
@@ -218,39 +222,46 @@ def _draw_exterior_walls_for_room(
     door_width: float | None = None,
     front_door_edge: dict | None = None,
     facing: str = "",
+    exterior: float = 0.0,
 ) -> None:
     x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
+    # 2026-10 net-envelope refinement: rooms no longer touch the bare plot
+    # boundary at exactly 0/length/width - they're inset by the real
+    # exterior wall thickness (see floor_layout.layout_floor_with_
+    # warnings()) - so "is this room's edge the exterior boundary" must
+    # compare against that same real offset (`exterior`, passed in by the
+    # caller - see render_floor_blueprint_dxf()).
 
-    if abs(x) < _EDGE_TOL:
-        if door_width is not None and _matches_front_door(front_door_edge, "vertical", 0.0, y, y + h):
+    if abs(x - exterior) < _EDGE_TOL:
+        if door_width is not None and _matches_front_door(front_door_edge, "vertical", exterior, y, y + h):
             inward = 1 if facing == "west" else -1
-            _draw_exterior_segment_with_front_door(msp, "vertical", 0.0, y, y + h, wall_thickness, door_width, inward)
+            _draw_exterior_segment_with_front_door(msp, "vertical", exterior, y, y + h, wall_thickness, door_width, inward)
         else:
-            _draw_exterior_segment(msp, "vertical", 0.0, y, y + h, wall_thickness, window_width)
-    if abs((x + w) - length) < _EDGE_TOL:
-        if door_width is not None and _matches_front_door(front_door_edge, "vertical", length, y, y + h):
+            _draw_exterior_segment(msp, "vertical", exterior, y, y + h, wall_thickness, window_width)
+    if abs((x + w) - (length - exterior)) < _EDGE_TOL:
+        if door_width is not None and _matches_front_door(front_door_edge, "vertical", length - exterior, y, y + h):
             inward = 1 if facing == "west" else -1
             _draw_exterior_segment_with_front_door(
-                msp, "vertical", length, y, y + h, wall_thickness, door_width, inward
+                msp, "vertical", length - exterior, y, y + h, wall_thickness, door_width, inward
             )
         else:
-            _draw_exterior_segment(msp, "vertical", length, y, y + h, wall_thickness, window_width)
-    if abs(y) < _EDGE_TOL:
-        if door_width is not None and _matches_front_door(front_door_edge, "horizontal", 0.0, x, x + w):
+            _draw_exterior_segment(msp, "vertical", length - exterior, y, y + h, wall_thickness, window_width)
+    if abs(y - exterior) < _EDGE_TOL:
+        if door_width is not None and _matches_front_door(front_door_edge, "horizontal", exterior, x, x + w):
             inward = 1 if facing == "north" else -1
             _draw_exterior_segment_with_front_door(
-                msp, "horizontal", 0.0, x, x + w, wall_thickness, door_width, inward
+                msp, "horizontal", exterior, x, x + w, wall_thickness, door_width, inward
             )
         else:
-            _draw_exterior_segment(msp, "horizontal", 0.0, x, x + w, wall_thickness, window_width)
-    if abs((y + h) - width) < _EDGE_TOL:
-        if door_width is not None and _matches_front_door(front_door_edge, "horizontal", width, x, x + w):
+            _draw_exterior_segment(msp, "horizontal", exterior, x, x + w, wall_thickness, window_width)
+    if abs((y + h) - (width - exterior)) < _EDGE_TOL:
+        if door_width is not None and _matches_front_door(front_door_edge, "horizontal", width - exterior, x, x + w):
             inward = 1 if facing == "north" else -1
             _draw_exterior_segment_with_front_door(
-                msp, "horizontal", width, x, x + w, wall_thickness, door_width, inward
+                msp, "horizontal", width - exterior, x, x + w, wall_thickness, door_width, inward
             )
         else:
-            _draw_exterior_segment(msp, "horizontal", width, x, x + w, wall_thickness, window_width)
+            _draw_exterior_segment(msp, "horizontal", width - exterior, x, x + w, wall_thickness, window_width)
 
 
 def _draw_exterior_segment(

@@ -60,7 +60,7 @@ from itertools import combinations
 from PIL import Image, ImageDraw, ImageFont
 
 from app.pipeline.floor_layout import _zone_key
-from app.pipeline.room_specs import classify_room_category, to_plot_unit
+from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, classify_room_category, to_plot_unit
 
 # ---- Canvas layout ----
 TARGET_PLOT_LONGEST_SIDE_PX = 780
@@ -204,7 +204,9 @@ def render_floor_blueprint(
     # so without this gate it was cutting an "ENTRANCE" opening on every
     # floor of a multi-storey building, including upper floors that have no
     # real exterior walk-in door at all.
-    front_door_edge = _front_door_opening(rects, length, width, facing_normalized) if floor_number == 1 else None
+    front_door_edge = (
+        _front_door_opening(rects, length, width, facing_normalized, unit) if floor_number == 1 else None
+    )
     all_door_edges = interior_door_edges + ([front_door_edge] if front_door_edge else [])
 
     # The staircase's UP/DN direction (None on a single-storey building,
@@ -382,7 +384,9 @@ def _should_suppress_garage_direct_door(a: dict, b: dict) -> bool:
 _FACING_ORDER = ("north", "south", "east", "west")
 
 
-def _front_door_opening(rects: list[dict], length: float, width: float, facing: str | None) -> dict | None:
+def _front_door_opening(
+    rects: list[dict], length: float, width: float, facing: str | None, unit: str = "ft"
+) -> dict | None:
     """Picks the exterior boundary edge matching `facing` and returns a
     door-opening edge-dict of the SAME shape _shared_edge() returns
     ({orientation, pos, start, end}), spanning whichever real room's own
@@ -396,6 +400,13 @@ def _front_door_opening(rects: list[dict], length: float, width: float, facing: 
     a garage was requested, and the public zone is always placed on the
     front edge by layout_floor()'s own front-to-back zoning).
 
+    `unit` (2026-10, net-envelope refinement): since floor_layout.py now
+    insets every room by the real exterior wall thickness (rooms no longer
+    touch the bare plot boundary at exactly 0/length/width), "pos" and the
+    candidate-matching comparison must use that SAME real offset, not a
+    literal 0/length/width - otherwise no room ever matches (every rect sits
+    a real wall's-width inside the boundary now).
+
     Returns None when `facing` isn't a real value - matches this module's
     existing "no signal, no mark" restraint (e.g. `_furnish_*`'s silent
     skip for an unrecognized room name)."""
@@ -403,20 +414,22 @@ def _front_door_opening(rects: list[dict], length: float, width: float, facing: 
     if facing not in _FACING_ORDER:
         return None
 
+    exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
+
     if facing == "north":
-        orientation, pos = "horizontal", 0.0
+        orientation, pos = "horizontal", exterior
         candidates = [r for r in rects if abs(r["y"] - pos) < _EDGE_TOL]
         span = lambda r: (r["x"], r["x"] + r["w"])
     elif facing == "south":
-        orientation, pos = "horizontal", width
+        orientation, pos = "horizontal", width - exterior
         candidates = [r for r in rects if abs((r["y"] + r["h"]) - pos) < _EDGE_TOL]
         span = lambda r: (r["x"], r["x"] + r["w"])
     elif facing == "west":
-        orientation, pos = "vertical", 0.0
+        orientation, pos = "vertical", exterior
         candidates = [r for r in rects if abs(r["x"] - pos) < _EDGE_TOL]
         span = lambda r: (r["y"], r["y"] + r["h"])
     else:  # east
-        orientation, pos = "vertical", length
+        orientation, pos = "vertical", length - exterior
         candidates = [r for r in rects if abs((r["x"] + r["w"]) - pos) < _EDGE_TOL]
         span = lambda r: (r["y"], r["y"] + r["h"])
 
@@ -624,14 +637,21 @@ def _draw_windows(
     x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
     is_living = classify_room_category(rect.get("name") or "") == "living"
     max_win_units = to_plot_unit(WINDOW_MAX_LENGTH_LIVING_M if is_living else WINDOW_MAX_LENGTH_M, unit)
+    # 2026-10 net-envelope refinement: rooms no longer touch the bare plot
+    # boundary at exactly 0/plot_length/plot_width - they're inset by the
+    # real exterior wall thickness (see floor_layout.layout_floor_with_
+    # warnings()) - so "does this room's edge lie on the exterior boundary"
+    # must compare against that same real offset, not a literal 0/length/
+    # width, or no room ever matches and no window is ever drawn.
+    exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
     edges = []
-    if abs(x) < _EDGE_TOL:
+    if abs(x - exterior) < _EDGE_TOL:
         edges.append(("left", y, y + h))
-    if abs((x + w) - plot_length) < _EDGE_TOL:
+    if abs((x + w) - (plot_length - exterior)) < _EDGE_TOL:
         edges.append(("right", y, y + h))
-    if abs(y) < _EDGE_TOL:
+    if abs(y - exterior) < _EDGE_TOL:
         edges.append(("top", x, x + w))
-    if abs((y + h) - plot_width) < _EDGE_TOL:
+    if abs((y + h) - (plot_width - exterior)) < _EDGE_TOL:
         edges.append(("bottom", x, x + w))
 
     for side, start_units, end_units in edges:
