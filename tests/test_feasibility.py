@@ -1,4 +1,12 @@
 from app.pipeline.feasibility import check_feasibility, min_area_for_room_count, room_count_requirements_table
+from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, to_plot_unit
+
+
+def _ext(unit="ft"):
+    """Real exterior-wall offset (2026-10 net-envelope refinement) -
+    check_feasibility() now compares against the real NET buildable
+    envelope, (length - 2*ext) x (width - 2*ext), not the raw gross plot."""
+    return to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
 
 
 def test_check_feasibility_returns_feasible_for_a_generous_plot():
@@ -44,10 +52,13 @@ def test_check_feasibility_returns_tight_near_the_boundary():
     # a plot size that would silently go stale if the room-size constants
     # ever change.
     width = 30
+    ext = _ext()
     probe = check_feasibility(rooms, {"length": 1000, "width": width, "unit": "ft"}, total_floors=1)
     required_area = probe["required_area"]
-    target_available = required_area * 1.05
-    length = target_available / width
+    target_net_available = required_area * 1.05
+    net_width = width - 2 * ext
+    net_length = target_net_available / net_width
+    length = net_length + 2 * ext
 
     result = check_feasibility(rooms, {"length": length, "width": width, "unit": "ft"}, total_floors=1)
     assert result["verdict"] == "tight"
@@ -102,7 +113,8 @@ def test_min_area_for_room_count_agrees_with_check_feasibility():
     # math, so a plot sized exactly at min_area_for_room_count()'s own
     # number must come back "feasible" or "tight", never "not_feasible".
     required = min_area_for_room_count("bedroom", 3, 1, total_floors=2, unit="ft")
-    side = required**0.5
+    net_side = required**0.5
+    side = net_side + 2 * _ext()
     rooms = [
         {"name": "Living Room", "area": 1},
         {"name": "Kitchen", "area": 1},
@@ -118,9 +130,12 @@ def test_min_area_for_room_count_agrees_with_check_feasibility():
 
 
 def test_room_count_requirements_table_covers_the_full_range():
+    # 2026-10: lowered from 16/11 - a table that only ever advertised an
+    # arbitrary ceiling, disconnected from real practicality, was a direct
+    # contributor to the "50x50 fits 15 bedrooms" bug.
     table = room_count_requirements_table(total_floors=1, unit="ft")
-    assert [row["count"] for row in table["bedrooms"]] == list(range(16))
-    assert [row["count"] for row in table["bathrooms"]] == list(range(11))
+    assert [row["count"] for row in table["bedrooms"]] == list(range(9))
+    assert [row["count"] for row in table["bathrooms"]] == list(range(7))
     for row in table["bedrooms"] + table["bathrooms"]:
         assert row["min_area"] > 0
         assert row["min_side"] > 0
@@ -130,3 +145,30 @@ def test_room_count_requirements_table_min_side_is_sqrt_of_min_area():
     table = room_count_requirements_table(total_floors=1, unit="ft")
     row = table["bedrooms"][5]
     assert abs(row["min_side"] - row["min_area"] ** 0.5) < 0.1
+
+
+def test_headline_regression_50x50_plot_no_longer_fits_15_bedrooms():
+    # The exact real, reported bug: a 50x50ft (2,500 sq ft) single floor's
+    # capacity hint said "fits up to 15 bedrooms and 10 bathrooms" - area-
+    # only math with no hallway, compared against the GROSS plot, capped
+    # only by an arbitrary table-size ceiling (not real practicality). The
+    # honest math (preferred, not bare-minimum, room sizes; a real hallway;
+    # the NET buildable envelope; explicit wall allowance) must report a
+    # dramatically smaller, grounded number - well under half the old one.
+    table = room_count_requirements_table(total_floors=1, unit="ft")
+    area = 50 * 50
+
+    def max_fit(rows):
+        best = 0
+        for row in rows:
+            if row["min_area"] <= area:
+                best = row["count"]
+            else:
+                break
+        return best
+
+    bedrooms_fit = max_fit(table["bedrooms"])
+    bathrooms_fit = max_fit(table["bathrooms"])
+    assert bedrooms_fit < 15
+    assert bedrooms_fit <= 10
+    assert bathrooms_fit < 10

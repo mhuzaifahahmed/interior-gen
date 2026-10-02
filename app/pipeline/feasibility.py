@@ -13,14 +13,62 @@ answer "does this actually fit" with the same numbers layout_floor() uses
 to guarantee room sizes, not a second, inconsistent set of assumptions.
 """
 
-from app.pipeline.room_specs import classify_room_category, min_area_for_room
+from app.pipeline.room_specs import (
+    EXTERIOR_WALL_THICKNESS_M,
+    classify_room_category,
+    min_area_for_room,
+    preferred_area_for_room,
+    to_plot_unit,
+)
 
-# Rule-of-thumb overhead for interior walls + circulation (hallways,
-# clearances) that a pure sum of room areas doesn't account for - real
-# buildings never achieve 100% room-area efficiency. A flat fraction, not a
-# room-by-room circulation solver (that's the "circulation optimization"
-# item in the user's spec - a bigger, separate effort left for later).
-CIRCULATION_OVERHEAD_FRACTION = 0.20
+# 2026-10, Measurements Model refinement: the old flat 20% "circulation
+# overhead" conflated TWO genuinely different things - real interior-
+# partition wall area, and real hallway/clearance circulation - into one
+# unexplained number, and compared against the RAW plot area rather than the
+# real NET buildable envelope (after the exterior wall band is reserved -
+# see floor_layout.py's own net-envelope reservation, which this now
+# mirrors). This was a direct contributor to the "50x50 fits 15 bedrooms"
+# bug: the old math added no hallway at all and measured against gross area.
+#
+# INTERIOR_WALL_AREA_ALLOWANCE_FRACTION intentionally mirrors
+# floor_layout.INTERIOR_WALL_AREA_ALLOWANCE_FRACTION (same value, kept as a
+# separate constant here rather than imported, to avoid feasibility.py
+# depending on floor_layout.py's larger import surface for one number - if
+# one changes, change the other to match).
+INTERIOR_WALL_AREA_ALLOWANCE_FRACTION = 0.08
+# Pure circulation/clearance overhead BEYOND the real hallway room now
+# explicitly added below for bedroom-heavy programs (doorway swing
+# clearance, minor inefficiency in corner rooms, etc.) - smaller than the
+# old flat 20% since a real hallway area is no longer folded into this one
+# unexplained fraction.
+CIRCULATION_OVERHEAD_FRACTION = 0.12
+
+# Matches floor_layout.MIN_ROOMS_FOR_CORRIDOR / HALLWAY_MIN_WIDTH_M - when
+# the private-zone room count reaches this threshold, the REAL layout engine
+# builds an actual hallway corridor (see floor_layout.py's module
+# docstring), so the capacity math must account for one too, not just sum
+# bare room areas with nothing connecting them.
+_MIN_ROOMS_FOR_HALLWAY = 3
+_HALLWAY_WIDTH_M = 1.2
+
+
+def _estimated_hallway_area(bedrooms: int, bathrooms: int, unit: str) -> float:
+    """A real, if approximate, hallway/corridor area - NOT a bare room-count
+    guess. Width matches floor_layout.py's own HALLWAY_MIN_WIDTH_M; length
+    approximates how much corridor a real _pack_row() packing would need by
+    summing each served room's own real minimum width (each room occupies
+    roughly its own min-width span along the corridor, the same way
+    floor_layout.py's real packer works) - zero when there aren't enough
+    private rooms to warrant a corridor at all (see floor_layout.py's own
+    MIN_ROOMS_FOR_CORRIDOR threshold)."""
+    if bedrooms + bathrooms < _MIN_ROOMS_FOR_HALLWAY:
+        return 0.0
+    from app.pipeline.room_specs import min_width_for_room
+
+    corridor_length = sum(min_width_for_room(f"Bedroom {i + 1}", unit) for i in range(bedrooms)) + sum(
+        min_width_for_room(f"Bathroom {i + 1}", unit) for i in range(bathrooms)
+    )
+    return to_plot_unit(_HALLWAY_WIDTH_M, unit) * corridor_length
 
 # Fallback-only staircase overhead, in square meters - a real "Staircase"
 # room is now injected into every floor's room list BEFORE this function is
@@ -52,7 +100,12 @@ def check_feasibility(
     unit = dimensions.get("unit") or "ft"
     length = float(dimensions.get("length") or 0)
     width = float(dimensions.get("width") or 0)
-    available_area = length * width
+    # Real NET buildable envelope (2026-10) - the exterior wall band is real
+    # wall, not room area, mirroring floor_layout.py's own net-envelope
+    # reservation exactly so this check can never disagree with what the
+    # layout engine actually does with the same plot.
+    exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
+    available_area = max(length - 2 * exterior, 0.0) * max(width - 2 * exterior, 0.0)
 
     if not rooms or available_area <= 0:
         return {
@@ -64,11 +117,19 @@ def check_feasibility(
         }
 
     required_room_area = sum(min_area_for_room(r.get("name") or "", unit, garage_cars) for r in rooms)
-    required_area = required_room_area * (1 + CIRCULATION_OVERHEAD_FRACTION)
+    # Explicit interior-partition wall area + a real hallway (when the
+    # private-zone room count warrants one) + residual circulation
+    # clearance - replacing the old flat 20% lump that accounted for none
+    # of these explicitly.
+    bedrooms = sum(1 for r in rooms if classify_room_category(str(r.get("name") or "")) == "bedroom")
+    bathrooms = sum(1 for r in rooms if classify_room_category(str(r.get("name") or "")) == "bathroom")
+    hallway_area = _estimated_hallway_area(bedrooms, bathrooms, unit)
+    required_area = (
+        required_room_area * (1 + INTERIOR_WALL_AREA_ALLOWANCE_FRACTION + CIRCULATION_OVERHEAD_FRACTION)
+        + hallway_area
+    )
     has_staircase = any(classify_room_category(str(r.get("name") or "")) == "staircase" for r in rooms)
     if total_floors and total_floors > 1 and not has_staircase:
-        from app.pipeline.room_specs import to_plot_unit
-
         required_area += to_plot_unit(STAIRCASE_MIN_AREA_SQM, unit)
 
     if required_area > available_area:
@@ -129,8 +190,13 @@ def check_feasibility(
 # bedroom/bathroom count applied to every floor (the common "Same on every
 # floor" input mode), the ground floor is always the binding constraint -
 # if it fits there, it fits everywhere.
-BEDROOM_COUNT_RANGE = range(0, 16)
-BATHROOM_COUNT_RANGE = range(0, 11)
+# 2026-10, Measurements Model refinement: lowered from range(0,16)/range(0,11)
+# - the OLD ranges existed purely as a table-size ceiling, completely
+# disconnected from whether that many rooms were remotely realistic (the
+# real, reported "50x50 fits up to 15 bedrooms" bug - the honest math below
+# permits far fewer before the table even reaches its own top row now).
+BEDROOM_COUNT_RANGE = range(0, 9)
+BATHROOM_COUNT_RANGE = range(0, 7)
 # A real bedroom count rarely comes with zero bathrooms in practice - held
 # fixed at this baseline while computing the BEDROOM table (and vice versa
 # for the BATHROOM table) since the two dropdowns are otherwise independent
@@ -142,21 +208,33 @@ _BASELINE_OTHER_ROOM_COUNT = 1
 
 def min_area_for_room_count(category: str, count: int, other_count: int, total_floors: int, unit: str) -> float:
     """Minimum GROUND FLOOR area (in the plot's unit, squared) needed to
-    feasibly fit `count` rooms of `category` ("bedroom" or "bathroom") -
-    `other_count` of the OTHER category held fixed alongside it - plus the
-    mandatory ground-floor public rooms and a staircase if `total_floors` >
-    1. Reuses the exact same min_area_for_room()/CIRCULATION_OVERHEAD_FRACTION
-    math check_feasibility() itself uses, so this can never disagree with
-    the real hard gate about what "fits" means."""
+    feasibly and PRACTICALLY (not just barely) fit `count` rooms of
+    `category` ("bedroom" or "bathroom") - `other_count` of the OTHER
+    category held fixed alongside it - plus the mandatory ground-floor
+    public rooms, a real hallway when warranted, and a staircase if
+    `total_floors` > 1.
+
+    2026-10 refinement: bedrooms/bathrooms use their real PREFERRED area
+    (not the bare practical minimum) - a "fits" number built purely from
+    bare minimums is what produced the "50x50 fits 15 bedrooms" bug (room
+    after room at its absolute smallest, with no hallway connecting any of
+    them). The public rooms (Living/Kitchen/Dining) stay at their own
+    minimum - they're a fixed, always-present cost, not the thing being
+    sized up by the count being tested. Shares the SAME wall-allowance/
+    circulation/hallway math check_feasibility() itself uses (via
+    _estimated_hallway_area() and the same overhead fractions), so this can
+    never disagree with the real hard gate about what "fits" means."""
     bedrooms = count if category == "bedroom" else other_count
     bathrooms = count if category == "bathroom" else other_count
-    rooms = [{"name": "Living Room"}, {"name": "Kitchen"}, {"name": "Dining Room"}]
-    rooms += [{"name": f"Bedroom {i + 1}"} for i in range(bedrooms)]
-    rooms += [{"name": f"Bathroom {i + 1}"} for i in range(bathrooms)]
+    fixed_rooms = [{"name": "Living Room"}, {"name": "Kitchen"}, {"name": "Dining Room"}]
     if total_floors and total_floors > 1:
-        rooms.append({"name": "Staircase"})
-    required_room_area = sum(min_area_for_room(r["name"], unit) for r in rooms)
-    return required_room_area * (1 + CIRCULATION_OVERHEAD_FRACTION)
+        fixed_rooms.append({"name": "Staircase"})
+
+    required_room_area = sum(min_area_for_room(r["name"], unit) for r in fixed_rooms)
+    required_room_area += sum(preferred_area_for_room(f"Bedroom {i + 1}", unit) for i in range(bedrooms))
+    required_room_area += sum(preferred_area_for_room(f"Bathroom {i + 1}", unit) for i in range(bathrooms))
+    hallway_area = _estimated_hallway_area(bedrooms, bathrooms, unit)
+    return required_room_area * (1 + INTERIOR_WALL_AREA_ALLOWANCE_FRACTION + CIRCULATION_OVERHEAD_FRACTION) + hallway_area
 
 
 def room_count_requirements_table(total_floors: int, unit: str) -> dict:

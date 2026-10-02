@@ -327,8 +327,10 @@ def test_house_room_requirements_requires_no_login():
         res = client.get("/api/house-room-requirements", params={"floor_count": 2, "unit": "ft"})
     assert res.status_code == 200
     body = res.json()
-    assert len(body["bedrooms"]) == 16
-    assert len(body["bathrooms"]) == 11
+    # 2026-10 Measurements Model refinement: ranges lowered from 16/11 to
+    # 9/7 - see feasibility.py's BEDROOM_COUNT_RANGE/BATHROOM_COUNT_RANGE.
+    assert len(body["bedrooms"]) == 9
+    assert len(body["bathrooms"]) == 7
     assert body["bedrooms"][0]["count"] == 0
     assert body["bedrooms"][5]["min_area"] > body["bedrooms"][0]["min_area"]
 
