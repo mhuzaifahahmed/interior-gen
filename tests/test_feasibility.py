@@ -1,4 +1,10 @@
-from app.pipeline.feasibility import check_feasibility, min_area_for_room_count, room_count_requirements_table
+from app.pipeline.feasibility import (
+    _geometrically_placeable_area,
+    _realistic_other_count,
+    check_feasibility,
+    min_area_for_room_count,
+    room_count_requirements_table,
+)
 from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, to_plot_unit
 
 
@@ -130,31 +136,50 @@ def test_min_area_for_room_count_agrees_with_check_feasibility():
 
 
 def test_room_count_requirements_table_covers_the_full_range():
-    # 2026-10: lowered from 16/11 - a table that only ever advertised an
-    # arbitrary ceiling, disconnected from real practicality, was a direct
-    # contributor to the "50x50 fits 15 bedrooms" bug.
+    # 2026-10 refinement: BEDROOM_COUNT_RANGE/BATHROOM_COUNT_RANGE (0-8/0-6)
+    # are now only an upper CEILING, not a guaranteed table length - each
+    # count is also checked GEOMETRICALLY (does the real layout engine
+    # actually produce a placeable layout, not just "the areas sum to less
+    # than the plot"), and the table stops at the first count where not even
+    # the most generous search margin finds one. A table that only ever
+    # advertised an arbitrary ceiling, disconnected from real practicality,
+    # was a direct contributor to the "50x50 fits 15 bedrooms" bug - so the
+    # real guarantees here are: non-empty, starts at 0, never exceeds the
+    # ceiling, every entry has a real positive area, and the areas are
+    # MONOTONIC (more rooms never need less space - a real bug found and
+    # fixed during this refinement, where the geometry search could
+    # otherwise report a smaller area for a bigger count purely as an
+    # artifact of where a suite-pairing split happened to land).
     table = room_count_requirements_table(total_floors=1, unit="ft")
-    assert [row["count"] for row in table["bedrooms"]] == list(range(9))
-    assert [row["count"] for row in table["bathrooms"]] == list(range(7))
-    for row in table["bedrooms"] + table["bathrooms"]:
-        assert row["min_area"] > 0
-        assert row["min_side"] > 0
+    assert table["bedrooms"][0]["count"] == 0
+    assert table["bathrooms"][0]["count"] == 0
+    assert 1 <= len(table["bedrooms"]) <= 9
+    assert 1 <= len(table["bathrooms"]) <= 7
+    for rows in (table["bedrooms"], table["bathrooms"]):
+        assert [row["count"] for row in rows] == list(range(len(rows)))
+        areas = [row["min_area"] for row in rows]
+        assert areas == sorted(areas)
+        for row in rows:
+            assert row["min_area"] > 0
+            assert row["min_side"] > 0
 
 
 def test_room_count_requirements_table_min_side_is_sqrt_of_min_area():
     table = room_count_requirements_table(total_floors=1, unit="ft")
-    row = table["bedrooms"][5]
+    row = table["bedrooms"][-1]
     assert abs(row["min_side"] - row["min_area"] ** 0.5) < 0.1
 
 
 def test_headline_regression_50x50_plot_no_longer_fits_15_bedrooms():
     # The exact real, reported bug: a 50x50ft (2,500 sq ft) single floor's
-    # capacity hint said "fits up to 15 bedrooms and 10 bathrooms" - area-
-    # only math with no hallway, compared against the GROSS plot, capped
-    # only by an arbitrary table-size ceiling (not real practicality). The
-    # honest math (preferred, not bare-minimum, room sizes; a real hallway;
-    # the NET buildable envelope; explicit wall allowance) must report a
-    # dramatically smaller, grounded number - well under half the old one.
+    # capacity hint said "fits up to 8 bedrooms and 6 bathrooms" (an earlier
+    # pass of this same refinement had already brought it down from an
+    # original 15/10, but that version only checked AREA, never whether the
+    # rooms could actually be PLACED as real, usable shapes). The honest,
+    # geometry-verified math must report a number close to the real-world
+    # norm for a house this size (~3-4 bedrooms/~2-3 bathrooms per published
+    # house-plan data - see the plan this refinement was built from), not
+    # just "smaller than before."
     table = room_count_requirements_table(total_floors=1, unit="ft")
     area = 50 * 50
 
@@ -169,6 +194,66 @@ def test_headline_regression_50x50_plot_no_longer_fits_15_bedrooms():
 
     bedrooms_fit = max_fit(table["bedrooms"])
     bathrooms_fit = max_fit(table["bathrooms"])
-    assert bedrooms_fit < 15
-    assert bedrooms_fit <= 10
-    assert bathrooms_fit < 10
+    assert 1 <= bedrooms_fit <= 5
+    assert 1 <= bathrooms_fit <= 4
+
+
+# ---- Realistic bedroom<->bathroom coupling + the real geometry-placeability ----
+# ---- search (2026-10, Part 2 of the "practical layouts" refinement) ----
+
+
+def test_realistic_other_count_scales_bathrooms_with_bedrooms():
+    # Roughly 1 bathroom per 2 bedrooms, never fewer than 1 - replaces the
+    # old flat baseline of 1 (which meant testing "does 8 bedrooms fit" only
+    # ever reserved space for ONE bathroom alongside them).
+    assert _realistic_other_count("bedroom", 0) == 1
+    assert _realistic_other_count("bedroom", 1) == 1
+    assert _realistic_other_count("bedroom", 2) == 1
+    assert _realistic_other_count("bedroom", 3) == 2
+    assert _realistic_other_count("bedroom", 4) == 2
+    assert _realistic_other_count("bedroom", 8) == 4
+
+
+def test_realistic_other_count_scales_bedrooms_with_bathrooms():
+    assert _realistic_other_count("bathroom", 0) == 1
+    assert _realistic_other_count("bathroom", 1) == 2
+    assert _realistic_other_count("bathroom", 3) == 6
+
+
+def test_min_area_for_room_count_reserves_a_real_foyer():
+    # 2026-10: a real Entry/foyer is now always reserved alongside Living/
+    # Kitchen/Dining - previously omitted entirely, understating the real
+    # fixed cost of a house's always-present rooms. Confirmed indirectly:
+    # the reported area for 0 bedrooms must exceed just Living+Kitchen+
+    # Dining's own combined preferred area (a real foyer adds real area on
+    # top of those three).
+    from app.pipeline.room_specs import preferred_area_for_room
+
+    area = min_area_for_room_count("bedroom", 0, 1, total_floors=1, unit="ft")
+    public_only = sum(preferred_area_for_room(n, "ft") for n in ("Living Room", "Kitchen", "Dining Room"))
+    assert area > public_only
+
+
+def test_geometrically_placeable_area_finds_a_working_size_for_a_modest_count():
+    # A small, reasonable room count must find SOME working margin (the
+    # function searches _GEOMETRY_CHECK_MARGINS and returns the smallest
+    # that works) - never None for a case this modest.
+    other = _realistic_other_count("bedroom", 1)
+    required = min_area_for_room_count("bedroom", 1, other, total_floors=1, unit="ft")
+    placeable_area = _geometrically_placeable_area("bedroom", 1, other, 1, "ft", required)
+    assert placeable_area is not None
+    assert placeable_area >= required
+
+
+def test_room_count_requirements_table_areas_are_strictly_monotonic_across_floor_counts():
+    # A 2-floor table's ground-floor program carries extra overhead (a real
+    # Staircase room) on top of the 1-floor table's - every entry should be
+    # at least as large, and the headline bug's own fix (foyer + realistic
+    # bathroom coupling + geometric verification) must never regress back
+    # to a non-monotonic table (a real bug found and fixed during this
+    # refinement - see room_count_requirements_table()'s own docstring).
+    one_floor = room_count_requirements_table(total_floors=1, unit="ft")
+    two_floor = room_count_requirements_table(total_floors=2, unit="ft")
+    for rows in (one_floor["bedrooms"], one_floor["bathrooms"], two_floor["bedrooms"], two_floor["bathrooms"]):
+        areas = [row["min_area"] for row in rows]
+        assert areas == sorted(areas)

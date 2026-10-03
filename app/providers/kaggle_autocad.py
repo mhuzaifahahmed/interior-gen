@@ -86,6 +86,7 @@ from app.dynamic_settings import KAGGLE_AUTOCAD_API_URL_KEY, get_effective_url
 from app.pipeline.blueprint_svg import (
     _DOOR_POSITION_FRACTION,
     _NAME_LINE_GAP_PX,
+    _compute_hallway_adjacent,
     _fit_room_name,
     _front_door_opening,
     _shared_edge,
@@ -270,13 +271,17 @@ def _door_specs_for_floor(
 
     has_hallway = any(r.get("name") == "Hallway" for r in rects)
     has_entry = any(classify_room_category(r.get("name") or "") == "foyer" for r in rects)
+    # 2026-10, see blueprint_svg._compute_hallway_adjacent()'s docstring -
+    # same reasoning as the PNG/DXF renderers, so the Concept Layout's door
+    # overlay never disagrees about which doors exist.
+    hallway_adjacent = _compute_hallway_adjacent(rects)
 
     specs: list[dict] = []
     for a, b in combinations(rects, 2):
         edge = _shared_edge(a, b)
         if edge is None:
             continue
-        if has_hallway and _should_suppress_direct_door(a, b):
+        if has_hallway and _should_suppress_direct_door(a, b, hallway_adjacent):
             continue
         if has_entry and _should_suppress_garage_direct_door(a, b):
             continue

@@ -2848,6 +2848,115 @@ pipeline module, and its own endpoints — deliberately not folded into the room
   specific paid plan is still open - see `future-plans/subscription-and-access-roadmap.md`'s matching
   entry for the two decisions (which plan unlocks it, UI treatment for a locked-out plan) still waiting on
   the user.
+- **v28 (2026-10, same branch): no-bowling-alley rooms, honest geometry-verified capacity, and a readable
+  output image - direct follow-up to a real generation on the live site showing v27's own "50x50 can fit 15
+  bedrooms" fix still landing at an absurd 8 bed/6 bath, AND genuinely bowling-alley-shaped rooms on a
+  150x100ft plot (a 20.9x88.1ft bedroom), AND washrooms too tiny to read even on a dense room program.
+  Three parts, each a real root-cause fix, not a parameter tweak:
+  - **Part 1 - the actual "no bowling-alley rooms" fix, `app/pipeline/floor_layout.py`.** Root cause,
+    confirmed by reading the code: `_pack_row()` always packed the ENTIRE private-zone room row into ONE
+    row at the box's FULL cross-dimension (depth) - so on a deep private box, MORE rooms only ever made
+    each one THINNER, never shorter. The existing best-of-N "intelligence loop" already scored/picked
+    candidates, but only ever varied the public/back split fraction - packing geometry itself was never a
+    candidate, so no non-sliver option existed for the loop to choose. Fixed by adding
+    `_pack_rows_banded()` - a SECOND packing option that splits the room row into TWO BANDS stacked along
+    the corridor's depth (Band 1 touches the Hallway directly, same as before; Band 2 sits behind it,
+    reached via a door to whichever Band 1 room it ends up adjacent to - an honest, reachable but imperfect
+    "walk-through" connection, not literally every room on the corridor) - offered as a new `row_count`
+    candidate knob (1 or 2) crossed with the existing front-fraction deltas (10 candidates total, still
+    pure/fast rect math). `blueprint_svg._should_suppress_direct_door()` gained a `hallway_adjacent`
+    parameter (computed once via the new `_compute_hallway_adjacent()`, mirrored into `blueprint_dxf.py`/
+    `kaggle_autocad.py`'s own door loops) so a Band-2 room's doors are never wrongly suppressed in favor of
+    a hallway edge it doesn't have.
+    - **Two real sub-bugs found and fixed via direct numeric verification while building this, not assumed
+      correct from the design alone**: (1) the first version split each band's DEPTH proportional to its
+      own WEIGHT share - degenerated whenever one band held a small minority of the private zone's total
+      weight (e.g. a single suite out of several): its raw share stayed below `MIN_ROW_DEPTH_M` even as the
+      box grew, so the clamp pinned that band's depth at the bare minimum FOREVER while its width (driven
+      by the growing box) kept increasing - a sliver that got WORSE, not better, on a larger plot. A flat
+      50/50 split fixed that degeneration but traded it for a subtler version: a band with FEWER, WIDER
+      rooms (e.g. one suite) still splits the full row width between just those rooms, needing MORE depth
+      than a band with several narrower rooms to stay square - confirmed live, a 2-room band's "Master
+      Bedroom" came out 83x21ft even with equal-depth bands. (2) Fixed properly with a ROOM-COUNT-AWARE
+      split: `near_fraction = count_b / (count_a + count_b)` - a band's depth is inversely proportional to
+      its OWN room count (directly to the other band's), the actual geometric driver (a room's natural
+      width ~ row width / count-in-band; balancing depth against THAT keeps rooms close to square,
+      regardless of weight). `_balanced_split_index_preserving_suites()` (new) still decides WHICH rooms go
+      in which band by weight-balance, never severing a bedroom+bathroom suite pair in half.
+  - **Part 2 - honest, geometry-VERIFIED capacity, `app/pipeline/feasibility.py`.** `min_area_for_room_count()`
+    previously reserved only Living/Kitchen/Dining (never a real Entry/foyer) and held the OTHER room count
+    flat at 1 regardless of the count being tested (so "does 8 bedrooms fit" only ever reserved space for
+    ONE bathroom) - both fixed: a real Entry is now always reserved, and `_realistic_other_count()` scales
+    the other category ~1 bathroom per 2 bedrooms (min 1) and the inverse. The REAL fix, though, is that the
+    table no longer trusts arithmetic alone - `_geometrically_placeable_area()` builds the real room list
+    for each candidate count and runs it through the REAL deterministic layout engine
+    (`floor_layout.layout_floor_with_warnings()`, the identical best-of-N engine a real generation uses),
+    searching `_GEOMETRY_CHECK_MARGINS` (smallest first) for a size that produces zero HARD violations -
+    "does the area sum fit" was never the same question as "can these rooms actually be PLACED as usable
+    shapes," and testing only the bare arithmetic minimum (tried first, live-verified) rejected every count
+    down to 0, since zero real slack left nothing for the engine's own redistribution/banding/door-width
+    logic to work with. `min_area`/`min_side` report whichever is LARGER - the bare sum, or the real area a
+    working layout actually needed - so the number is never a promise the engine can't keep.
+    - **Two real bugs found and fixed while verifying this, confirmed via direct numeric comparison, not
+      assumed**: (1) `layout_quality.score_floor_layout()`'s own `foyer_shallow` hard check compared a
+      room's SMALLER dimension against `min_depth_for_room()` - but a foyer is INTENTIONALLY asymmetric
+      (min_depth > min_width, a narrow-but-deep entry shape) - so that comparison could NEVER pass for a
+      correctly-shaped foyer, a latent bug invisible while the scorer only ever picked "least bad," but a
+      hard blocker once Part 2 started REJECTING any hard violation. Fixed to check both dimensions against
+      their own correct minimum, independent of orientation. (2) A foyer with NO garage alongside it had
+      ZERO shape protection at all (the garage-anchored 3-region carve-out in `_slice_reserving_garage()`
+      only fired when a garage existed) - collapsed to a sliver exactly like the ORIGINAL "1-foot entrance"
+      bug. Fixed by generalizing that proven carve-out into `_slice_reserving_anchor()` (same math, not
+      hardcoded to "garage") and calling it with the foyer's own real min_width/min_depth as the anchor
+      when there's no garage - with a `full_height_only` flag (foyer's own ~6ft depth is too shallow to
+      also host some unrelated OTHER public room as a "partner" at that depth the way a garage's ~20ft
+      depth can, confirmed live: Living Room squeezed to 6ft deep when this wasn't added).
+    - **Real, non-obvious design choice**: the geometry search is NOT a single "stop at first failure"
+      pass - an earlier version did exactly that and created a WORSE bug than the one it fixed: a single
+      tight edge case at a LOW count (e.g. 3 bedrooms) permanently capped the WHOLE table, so even a
+      150x150ft (2-floor) house reported only 2 bedrooms fit - wildly UNDER-stating capacity for a genuinely
+      huge plot, the opposite failure mode from the original bug. Fixed by searching upward through
+      multiple margins per count (not stopping at the bare minimum) and reporting the real achievable area,
+      not by truncating the table. A second real bug this surfaced: the search could occasionally report a
+      SMALLER area for a BIGGER count than a neighboring smaller count needed (an artifact of where a
+      suite-pairing split happened to land, not because more rooms genuinely need less space) - fixed with
+      an explicit monotonicity clamp (`area = max(area, previous_entry["min_area"])`).
+    - Cached (`functools.lru_cache`) per `(floor_count, unit)` since a table build now runs real layout
+      computations (~2-3s uncached, instant cached) - still a one-time cost per distinct combo for the
+      process's lifetime, not a per-request cost.
+    - **Real-world result, visually and numerically confirmed**: a 50x50ft single floor now reports ~2
+      bedrooms/~1 bathroom comfortably fit (down from v27's own already-improved-but-still-arithmetic-only
+      8/6, and the ORIGINAL reported 15/10) - closer to, if more conservative than, the researched
+      "2500 sq ft typically fits 3-4 bed/2-3 bath" norm, which is expected and correct: this number reflects
+      what THIS specific deterministic engine can actually place without a hard violation, not an idealized
+      external benchmark.
+  - **Part 3 - a readable output image, `app/pipeline/blueprint_svg.py`.** `TARGET_PLOT_LONGEST_SIDE_PX`
+    doubled 780 -> 1500 as a new FLOOR (every render's minimum), with a new `_adaptive_target_longest_side_px()`
+    growing it FURTHER (up to a hard `MAX_TARGET_PLOT_LONGEST_SIDE_PX` ceiling of 3200, so an extreme room
+    program can't balloon the file unreasonably) whenever the room program's own smallest governing
+    dimension would render under `_LEGIBLE_ROOM_MIN_PX` (90px) at the floor value - same "whether a
+    real-world size overflows/disappears depends on the WHOLE PLOT's scale, not the room's real feet alone"
+    lesson this module already applies to labels/furniture, just applied once up front to the canvas size
+    itself. `floor_layout._RENDER_SCALE_REFERENCE_PX` (the staircase-visibility floor's own scale reference,
+    documented to mirror this constant) bumped to the same 1500 - kept pinned to the FLOOR value
+    deliberately (the real adaptive render can only go higher), which keeps that reservation conservative,
+    never under-reserving. DXF/conditioning-image renderers are unaffected (real units, no pixel budget).
+  - **Verification**: 834/834 tests passing (19 new - banded-packing geometry/tiling/determinism,
+    suite-preserving split, room-count-aware depth allocation, realistic bedroom/bathroom coupling, the
+    geometry-placeability search, monotonicity, adaptive-resolution growth/cap/no-op). Plus the mandatory
+    visual pass this project's own doctrine requires for layout-engine changes, not tests alone: re-rendered
+    the EXACT reported 100x100/6-bedroom-style and 150x150/6-bedroom cases and visually confirmed real,
+    near-square bedrooms (aspect ratios ~1.1-2.0, zero hard violations) replacing the reported 20.9x88.1ft
+    sliver, a real connecting hallway, and a genuinely legible output image (3410x3500px for the 150x150
+    case, correctly labeled fixtures/doors/dimensions readable without zooming). A tighter 50x50/2-suite
+    case still shows some private-zone elongation (a real, honest reflection of a program that's slightly
+    over the table's own "comfortably fits" recommendation for that plot size, not a bug) - zero hard
+    violations either way.
+  - **Still NOT attempted** (real, harder problems, consistent with v27's own stated scope): a full
+    width-aware constraint-solver packer (this is still best-of-N scored candidates, not a packing
+    guarantee); the foyer-without-garage `full_height_only` carve-out can still render deeper than ideal on
+    a very tall box (a known, separate, lower-priority limitation - same class of "area guaranteed, shape
+    isn't perfect" honesty this module states elsewhere, not hidden); cross-floor vertical alignment (#17).
 
 ## Subscription plans, quotas, admin panel, and payments
 

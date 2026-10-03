@@ -1647,15 +1647,28 @@ def test_run_house_pipeline_upper_floor_lounge_does_not_dominate_a_sparse_floor(
     # The REAL, now-fixed bug: the lounge used to be split off into its own
     # top-level "front" zone, structurally disconnected from the bedrooms/
     # hallway it should belong with (a separate recursive split, not a
-    # shared row). After the fix, it's one more item packed in the SAME row
-    # as its sibling bedrooms - same cross-dimension (row depth) as every
-    # bedroom, and it genuinely borders the hallway, instead of floating in
-    # its own disconnected region.
+    # shared row) - this test's REAL guarantee is that it's reachable
+    # (connects via a real door to the hallway or a sibling room), never a
+    # disconnected region of its own, checked below.
+    #
+    # 2026-10, "no bowling-alley rooms" banding (Part 1 of the Measurements
+    # Model refinement) can now split a deep private zone's room row into
+    # TWO bands (see floor_layout._pack_rows_banded()), each with its OWN
+    # (room-count-aware, not necessarily equal) depth - so a room in the
+    # "far" band no longer necessarily shares its "near"-band siblings'
+    # cross-dimension, and has no edge to the Hallway rect directly; it
+    # connects via a door to whichever "near"-band room it ends up adjacent
+    # to instead (an accepted, documented trade-off - see that function's
+    # own docstring). Real-world confirmed here: Sitting Area lands alone in
+    # its own band (outweighed by the 3 bedrooms as a group), connected via
+    # a direct door to a bedroom rather than to the hallway itself - still
+    # genuinely reachable, just not necessarily a DIRECT hallway edge or the
+    # same row depth anymore, so the check below accepts either connection.
     assert bedroom_rects
-    for bedroom in bedroom_rects:
-        assert abs(bedroom["h"] - lounge_rect["h"]) < 1e-6  # same row, same cross-dimension
     assert hallway_rects
-    assert any(_shared_edge(lounge_rect, h) is not None for h in hallway_rects)
+    touches_hallway = any(_shared_edge(lounge_rect, h) is not None for h in hallway_rects)
+    touches_a_bedroom = any(_shared_edge(lounge_rect, b) is not None for b in bedroom_rects)
+    assert touches_hallway or touches_a_bedroom
 
 
 def test_ensure_upper_floor_lounge_never_touches_the_ground_floor():

@@ -125,12 +125,31 @@ def score_floor_layout(
                 )
 
         # HARD: the foyer/entry specifically must meet its real minimum
-        # depth - direct regression guard for the "1-foot entrance" bug.
+        # SHAPE - direct regression guard for the "1-foot entrance" bug.
+        # 2026-10 bug fix: this used to compare governing_width (min(w,h))
+        # against min_depth_for_room() alone - but a foyer's whole point is
+        # an ASYMMETRIC shape (min_depth > min_width, see room_specs.py's
+        # own foyer entry: narrow but deep, like a real entryway) - so that
+        # comparison could NEVER pass for a foyer shaped exactly as
+        # intended (its narrower side will always be < its own min_depth).
+        # A correctly-shaped foyer was being flagged as a hard violation
+        # unconditionally, which stayed invisible while this scorer only
+        # ever picked the "least bad" candidate - but directly blocked
+        # every real foyer once Part 2's honest-capacity geometry check
+        # started REJECTING any count with a hard violation. Fixed to check
+        # both dimensions against their own correct minimum, independent of
+        # which way the rect happens to be oriented (the slicer doesn't
+        # guarantee a foyer's "w" is literally its narrow side).
         if category == "foyer":
+            min_w = min_width_for_room(name, unit)
             min_depth = min_depth_for_room(name, unit)
-            if governing_width < min_depth * _AREA_TOLERANCE:
+            narrow_dim, long_dim = governing_width, max(w, h)
+            if narrow_dim < min_w * _AREA_TOLERANCE or long_dim < min_depth * _AREA_TOLERANCE:
                 violations.append(
-                    Violation(name, "foyer_shallow", True, f"depth {governing_width:.1f} < {min_depth:.1f}")
+                    Violation(
+                        name, "foyer_shallow", True,
+                        f"{narrow_dim:.1f}x{long_dim:.1f} < {min_w:.1f}x{min_depth:.1f}",
+                    )
                 )
 
         # SOFT: a visible sliver (aspect ratio), excluding categories meant

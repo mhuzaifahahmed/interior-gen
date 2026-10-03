@@ -43,7 +43,12 @@ from itertools import combinations
 import ezdxf
 from ezdxf.enums import TextEntityAlignment
 
-from app.pipeline.blueprint_svg import _front_door_opening, _shared_edge, _should_suppress_direct_door
+from app.pipeline.blueprint_svg import (
+    _compute_hallway_adjacent,
+    _front_door_opening,
+    _shared_edge,
+    _should_suppress_direct_door,
+)
 from app.pipeline.room_specs import (
     EXTERIOR_WALL_THICKNESS_M,
     FRONT_DOOR_WIDTH_M,
@@ -156,11 +161,16 @@ def render_floor_blueprint_dxf(
     # one pass per unique adjacent room PAIR (combinations never repeats a
     # pair), so a shared wall is drawn exactly once, not once per room.
     has_hallway = any(r["name"] == "Hallway" for r in rects)
+    # 2026-10, see blueprint_svg._compute_hallway_adjacent()'s docstring -
+    # keeps a "far band" room (no direct hallway edge) from ever having its
+    # only door suppressed, mirrored here so the PNG and the real .dxf
+    # export never disagree about which doors exist.
+    hallway_adjacent = _compute_hallway_adjacent(rects)
     for a, b in combinations(rects, 2):
         edge = _shared_edge(a, b)
         if edge is None:
             continue
-        suppress_door = has_hallway and _should_suppress_direct_door(a, b)
+        suppress_door = has_hallway and _should_suppress_direct_door(a, b, hallway_adjacent)
         # Proportional, per-category door width (2026-10, Part 2) - mirrors
         # blueprint_svg.py's own per-edge door sizing so the PNG and the
         # real .dxf export never disagree about how wide a given door is.

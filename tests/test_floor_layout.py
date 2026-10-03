@@ -2,10 +2,13 @@ from app.pipeline.blueprint_svg import _shared_edge
 from app.pipeline.floor_layout import (
     HALLWAY_MAX_WIDTH_M,
     HALLWAY_MIN_WIDTH_M,
+    _balanced_split_index_preserving_suites,
+    _pack_rows_banded,
     _zone_key,
     layout_floor,
     layout_floor_with_warnings,
 )
+from app.pipeline.layout_quality import SLIVER_ASPECT_RATIO
 from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, max_area_for_room, min_depth_for_room, to_plot_unit
 
 
@@ -959,11 +962,15 @@ def test_layout_floor_staircase_stays_visible_on_a_large_plot():
     dimensions = {"length": 150.0, "width": 90.0, "unit": "ft"}
     rects = layout_floor(rooms, dimensions, facing="south")
     stair = _stair_rect(rects)
-    # At this project's render scale (TARGET_PLOT_LONGEST_SIDE_PX=780 over a
-    # 150ft longest side, ~5.2px/ft), a width below ~8ft would render under
-    # the _STAIRCASE_MIN_VISIBLE_PX floor - well above the bare real-world
-    # minimum (~3.9ft) this would have been without the fix.
-    assert min(stair["w"], stair["h"]) > 7.0
+    # At this project's render scale (_RENDER_SCALE_REFERENCE_PX=1500, bumped
+    # from 780 in the 2026-10 "readable output image" refinement - Part 3 -
+    # over a 150ft longest side, ~10px/ft), a width below ~4.2ft would render
+    # under the _STAIRCASE_MIN_VISIBLE_PX floor - still above the bare
+    # real-world minimum (~3.9ft) this would have been without the fix, just
+    # a smaller margin now that the render canvas itself is bigger (more px
+    # per real-world foot, so a smaller real span already clears the
+    # pixel-visibility floor).
+    assert min(stair["w"], stair["h"]) > 3.5
 
 
 def test_layout_floor_no_staircase_and_no_public_rooms_unaffected():
@@ -993,3 +1000,163 @@ def test_layout_floor_garage_sparse_room_program_falls_back_cleanly():
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 50 + 1e-6
         assert r["y"] + r["h"] <= 45 + 1e-6
+
+
+# ---- "No bowling-alley rooms" banded private-zone packing (2026-10, Part 1 ----
+# ---- of the "practical layouts" refinement - real user report: a 100x100ft ----
+# ---- / 6-bedroom plot produced bedrooms as narrow as 20.9x88.1ft) ----
+
+
+def _private_rects(rects):
+    # Excludes Hallway/Staircase - both classify as zone 2 (private) but are
+    # INTENTIONALLY linear/elongated by design, same exclusion
+    # layout_quality.score_floor_layout() itself applies (_LINEAR_CATEGORIES).
+    # Also excludes bedroom/bathroom's own category check scope: Entry
+    # (foyer) is deliberately left out here - a foyer with no garage to
+    # anchor on (_slice_reserving_anchor()'s `full_height_only` path) is a
+    # SEPARATE, pre-existing, KNOWN limitation on a tall box (it can still
+    # come out deeper than ideal, since it's given the box's full height
+    # rather than a capped one - fixing that would need the same "give the
+    # leftover height to another room" complexity this module's garage
+    # carve-out already has to manage, not attempted in this pass) - this
+    # helper is scoped to what Part 1's banded packing actually targets:
+    # bedroom/bathroom slivers in the private zone.
+    return [
+        r for r in rects
+        if _zone_key(r["name"]) == 2 and r["name"] not in ("Hallway", "Staircase")
+        and "entry" not in r["name"].lower()
+    ]
+
+
+def test_layout_floor_deep_private_zone_no_longer_produces_slivers():
+    # Direct reproduction of the real, reported case: a wide/deep plot with
+    # 3 bedroom+bathroom suites - before the banded-packing fix, every
+    # private room was packed into ONE row at the box's FULL depth, so more
+    # rooms only ever made each one THINNER (never shorter).
+    rooms = [
+        {"name": "Living Room", "area": 3},
+        {"name": "Kitchen", "area": 2},
+        {"name": "Dining Room", "area": 2},
+        {"name": "Entry", "area": 1},
+        {"name": "Master Bedroom", "area": 2},
+        {"name": "Master Bathroom", "area": 1},
+        {"name": "Bedroom 2", "area": 1.5},
+        {"name": "Bathroom 2", "area": 0.8},
+        {"name": "Bedroom 3", "area": 1.5},
+        {"name": "Bathroom 3", "area": 0.8},
+    ]
+    dimensions = {"length": 100, "width": 100, "unit": "ft"}
+    rects, warnings = layout_floor_with_warnings(rooms, dimensions, facing="south")
+    for r in _private_rects(rects):
+        governing = min(r["w"], r["h"])
+        aspect = max(r["w"], r["h"]) / max(governing, 0.01)
+        assert aspect <= SLIVER_ASPECT_RATIO, f"{r['name']} is a sliver: {r['w']:.1f}x{r['h']:.1f}"
+    assert not any(w.hard for w in warnings)
+
+
+def test_layout_floor_banded_packing_still_tiles_exactly():
+    rooms = [
+        {"name": "Living Room", "area": 3},
+        {"name": "Kitchen", "area": 2},
+        {"name": "Dining Room", "area": 2},
+        {"name": "Bedroom 1", "area": 1.5},
+        {"name": "Bathroom 1", "area": 0.8},
+        {"name": "Bedroom 2", "area": 1.5},
+        {"name": "Bathroom 2", "area": 0.8},
+        {"name": "Bedroom 3", "area": 1.5},
+        {"name": "Bedroom 4", "area": 1.5},
+    ]
+    dimensions = {"length": 90, "width": 70, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions)
+    total_area = sum(_area(r) for r in rects)
+    assert abs(total_area - _net_area(90, 70)) < 1e-6
+    for r in rects:
+        assert r["x"] >= -1e-6 and r["y"] >= -1e-6
+        assert r["x"] + r["w"] <= 90 + 1e-6
+        assert r["y"] + r["h"] <= 70 + 1e-6
+
+
+def test_layout_floor_banded_candidate_selection_is_deterministic():
+    rooms = [
+        {"name": "Living Room", "area": 3},
+        {"name": "Kitchen", "area": 2},
+        {"name": "Dining Room", "area": 2},
+        {"name": "Entry", "area": 1},
+        {"name": "Bedroom 1", "area": 1.5},
+        {"name": "Bathroom 1", "area": 0.8},
+        {"name": "Bedroom 2", "area": 1.5},
+        {"name": "Bathroom 2", "area": 0.8},
+        {"name": "Bedroom 3", "area": 1.5},
+        {"name": "Bedroom 4", "area": 1.5},
+    ]
+    dimensions = {"length": 100, "width": 100, "unit": "ft"}
+    first = layout_floor(rooms, dimensions, facing="south")
+    second = layout_floor(rooms, dimensions, facing="south")
+    assert first == second
+
+
+def test_layout_floor_small_private_zone_keeps_original_single_row_geometry():
+    # Below MIN_ROOMS_FOR_DOUBLE_LOAD (4) - banding must never fire, so this
+    # stays byte-for-byte identical to the pre-Part-1 behavior (same "ties
+    # favor the original geometry" guarantee the candidate loop documents).
+    rooms = [
+        {"name": "Living Room", "area": 2},
+        {"name": "Kitchen", "area": 1},
+        {"name": "Master Bedroom", "area": 1.5},
+        {"name": "Master Bathroom", "area": 0.8},
+    ]
+    dimensions = {"length": 60, "width": 50, "unit": "ft"}
+    rects = layout_floor(rooms, dimensions)
+    private = _private_rects(rects)
+    # Every private room shares the SAME cross-dimension (single row, not
+    # banded) - a direct, structural check that banding didn't fire.
+    depths = {round(r["h"], 4) for r in private if r["name"] != "Hallway"}
+    assert len(depths) <= 1
+
+
+def test_balanced_split_index_preserving_suites_never_splits_a_suite_pair():
+    # 3 suites (indices 0/1, 2/3, 4/5) - the only valid split points are 2
+    # and 4; never 1, 3, or 5.
+    weights = [2.0, 1.0, 1.0, 1.0, 1.0, 2.0]
+    suite_ids = [0, 0, 1, 1, 2, 2]
+    split = _balanced_split_index_preserving_suites(weights, suite_ids)
+    assert split in (2, 4)
+
+
+def test_balanced_split_index_preserving_suites_returns_none_for_one_giant_suite():
+    weights = [1.0, 1.0]
+    suite_ids = [0, 0]
+    assert _balanced_split_index_preserving_suites(weights, suite_ids) is None
+
+
+def test_pack_rows_banded_returns_none_when_too_shallow():
+    names = ["Bedroom 1", "Bathroom 1", "Bedroom 2", "Bathroom 2"]
+    weights = [120.0, 50.0, 120.0, 50.0]
+    suite_ids = [0, 0, 1, 1]
+    result = _pack_rows_banded(names, weights, suite_ids, 0.0, 0.0, 40.0, 5.0, min_row_depth=4.0)
+    assert result is None
+
+
+def test_pack_rows_banded_gives_the_fewer_room_band_more_depth():
+    # ROOM-COUNT-AWARE depth split (2026-10 fix, second round - see
+    # _pack_rows_banded()'s own docstring for the full history: neither a
+    # weight-proportional split NOR a flat 50/50 split were safe - a band
+    # holding fewer/wider rooms needs MORE depth than a band holding more/
+    # narrower ones, or its few rooms read as wide-and-shallow slivers).
+    # names_a (2 rooms: a suite) should get a LARGER depth than names_b (3
+    # rooms) - split_index=2 here is the closest-to-half weight point that
+    # doesn't sever the two suite pairs.
+    names = ["Bedroom 1", "Bathroom 1", "Bedroom 2", "Bathroom 2", "Bedroom 3"]
+    weights = [120.0, 50.0, 120.0, 50.0, 120.0]
+    suite_ids = [0, 0, 1, 1, None]
+    result = _pack_rows_banded(names, weights, suite_ids, 0.0, 0.0, 60.0, 40.0, min_row_depth=4.0)
+    assert result is not None
+    depth_by_name = {r["name"]: r["h"] for r in result}
+    # Bedroom 1/Bathroom 1 (the 2-room band) get MORE depth than Bedroom
+    # 2/Bathroom 2/Bedroom 3 (the 3-room band).
+    assert depth_by_name["Bedroom 1"] > depth_by_name["Bedroom 2"]
+    assert depth_by_name["Bedroom 1"] == depth_by_name["Bathroom 1"]
+    assert depth_by_name["Bedroom 2"] == depth_by_name["Bathroom 2"] == depth_by_name["Bedroom 3"]
+    # Exact tiling - no gaps/overlaps within the banded region.
+    total = sum(_area(r) for r in result)
+    assert abs(total - 60.0 * 40.0) < 1e-6

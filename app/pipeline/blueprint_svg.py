@@ -69,7 +69,29 @@ from app.pipeline.room_specs import (
 )
 
 # ---- Canvas layout ----
-TARGET_PLOT_LONGEST_SIDE_PX = 780
+# 2026-10 (Part 3 of the "practical layouts" refinement, real user report:
+# "even though we have to zoom in... make the output image understandable") -
+# doubled from the original 780. A single fixed resolution meant a dense
+# room program (many small rooms, e.g. several bedrooms+bathrooms) or a
+# small-ish plot rendered its washrooms/labels too tiny to read even with
+# the font auto-shrink/wrap already in place (_fit_room_name()) - there's a
+# floor below which text simply can't shrink any further and stay legible.
+# This is the FLOOR every render uses at minimum - see
+# _adaptive_target_longest_side_px() below for how a render can go HIGHER
+# still when even this floor isn't enough for a specific room program.
+TARGET_PLOT_LONGEST_SIDE_PX = 1500
+# A real, hard ceiling on how far the adaptive scaling below is allowed to
+# grow the canvas - without one, an extreme room program (very many very
+# small rooms) could make the PNG unreasonably large (slow to generate/
+# upload/display). 3200px is already roughly 4x the original 780px default -
+# comfortably legible for any realistic room count.
+MAX_TARGET_PLOT_LONGEST_SIDE_PX = 3200
+# A room's own SHORTER real-world dimension should render at least this many
+# pixels, or its label/furniture start losing legibility regardless of the
+# font-shrink logic already in place - the actual threshold this module's
+# adaptive scaling targets.
+_LEGIBLE_ROOM_MIN_PX = 90
+
 MARGIN_LEFT_PX = 150   # room for the left dimension line + labels
 MARGIN_TOP_PX = 130    # room for the title text + top dimension line
 MARGIN_RIGHT_PX = 60
@@ -127,6 +149,32 @@ WINDOW_MAX_LENGTH_LIVING_M = 2.4
 FURNITURE_COLOR = INK_SOFT  # softer than WALL_COLOR - visually secondary to structure
 
 
+def _adaptive_target_longest_side_px(rects: list[dict], length: float, width: float) -> float:
+    """Returns the real pixel budget THIS specific floor's render should use -
+    TARGET_PLOT_LONGEST_SIDE_PX (the floor/minimum) unless this room program
+    has at least one room whose shorter real-world side would render below
+    _LEGIBLE_ROOM_MIN_PX at that floor value, in which case the budget grows
+    (proportionally, so that smallest room clears the legibility floor
+    exactly) up to MAX_TARGET_PLOT_LONGEST_SIDE_PX.
+
+    Same "whether a real-world size overflows/disappears depends on the
+    WHOLE PLOT's scale, not the room's real feet alone" lesson this module
+    already applies elsewhere (_fit_room_name(), the garage/staircase
+    furniture-visibility thresholds) - just applied once, up front, to the
+    canvas size itself instead of per-element afterward."""
+    longest_side = max(length, width, 1.0)
+    base_scale = TARGET_PLOT_LONGEST_SIDE_PX / longest_side
+    governing_dims = [min(r["w"], r["h"]) for r in rects if r.get("w", 0) > 0 and r.get("h", 0) > 0]
+    if not governing_dims:
+        return TARGET_PLOT_LONGEST_SIDE_PX
+    smallest_governing = min(governing_dims)
+    projected_px = smallest_governing * base_scale
+    if projected_px >= _LEGIBLE_ROOM_MIN_PX or projected_px <= 0:
+        return TARGET_PLOT_LONGEST_SIDE_PX
+    needed = TARGET_PLOT_LONGEST_SIDE_PX * (_LEGIBLE_ROOM_MIN_PX / projected_px)
+    return min(needed, MAX_TARGET_PLOT_LONGEST_SIDE_PX)
+
+
 def render_floor_blueprint(
     floor_number: int, rects: list[dict], dimensions: dict, total_floors: int = 1, facing: str | None = None
 ) -> bytes:
@@ -149,7 +197,8 @@ def render_floor_blueprint(
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
     unit = dimensions.get("unit", "") or "units"
-    scale = TARGET_PLOT_LONGEST_SIDE_PX / max(length, width, 1)
+    target_longest_side_px = _adaptive_target_longest_side_px(rects, length, width)
+    scale = target_longest_side_px / max(length, width, 1)
 
     plot_w_px = length * scale
     plot_h_px = width * scale
@@ -198,13 +247,18 @@ def render_floor_blueprint(
     # bathroom's door stays narrow everywhere consistently.
     has_hallway = any(r["name"] == "Hallway" for r in rects)
     has_entry = any(classify_room_category(r["name"]) == "foyer" for r in rects)
+    # 2026-10, see _compute_hallway_adjacent()/_should_suppress_direct_door()'s
+    # `hallway_adjacent` param - needed since floor_layout.py's banded
+    # packing can place a private room in a "far band" with no direct
+    # hallway edge, which must never have its own doors suppressed.
+    hallway_adjacent = _compute_hallway_adjacent(rects)
     interior_door_edges = []
     interior_door_widths_px = []
     for a, b in combinations(rects, 2):
         edge = _shared_edge(a, b)
         if edge is None:
             continue
-        if has_hallway and _should_suppress_direct_door(a, b):
+        if has_hallway and _should_suppress_direct_door(a, b, hallway_adjacent):
             continue
         if has_entry and _should_suppress_garage_direct_door(a, b):
             continue
@@ -324,7 +378,28 @@ def _shared_edge(a: dict, b: dict) -> dict | None:
     return None
 
 
-def _should_suppress_direct_door(a: dict, b: dict) -> bool:
+def _compute_hallway_adjacent(rects: list[dict]) -> frozenset[int]:
+    """The id() of every rect that shares a real wall with the Hallway rect
+    (2026-10, see floor_layout.py's "NO-BOWLING-ALLEY ROOMS" / banded
+    packing). Computed once per floor and passed into
+    _should_suppress_direct_door() - see that function's `hallway_adjacent`
+    parameter for why this matters: a private room packed into a far band
+    (floor_layout._pack_rows_banded()) has NO direct hallway edge at all, so
+    its doors to neighboring rooms must never be suppressed, or it would end
+    up completely sealed with zero doors. Returns an empty frozenset (every
+    lookup then misses, so suppression behaves as if hallway_adjacent were
+    never passed) when there's no Hallway rect on this floor at all."""
+    hallway_rect = next((r for r in rects if r.get("name") == "Hallway"), None)
+    if hallway_rect is None:
+        return frozenset()
+    return frozenset(
+        id(r) for r in rects if r is not hallway_rect and _shared_edge(r, hallway_rect) is not None
+    )
+
+
+def _should_suppress_direct_door(
+    a: dict, b: dict, hallway_adjacent: frozenset[int] | None = None
+) -> bool:
     """Real circulation corridor (see floor_layout.py's module docstring):
     when a Hallway rect exists on this floor, a direct door between two
     adjacent private-zone rooms is suppressed so they open onto the hallway
@@ -343,6 +418,18 @@ def _should_suppress_direct_door(a: dict, b: dict) -> bool:
     drew a wrong door from a bathroom into whatever bedroom happened to sit
     beside it once suites interleave bedrooms and bathrooms along the row.
 
+    hallway_adjacent (2026-10, see _compute_hallway_adjacent()): a private
+    room with NO direct hallway edge (possible once floor_layout.py's
+    "no bowling-alley rooms" banded packing puts a room in the far band -
+    see floor_layout._pack_rows_banded()) has no OTHER way to reach the
+    rest of the house except through a direct neighbor, so its doors are
+    NEVER suppressed by this function regardless of the usual bedroom<->
+    bedroom rule below - suppression only fires when BOTH rooms already
+    have their own independent hallway access, so losing this one direct
+    link can't orphan either side. None (the default) preserves the
+    ORIGINAL behavior exactly (every private room is assumed hallway-
+    adjacent, which was always true before banded packing existed).
+
     Only called when has_hallway is True - a private zone with no corridor
     (too few rooms, or not enough space) keeps the original "any shared edge
     gets a door" behavior unconditionally, since direct adjacency is its
@@ -359,6 +446,10 @@ def _should_suppress_direct_door(a: dict, b: dict) -> bool:
             return True
         return False
     if _zone_key(a["name"]) != 2 or _zone_key(b["name"]) != 2:
+        return False
+    if hallway_adjacent is not None and (id(a) not in hallway_adjacent or id(b) not in hallway_adjacent):
+        # At least one side has no other way to the hallway - keep this
+        # door rather than risk sealing a far-band room off entirely.
         return False
 
     a_bath = classify_room_category(a["name"]) == "bathroom"

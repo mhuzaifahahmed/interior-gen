@@ -3,10 +3,13 @@ from io import BytesIO
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from app.pipeline.blueprint_svg import (
+    MAX_TARGET_PLOT_LONGEST_SIDE_PX,
     PAPER,
+    TARGET_PLOT_LONGEST_SIDE_PX,
     WINDOW_COLOR,
     WINDOW_MAX_LENGTH_LIVING_M,
     WINDOW_MAX_LENGTH_M,
+    _adaptive_target_longest_side_px,
     _draw_furniture,
     _draw_room_label,
     _draw_windows,
@@ -700,3 +703,86 @@ def test_area_text_shown_when_it_fits_a_wide_room():
     image, band = _render_label_only(wide_rect, scale=780 / 60)
     blank = Image.new("RGB", image.size, PAPER)
     assert ImageChops.difference(image.crop(band), blank.crop(band)).getbbox() is not None
+
+
+# ---- Adaptive render resolution (2026-10, Part 3 of the "practical layouts" ----
+# ---- refinement - real user report: washrooms render too tiny to read, ----
+# ---- "make the output image understandable" even if zooming is needed) ----
+
+
+def test_adaptive_target_uses_the_floor_for_a_normal_room_program():
+    rects = [
+        {"name": "Living Room", "x": 0, "y": 0, "w": 20.0, "h": 15.0},
+        {"name": "Bedroom 1", "x": 20.0, "y": 0, "w": 12.0, "h": 10.0},
+    ]
+    target = _adaptive_target_longest_side_px(rects, 40.0, 30.0)
+    assert target == TARGET_PLOT_LONGEST_SIDE_PX
+
+
+def test_adaptive_target_grows_for_a_room_with_a_tiny_shorter_side():
+    # A room whose shorter real-world side would render well under the
+    # legibility floor at the base resolution - the adaptive target must
+    # grow enough that it clears that floor (not so tiny that it needs more
+    # growth than MAX_TARGET_PLOT_LONGEST_SIDE_PX allows - see the separate
+    # cap test below for that case).
+    rects = [
+        {"name": "Living Room", "x": 0, "y": 0, "w": 120.0, "h": 100.0},
+        {"name": "Bathroom 1", "x": 120.0, "y": 0, "w": 6.0, "h": 8.0},
+    ]
+    target = _adaptive_target_longest_side_px(rects, 150.0, 100.0)
+    assert target > TARGET_PLOT_LONGEST_SIDE_PX
+    assert target < MAX_TARGET_PLOT_LONGEST_SIDE_PX
+    scale = target / 150.0
+    assert 6.0 * scale >= 90.0 - 1e-6  # _LEGIBLE_ROOM_MIN_PX
+
+
+def test_adaptive_target_is_capped_for_an_extreme_room_program():
+    rects = [{"name": f"Room {i}", "x": float(i), "y": 0.0, "w": 0.3, "h": 0.3} for i in range(20)]
+    target = _adaptive_target_longest_side_px(rects, 200.0, 200.0)
+    assert target <= MAX_TARGET_PLOT_LONGEST_SIDE_PX
+
+
+def test_adaptive_target_handles_no_rects():
+    assert _adaptive_target_longest_side_px([], 50.0, 50.0) == TARGET_PLOT_LONGEST_SIDE_PX
+
+
+def test_render_floor_blueprint_output_is_at_least_double_the_old_default():
+    # Real, end-to-end confirmation: the actual PNG output is meaningfully
+    # bigger now (the old default was 780px longest side).
+    rects = layout_floor(
+        [{"name": "Living Room", "area": 2}, {"name": "Bedroom 1", "area": 1}],
+        {"length": 40, "width": 30, "unit": "ft"},
+    )
+    png_bytes = render_floor_blueprint(1, rects, {"length": 40, "width": 30, "unit": "ft"})
+    image = Image.open(BytesIO(png_bytes))
+    assert max(image.size) > 780 * 1.5
+
+
+def test_render_floor_blueprint_grows_for_a_dense_small_room_program():
+    # A plot with several small bathrooms packed alongside normal rooms -
+    # the rendered canvas should be noticeably larger than a simple 2-room
+    # layout of a similar overall plot size, since the adaptive scaling
+    # kicks in to keep the small rooms legible.
+    simple_rects = layout_floor(
+        [{"name": "Living Room", "area": 2}, {"name": "Bedroom 1", "area": 1}],
+        {"length": 60, "width": 60, "unit": "ft"},
+    )
+    dense_rects = layout_floor(
+        [
+            {"name": "Living Room", "area": 2},
+            {"name": "Kitchen", "area": 1},
+            {"name": "Dining Room", "area": 1},
+            {"name": "Bedroom 1", "area": 1},
+            {"name": "Bathroom 1", "area": 0.3},
+            {"name": "Bedroom 2", "area": 1},
+            {"name": "Bathroom 2", "area": 0.3},
+            {"name": "Bedroom 3", "area": 1},
+            {"name": "Bathroom 3", "area": 0.3},
+        ],
+        {"length": 60, "width": 60, "unit": "ft"},
+    )
+    simple_png = render_floor_blueprint(1, simple_rects, {"length": 60, "width": 60, "unit": "ft"})
+    dense_png = render_floor_blueprint(1, dense_rects, {"length": 60, "width": 60, "unit": "ft"})
+    simple_image = Image.open(BytesIO(simple_png))
+    dense_image = Image.open(BytesIO(dense_png))
+    assert max(dense_image.size) >= max(simple_image.size)

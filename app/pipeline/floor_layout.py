@@ -212,14 +212,51 @@ invisible sliver in an architecturally arbitrary spot.
 
 Explicitly NOT attempted (real, harder problems, left for later - see
 future-plans/house-layout-spec-checklist.md): non-rectangular/L-shaped
-rooms, a double-loaded (two-facing-rows) corridor, plumbing-zone vertical
-stacking across floors, a full adjacency-graph solver, a real validate-
-then-regenerate loop, true road-facing orientation (this project has no
-plot-orientation input at all - the y=0-is-front convention is a project-
-wide assumption, not a verified fact), and zone-level (public-vs-private)
-area capping (the max-area caps above are intra-zone only - an unusually
-weight-heavy public room list could still claim a disproportionate share of
-the total footprint before the private zone's own split).
+rooms, plumbing-zone vertical stacking across floors, a full
+adjacency-graph solver, a real validate-then-regenerate loop, true
+road-facing orientation (this project has no plot-orientation input at all -
+the y=0-is-front convention is a project-wide assumption, not a verified
+fact), and zone-level (public-vs-private) area capping (the max-area caps
+above are intra-zone only - an unusually weight-heavy public room list could
+still claim a disproportionate share of the total footprint before the
+private zone's own split).
+
+NO-BOWLING-ALLEY ROOMS / DOUBLE-LOADED PACKING (2026-10, real user report:
+"150 by 150 sqft space its giving me the rooms in the shape of a bowling
+alley"). Root cause: `_pack_row()` always packed the ENTIRE private room
+list into ONE row, each room spanning the row's FULL cross-dimension
+(depth) - so on a deep private box, more rooms only ever made each one
+THINNER, never shorter (a real reported case: a 20.9x88.1ft bedroom). The
+quality scorer already penalizes slivers and the best-of-N loop already
+picks the best-scoring candidate, but every candidate only ever varied the
+front/back split fraction - packing geometry itself was never a candidate
+knob, so no non-sliver candidate ever existed for the loop to choose.
+
+Fixed by adding a SECOND packing option: instead of one row at the box's
+full depth, `_pack_rows_banded()` splits the room list into TWO BANDS
+stacked along the corridor's depth - Band 1 (near the hallway, directly
+touching it, same as today) and Band 2 (behind Band 1, same full width, NOT
+touching the hallway directly) - each band packed at roughly HALF the
+depth, so individual rooms come out far closer to square. This is offered
+as a `row_count` CANDIDATE KNOB (see `_CANDIDATE_PRIVATE_ROW_COUNTS`),
+exactly like the existing front-fraction deltas - `layout_floor_with_
+warnings()` tries both row_count=1 (today's unchanged behavior) and
+row_count=2 and keeps whichever one scores better for THIS specific room
+program/plot, never a decision this module makes unilaterally.
+
+Honest trade-off, stated plainly: Band 2 rooms have no direct hallway edge,
+so they reach the rest of the house via a door to whichever Band 1 room
+they end up adjacent to instead (see blueprint_svg._should_suppress_direct_
+door()'s `hallway_adjacent` parameter) - a real, reachable, but imperfect
+"walk-through" connection, not the ideal of every room opening directly
+onto the corridor. This is a deliberate, bounded improvement (best-of-
+scored-candidates, same honesty this module already applies elsewhere), not
+a full double-loaded-corridor solver with independent hallway access for
+every room - that would need the hallway itself to run between the two
+bands rather than beside them, a materially bigger change to this module's
+whole box-splitting approach, left for a future pass if row_count=2 still
+proves insufficient. row_count is currently only ever 1 or 2 (not a general
+N) - see MIN_ROOMS_FOR_DOUBLE_LOAD.
 """
 
 from app.pipeline.layout_quality import score_floor_layout
@@ -274,6 +311,13 @@ HALLWAY_MAX_WIDTH_M = 3.0
 # the original plain _slice() behavior instead.
 MIN_ROOMS_FOR_CORRIDOR = 3
 
+# Below this many private rooms, splitting the packed row into two bands
+# (see module docstring's "NO-BOWLING-ALLEY ROOMS" section) isn't worth the
+# "Band 2 has no direct hallway door" trade-off - a 3-room private zone just
+# packed into one row is already reasonably proportioned, two bands would
+# only leave one band holding a single room for no real gain.
+MIN_ROOMS_FOR_DOUBLE_LOAD = 4
+
 # After reserving the hallway's width, the remaining row depth must still fit
 # a usable room - a conservative fixed floor (not tied to any one room type's
 # own minimum, since the row holds a mix of room types).
@@ -289,10 +333,17 @@ MIN_ROW_DEPTH_M = 2.0
 # labels (`_fit_room_name()`/blueprint_svg.py's own docstring: "whether a
 # real-world room size overflows... depends on the WHOLE PLOT's scale... not
 # the room's real feet alone") - applied here too. `_RENDER_SCALE_REFERENCE_PX`
-# MUST be kept equal to blueprint_svg.TARGET_PLOT_LONGEST_SIDE_PX - duplicated
-# rather than imported to avoid a circular import (blueprint_svg.py already
-# imports `_zone_key` from this module).
-_RENDER_SCALE_REFERENCE_PX = 780
+# MUST be kept equal to blueprint_svg.TARGET_PLOT_LONGEST_SIDE_PX's BASE/FLOOR
+# value (duplicated rather than imported to avoid a circular import -
+# blueprint_svg.py already imports `_zone_key` from this module). 2026-10:
+# bumped 780 -> 1500 alongside that same bump in blueprint_svg.py (Part 3 of
+# the "practical layouts" refinement). blueprint_svg.py's render can go
+# HIGHER than this floor for a specific dense room program (see its own
+# _adaptive_target_longest_side_px()) - this stays pinned to the FLOOR value
+# deliberately, which keeps this reservation CONSERVATIVE (the real render
+# scale is always >= this), never under-reserving the staircase's real-world
+# visible span.
+_RENDER_SCALE_REFERENCE_PX = 1500
 _STAIRCASE_MIN_VISIBLE_PX = 42
 
 
@@ -413,6 +464,14 @@ _VALID_FACINGS = ("north", "south", "east", "west")
 # layout - see layout_quality.py's module docstring.
 _CANDIDATE_FRONT_FRACTION_DELTAS = (0.0, -0.05, 0.05, -0.1, 0.1)
 
+# Second candidate knob (2026-10, "no bowling-alley rooms" - see module
+# docstring): whether the private zone's room row is packed as ONE band
+# (today's original behavior, tried first so ties still favor it) or TWO
+# bands stacked along the corridor's depth (_pack_rows_banded()). Crossed
+# with every front-fraction delta above (5 x 2 = 10 candidates total) -
+# still small and bounded, pure rect math, milliseconds not seconds.
+_CANDIDATE_PRIVATE_ROW_COUNTS = (1, 2)
+
 
 def layout_floor(
     rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None
@@ -498,12 +557,16 @@ def layout_floor_with_warnings(
     best_warnings: list = []
     best_score: float | None = None
     for delta in _CANDIDATE_FRONT_FRACTION_DELTAS:
-        candidate = _layout_floor_core(rooms, core_dimensions, garage_cars, front_fraction_delta=delta)
-        scored = score_floor_layout(candidate, core_dimensions, garage_cars)
-        if best_score is None or scored.score > best_score:
-            best_score = scored.score
-            best_rects = candidate
-            best_warnings = scored.violations
+        for row_count in _CANDIDATE_PRIVATE_ROW_COUNTS:
+            candidate = _layout_floor_core(
+                rooms, core_dimensions, garage_cars,
+                front_fraction_delta=delta, private_row_count=row_count,
+            )
+            scored = score_floor_layout(candidate, core_dimensions, garage_cars)
+            if best_score is None or scored.score > best_score:
+                best_score = scored.score
+                best_rects = candidate
+                best_warnings = scored.violations
 
     rects = best_rects or []
 
@@ -533,7 +596,11 @@ def layout_floor_with_warnings(
 
 
 def _layout_floor_core(
-    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, front_fraction_delta: float = 0.0
+    rooms: list[dict],
+    dimensions: dict,
+    garage_cars: int | None = None,
+    front_fraction_delta: float = 0.0,
+    private_row_count: int = 1,
 ) -> list[dict]:
     """The actual layout algorithm - always computes with the public/front
     zone at low-y, private/back zone at high-y (see layout_floor()'s
@@ -624,7 +691,7 @@ def _layout_floor_core(
         # behavior unchanged (see the `back_start == len(names)` branch).
         return _layout_private_zone(
             names, weights, 0.0, 0.0, length, width, unit, split_along_width=False,
-            plot_longest_side=max(length, width),
+            plot_longest_side=max(length, width), row_count=private_row_count,
         )
     if back_start == 0 or back_start == len(names):
         # No circulation/private rooms at all (a pure-public floor, or a
@@ -670,7 +737,8 @@ def _layout_floor_core(
     front_box, back_box, split_along_width = _split_box_along_y(0.0, 0.0, length, width, front_fraction)
     front_rects = _slice_reserving_garage(front_names, front_weights, *front_box, front_total, unit, garage_cars)
     back_rects = _layout_private_zone(
-        back_names, back_weights, *back_box, unit, split_along_width, plot_longest_side=max(length, width)
+        back_names, back_weights, *back_box, unit, split_along_width,
+        plot_longest_side=max(length, width), row_count=private_row_count,
     )
     return front_rects + back_rects
 
@@ -843,32 +911,105 @@ def _slice_reserving_garage(
     Falls back to the plain, unchanged _slice() (no garage carve-out at all)
     when there's no garage in `names`, or when the box is too narrow for any
     carve-out to make geometric sense (defensive - expected to already be
-    caught by feasibility checks, not the normal path)."""
-    garage_index = next((i for i, name in enumerate(names) if classify_room_category(name) == "garage"), None)
-    if garage_index is None:
-        return _slice(names, weights, x, y, w, h, total_weight)
+    caught by feasibility checks, not the normal path).
 
-    garage_width, garage_depth = garage_dimensions(garage_cars or 1, unit)
-    if garage_width <= 0 or garage_width >= w:
+    2026-10, real gap found and fixed while building the honest-capacity
+    geometry check (Part 2 of the Measurements Model refinement): a foyer
+    with NO garage alongside it got ZERO shape protection at all - straight
+    into plain _slice(), where it could collapse to a sliver (confirmed: as
+    narrow as ~1ft, below its own real minimum depth) exactly like the
+    ORIGINAL "1-foot entrance" bug this function's own garage-anchored
+    clamp already fixed for the garage-present case. Every single candidate
+    room count in the capacity table failed geometrically purely because of
+    this, since Entry is always one of the fixed public rooms. Fixed by
+    extracting the actual 3-region carve-out algorithm below into
+    _slice_reserving_anchor() (unchanged math, just no longer hardcoded to
+    "garage") and calling it with the foyer's own real min_width/min_depth
+    as the anchor dimensions whenever there's no garage to anchor on
+    instead - the exact same proven shape guarantee, just without requiring
+    a garage to exist first.
+
+    One real difference from the garage path, found while verifying this:
+    a garage's own real depth (~20ft) comfortably hosts a "row A partner"
+    room (typically Entry) at that same depth without squeezing it - but a
+    foyer's own real depth (~6ft) is far too shallow to ALSO host some
+    OTHER public room (e.g. Living Room) as ITS partner at that same depth,
+    which is exactly what the general 3-region split would otherwise do
+    (confirmed live: Living Room squeezed to 6ft deep, well under its own
+    ~11ft minimum width). So the foyer-anchor call below passes
+    `full_height_only=True` - it always uses the simpler single-column,
+    full-box-height carve-out (same fallback shape the garage path itself
+    already falls back to when there's no room for a second row), never
+    the row-A-partner split that only makes sense for a deep anchor."""
+    garage_index = next((i for i, name in enumerate(names) if classify_room_category(name) == "garage"), None)
+    if garage_index is not None:
+        garage_width, garage_depth = garage_dimensions(garage_cars or 1, unit)
+        return _slice_reserving_anchor(
+            names, weights, x, y, w, h, total_weight, unit, garage_index, garage_width, garage_depth, garage_cars
+        )
+
+    foyer_index = next((i for i, name in enumerate(names) if classify_room_category(name) == "foyer"), None)
+    if foyer_index is not None:
+        foyer_name = names[foyer_index]
+        foyer_width = min_width_for_room(foyer_name, unit)
+        foyer_depth = min_depth_for_room(foyer_name, unit)
+        return _slice_reserving_anchor(
+            names, weights, x, y, w, h, total_weight, unit, foyer_index, foyer_width, foyer_depth, None,
+            full_height_only=True,
+        )
+
+    return _slice(names, weights, x, y, w, h, total_weight)
+
+
+def _slice_reserving_anchor(
+    names: list[str],
+    weights: list[float],
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    total_weight: float,
+    unit: str,
+    anchor_index: int,
+    anchor_width: float,
+    anchor_depth: float,
+    garage_cars: int | None,
+    full_height_only: bool = False,
+) -> list[dict]:
+    """The real 3-region carve-out algorithm (see _slice_reserving_garage()'s
+    own docstring above for the full rationale/history) - generalized to
+    accept any ONE "anchor" room's real width/depth instead of being
+    garage-specific, so the identical, already-proven shape guarantee can
+    also protect a foyer/entry room when there's no garage to anchor on.
+    `garage_cars` only matters when the anchor room (or, rarely, the
+    column-C room right next to it) classifies as a garage - None elsewhere.
+
+    full_height_only (2026-10, see _slice_reserving_garage()'s own note on
+    the foyer-anchor call site): when True, skips the row-A-partner 3-region
+    split entirely and always uses the simpler single-column, full-box-
+    height carve-out below - for an anchor room whose own real depth is too
+    shallow to also host some OTHER, unrelated public room as its "partner"
+    at that same depth (a foyer, ~6ft deep) without squeezing it."""
+    if anchor_width <= 0 or anchor_width >= w:
         # Box too narrow for a real carve-out to leave any room for the rest
         # of the zone - defensive fallback, not the normal path (see
-        # docstring).
+        # _slice_reserving_garage()'s docstring).
         return _slice(names, weights, x, y, w, h, total_weight)
 
-    garage_name = names[garage_index]
-    rest_names = names[:garage_index] + names[garage_index + 1 :]
-    rest_weights = weights[:garage_index] + weights[garage_index + 1 :]
+    anchor_name = names[anchor_index]
+    rest_names = names[:anchor_index] + names[anchor_index + 1 :]
+    rest_weights = weights[:anchor_index] + weights[anchor_index + 1 :]
     if not rest_names:
-        return [{"name": garage_name, "x": x, "y": y, "w": garage_width, "h": h}]
+        return [{"name": anchor_name, "x": x, "y": y, "w": anchor_width, "h": h}]
 
-    # Need real room left over for a second row (garage_depth < h) AND at
+    # Need real room left over for a second row (anchor_depth < h) AND at
     # least one more room besides the row-A partner - otherwise fall back to
     # the original single-column, full-height carve-out.
-    if garage_depth >= h or len(rest_names) < 2:
-        garage_rect = {"name": garage_name, "x": x, "y": y, "w": garage_width, "h": h}
+    if full_height_only or anchor_depth >= h or len(rest_names) < 2:
+        anchor_rect = {"name": anchor_name, "x": x, "y": y, "w": anchor_width, "h": h}
         rest_total = sum(rest_weights)
-        rest_rects = _slice(rest_names, rest_weights, x + garage_width, y, w - garage_width, h, rest_total)
-        return [garage_rect] + rest_rects
+        rest_rects = _slice(rest_names, rest_weights, x + anchor_width, y, w - anchor_width, h, rest_total)
+        return [anchor_rect] + rest_rects
 
     partner_index = next(
         (i for i, name in enumerate(rest_names) if classify_room_category(name) == "foyer"), 0
@@ -878,30 +1019,30 @@ def _slice_reserving_garage(
     remaining_names = rest_names[:partner_index] + rest_names[partner_index + 1 :]
     remaining_weights = rest_weights[:partner_index] + rest_weights[partner_index + 1 :]
 
-    garage_rect = {"name": garage_name, "x": x, "y": y, "w": garage_width, "h": garage_depth}
+    anchor_rect = {"name": anchor_name, "x": x, "y": y, "w": anchor_width, "h": anchor_depth}
 
     if len(remaining_names) < 2:
         # Not enough rooms left for a distinct column C + row-B remainder -
         # simpler two-row fallback (partner fills the whole rest of row A).
         row_a_rects = _slice(
-            [row_a_partner_name], [row_a_partner_weight], x + garage_width, y, w - garage_width, garage_depth,
+            [row_a_partner_name], [row_a_partner_weight], x + anchor_width, y, w - anchor_width, anchor_depth,
             row_a_partner_weight,
         )
         row_b_total = sum(remaining_weights)
         row_b_rects = (
-            _slice(remaining_names, remaining_weights, x, y + garage_depth, w, h - garage_depth, row_b_total)
+            _slice(remaining_names, remaining_weights, x, y + anchor_depth, w, h - anchor_depth, row_b_total)
             if remaining_names
             else []
         )
-        return [garage_rect] + row_a_rects + row_b_rects
+        return [anchor_rect] + row_a_rects + row_b_rects
 
     # Real width for the row-A partner, from its OWN already-capped target
     # area (weight IS a target area at this point in the pipeline - see
     # _layout_floor_core's min/max-area pass) at the fixed row-A depth -
     # not stretched to fill whatever's left, which is what caused the
     # oversized-Entry regression this docstring describes above.
-    partner_width_raw = row_a_partner_weight / garage_depth if garage_depth > 0 else 0.0
-    max_partner_width = max((w - garage_width) * 0.5, garage_width)
+    partner_width_raw = row_a_partner_weight / anchor_depth if anchor_depth > 0 else 0.0
+    max_partner_width = max((w - anchor_width) * 0.5, anchor_width)
     # Real foyer min-depth floor (2026-10, Part 2 of the Measurements Model
     # refinement) - the ORIGINAL reported "entrance is a 1-foot hallway" bug
     # was exactly this row-A partner collapsing to near-zero width when its
@@ -920,12 +1061,12 @@ def _slice_reserving_garage(
         if classify_room_category(row_a_partner_name) == "foyer"
         else 0.0
     )
-    partner_width = min(max(partner_width_raw, garage_width * 0.5, min_partner_width), max_partner_width)
+    partner_width = min(max(partner_width_raw, anchor_width * 0.5, min_partner_width), max_partner_width)
     partner_rect = {
-        "name": row_a_partner_name, "x": x + garage_width, "y": y, "w": partner_width, "h": garage_depth,
+        "name": row_a_partner_name, "x": x + anchor_width, "y": y, "w": partner_width, "h": anchor_depth,
     }
 
-    row_a_width = garage_width + partner_width
+    row_a_width = anchor_width + partner_width
     column_c_name, column_c_weight = remaining_names[0], remaining_weights[0]
     column_c_available_width = w - row_a_width
 
@@ -950,7 +1091,7 @@ def _slice_reserving_garage(
     # redistribute() already uses elsewhere in this module).
     column_c_min_width = min_width_for_room(column_c_name, unit)
     column_c_width = min(
-        column_c_available_width, max(column_c_max_width, garage_width * 0.5, column_c_min_width)
+        column_c_available_width, max(column_c_max_width, anchor_width * 0.5, column_c_min_width)
     )
     overflow_width = column_c_available_width - column_c_width
     column_c_rect = {"name": column_c_name, "x": x + row_a_width, "y": y, "w": column_c_width, "h": h}
@@ -969,12 +1110,12 @@ def _slice_reserving_garage(
             )
 
     row_b_rects = (
-        _slice(row_b_names, row_b_weights, x, y + garage_depth, row_a_width, h - garage_depth, sum(row_b_weights))
+        _slice(row_b_names, row_b_weights, x, y + anchor_depth, row_a_width, h - anchor_depth, sum(row_b_weights))
         if row_b_names
         else []
     )
 
-    return [garage_rect, partner_rect, column_c_rect] + row_b_rects + overflow_rects
+    return [anchor_rect, partner_rect, column_c_rect] + row_b_rects + overflow_rects
 
 
 def _slice(
@@ -1066,6 +1207,125 @@ def _arrange_suites(
     return ordered_names, ordered_weights, ordered_suites
 
 
+def _balanced_split_index_preserving_suites(
+    weights: list[float], suite_ids: list[int | None]
+) -> int | None:
+    """Same job as _balanced_split_index() (closest-to-half weight split),
+    but never picks a split point that falls INSIDE a bedroom+bathroom suite
+    pair (see _arrange_suites() - a suite is always two CONSECUTIVE entries
+    sharing a suite id) - splitting one would separate an ensuite bathroom
+    from its own bedroom across two different packing bands. Returns None
+    when every candidate split point would do so (e.g. the whole private
+    list is one single suite), so the caller can fall back to a single
+    row/band instead."""
+    total = sum(weights)
+    half = total / 2
+    best_index = None
+    best_diff = None
+    for i in range(1, len(weights)):
+        if suite_ids[i - 1] is not None and suite_ids[i - 1] == suite_ids[i]:
+            continue  # would split a suite pair in half - never a valid point
+        running = sum(weights[:i])
+        diff = abs(running - half)
+        if best_diff is None or diff < best_diff:
+            best_diff = diff
+            best_index = i
+    return best_index
+
+
+def _pack_rows_banded(
+    names: list[str],
+    weights: list[float],
+    suite_ids: list[int | None],
+    row_x: float,
+    row_y: float,
+    row_w: float,
+    row_h: float,
+    min_row_depth: float,
+) -> list[dict] | None:
+    """The real "no bowling-alley rooms" fix (see module docstring) - splits
+    the private room row into TWO BANDS stacked along the corridor's depth
+    instead of packing every room into one row at the row's FULL depth:
+
+      Band 1 (near_rects): depth = near_depth, starts at row_y - directly
+        borders the Hallway, exactly like the single-row case always has.
+      Band 2 (far_rects): depth = row_h - near_depth, starts right after
+        Band 1 - does NOT touch the Hallway directly.
+
+    Each band is packed independently via the existing _pack_row(), just at
+    a SMALLER depth than the full row_h - this is what actually fixes the
+    sliver problem: more rooms no longer means each one gets thinner at a
+    FIXED full depth, the depth itself shrinks too.
+
+    Band depths are allocated proportional to each band's own total room
+    weight (a rough proxy for "how much space these rooms need"), clamped
+    so neither band drops below min_row_depth. Returns None - the caller
+    falls back to the original single-row packing - when row_h isn't deep
+    enough for two real bands, or when there's no valid suite-preserving
+    split point (see _balanced_split_index_preserving_suites()).
+
+    Band 2 rooms have no hallway edge of their own - they reach the rest of
+    the house via a direct door to whichever Band 1 room they end up
+    adjacent to instead (blueprint_svg._should_suppress_direct_door()'s
+    `hallway_adjacent` parameter keeps that door from being wrongly
+    suppressed) - a real, reachable, if imperfect "walk-through" connection,
+    not literally every room opening onto the corridor. See module
+    docstring's honest trade-off note."""
+    if row_h < 2 * min_row_depth:
+        return None
+    split_index = _balanced_split_index_preserving_suites(weights, suite_ids)
+    if split_index is None:
+        return None
+    names_a, names_b = names[:split_index], names[split_index:]
+    weights_a, weights_b = weights[:split_index], weights[split_index:]
+    suite_a, suite_b = suite_ids[:split_index], suite_ids[split_index:]
+    if not names_a or not names_b:
+        return None
+
+    weight_a, weight_b = sum(weights_a), sum(weights_b)
+    # ROOM-COUNT-AWARE depth split (2026-10, real bug found via visual/
+    # numeric verification, TWO rounds):
+    #
+    # Round 1 (weight-proportional) degenerated whenever one band held a
+    # small minority of the private zone's total weight (e.g. a single
+    # suite out of several) - its raw share stayed BELOW min_row_depth even
+    # as the box grew, so the max(..., min_row_depth) clamp pinned that
+    # band's DEPTH at the bare minimum forever, while its WIDTH (driven by
+    # row_w, which DOES grow with the box) kept increasing - a sliver that
+    # got WORSE, not better, on a larger plot.
+    #
+    # Round 2 (a plain 50/50 split) fixed that degeneration but traded it
+    # for a SUBTLER version of the same shape problem: a band holding FEWER
+    # rooms (e.g. just one suite pair) still splits the SAME full row_w
+    # between only 2 rooms - each room comes out WIDE - while getting the
+    # SAME depth as a band holding 4+ narrower rooms. Confirmed live: a
+    # 2-room band's Master Bedroom came out 83x21ft (a sliver) while a
+    # same-depth 4-room band's rooms were comfortably square-ish.
+    #
+    # The actual fix: give each band a depth INVERSELY proportional to its
+    # OWN room count (equivalently, proportional to the OTHER band's
+    # count) - a band with fewer, wider rooms needs MORE depth to keep
+    # those rooms from reading as shallow-and-wide; a band with more,
+    # narrower rooms needs less. This is the real geometric driver (room
+    # width ~ row_w / count-in-band; balancing depth against that keeps
+    # rooms closer to square), not a proxy like weight or a flat split.
+    count_a, count_b = len(names_a), len(names_b)
+    near_fraction = count_b / (count_a + count_b) if (count_a + count_b) else 0.5
+    near_depth = max(row_h * near_fraction, min_row_depth)
+    near_depth = min(near_depth, row_h - min_row_depth)
+    far_depth = row_h - near_depth
+
+    near_rects = _pack_row(
+        names_a, weights_a, row_x, row_y, row_w, near_depth, weight_a,
+        along_width=True, suite_ids=suite_a,
+    )
+    far_rects = _pack_row(
+        names_b, weights_b, row_x, row_y + near_depth, row_w, far_depth, weight_b,
+        along_width=True, suite_ids=suite_b,
+    )
+    return near_rects + far_rects
+
+
 def _layout_private_zone(
     names: list[str],
     weights: list[float],
@@ -1076,6 +1336,7 @@ def _layout_private_zone(
     unit: str,
     split_along_width: bool,
     plot_longest_side: float = 0.0,
+    row_count: int = 1,
 ) -> list[dict]:
     """Lays out the "back" (circulation + private) box - either with a real
     hallway corridor (see module docstring) when there's enough room count/
@@ -1100,6 +1361,16 @@ def _layout_private_zone(
     When a corridor IS built, rooms are first reordered into bedroom+bathroom
     suites (_arrange_suites) so each bathroom lands next to its own bedroom
     with a shared suite tag, instead of all bathrooms clustering on one side.
+
+    row_count (2026-10, see module docstring's "NO-BOWLING-ALLEY ROOMS"
+    section): 1 (default) packs the whole room list into ONE row at the
+    box's full cross-dimension - the original behavior. 2 requests
+    _pack_rows_banded()'s two-band packing instead (only actually applied
+    on the split_along_width=False path - see that branch's own comment),
+    silently falling back to 1 when conditions for banding aren't met. This
+    is a CANDIDATE KNOB (layout_floor_with_warnings() tries both and keeps
+    whichever scores better), not a decision this function makes on its
+    own.
     """
     stair_index = next((i for i, n in enumerate(names) if classify_room_category(n) == "staircase"), None)
     stair_name = names[stair_index] if stair_index is not None else None
@@ -1186,7 +1457,14 @@ def _layout_private_zone(
     else:
         # Front zone is ABOVE (private box's own top edge borders it) -
         # hallway is a horizontal strip along that top edge, rooms line up
-        # horizontally (packed along x) below it.
+        # horizontally (packed along x) below it. This is the ONLY branch
+        # actually reached in production (layout_floor() always calls
+        # _split_box_along_y() for the top-level split, which always
+        # returns split_along_width=False) - row_count>1 (the "no
+        # bowling-alley rooms" banded packing) is therefore only
+        # implemented here, not in the split_along_width=True branch above,
+        # which stays single-row-only rather than adding unverifiable
+        # complexity to a code path nothing currently reaches.
         hallway_rect = {"name": "Hallway", "x": x, "y": y, "w": w, "h": hallway_width}
         row_x, row_y, row_w, row_h = x, y + hallway_width, w, h - hallway_width
         stair_rect = None
@@ -1194,16 +1472,27 @@ def _layout_private_zone(
             # Same convention as the split_along_width branch above (see its
             # comment, including the pixel-visibility floor) - the row's
             # full cross-dimension (row_h) kept, same as every sibling room
-            # packed in this row.
+            # packed in this row. The staircase is carved out BEFORE banding
+            # (see below) - it always stays directly hallway-adjacent,
+            # regardless of row_count.
             stair_width, _ = staircase_dimensions(unit)
             stair_width = max(stair_width, _min_visible_staircase_span(unit, plot_longest_side))
             stair_span = min(stair_width, row_w * 0.5)
             stair_rect = {"name": stair_name, "x": row_x, "y": row_y, "w": stair_span, "h": row_h}
             row_x, row_w = row_x + stair_span, row_w - stair_span
-        room_rects = _pack_row(
-            names, weights, row_x, row_y, row_w, row_h, total_weight,
-            along_width=True, suite_ids=suite_ids,
-        )
+        room_rects = None
+        if row_count >= 2 and len(names) >= MIN_ROOMS_FOR_DOUBLE_LOAD:
+            room_rects = _pack_rows_banded(
+                names, weights, suite_ids, row_x, row_y, row_w, row_h, min_row_depth
+            )
+        if room_rects is None:
+            # row_count==1, OR row_count==2 but _pack_rows_banded() declined
+            # (not enough rooms/depth/valid suite-preserving split) - same
+            # single-row packing as before this feature existed.
+            room_rects = _pack_row(
+                names, weights, row_x, row_y, row_w, row_h, total_weight,
+                along_width=True, suite_ids=suite_ids,
+            )
 
     result = [hallway_rect] + room_rects
     if stair_rect is not None:
