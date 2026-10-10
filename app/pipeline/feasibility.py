@@ -314,7 +314,7 @@ def _geometrically_placeable_area(
     the top of this file would still create an import-order constraint
     where feasibility.py can't be imported before floor_layout.py is fully
     defined - scoping the import to this one function sidesteps that)."""
-    from app.pipeline.floor_layout import layout_floor_with_warnings
+    from app.pipeline.layout_engine import layout_floor_with_warnings
 
     rooms = _room_list_for_count(category, count, other_count, total_floors, unit)
     for margin in _GEOMETRY_CHECK_MARGINS:

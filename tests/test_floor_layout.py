@@ -3,8 +3,10 @@ from app.pipeline.floor_layout import (
     HALLWAY_MAX_WIDTH_M,
     HALLWAY_MIN_WIDTH_M,
     _balanced_split_index_preserving_suites,
+    _layout_floor_core,
     _pack_rows_banded,
     _zone_key,
+    footprint_bbox,
     layout_floor,
     layout_floor_with_warnings,
 )
@@ -34,6 +36,22 @@ def _net_area(length, width, unit="ft"):
     return net_l * net_w
 
 
+def _footprint_area(rects):
+    """The real area "tiles exactly" assertions should compare against
+    post-2026-10 (Part 1 "smart canvas sizing") - rects only tile the
+    HOUSE's own footprint, not necessarily the full net plot envelope, when
+    the plot is genuinely oversized for its room program (real, visible
+    yard left over - see test_layout_floor_shrinks_footprint_on_an_
+    oversized_plot). Numerically identical to _net_area(length, width)
+    whenever no shrink occurred, so this is a strict generalization, not a
+    weaker check - the real invariant under test ("no gaps/overlaps from
+    floating-point drift") is unaffected either way."""
+    fp = footprint_bbox(rects)
+    if fp is None:
+        return 0.0
+    return (fp[2] - fp[0]) * (fp[3] - fp[1])
+
+
 def test_layout_floor_returns_empty_for_no_rooms():
     assert layout_floor([], {"length": 40, "width": 60, "unit": "ft"}) == []
 
@@ -41,9 +59,16 @@ def test_layout_floor_returns_empty_for_no_rooms():
 def test_layout_floor_single_room_fills_entire_plot():
     # A single room fills the entire NET envelope (not the gross plot) -
     # the surrounding band is the real exterior wall (2026-10 refinement).
-    result = layout_floor([{"name": "Studio", "area": 1}], {"length": 40, "width": 60, "unit": "ft"})
+    # A right-sized plot (2026-10, Part 1 "smart canvas sizing") - a single
+    # generic room's own realistic footprint target is tiny, so an
+    # OVERSIZED plot would now legitimately leave real yard around it (see
+    # test_layout_floor_shrinks_footprint_on_an_oversized_plot below for
+    # that behavior) - this test keeps its original "fills the whole given
+    # box" intent by sizing the plot to roughly what the room actually
+    # needs, so no shrink occurs here.
+    result = layout_floor([{"name": "Studio", "area": 1}], {"length": 12, "width": 12, "unit": "ft"})
     ext = _exterior("ft")
-    net_l, net_w = _net_dims(40, 60, "ft")
+    net_l, net_w = _net_dims(12, 12, "ft")
     assert len(result) == 1
     room = result[0]
     assert room["name"] == "Studio"
@@ -51,6 +76,70 @@ def test_layout_floor_single_room_fills_entire_plot():
     assert abs(room["y"] - ext) < 1e-6
     assert abs(room["w"] - net_l) < 1e-6
     assert abs(room["h"] - net_w) < 1e-6
+
+
+def test_layout_floor_shrinks_footprint_on_an_oversized_plot():
+    # The direct regression test for Part 1 "smart canvas sizing" - a tiny
+    # room program on a huge plot must NOT stretch to fill it (the real root
+    # cause of the reported "150x150 bowling alley" / oversized-living-room
+    # bugs - see floor_layout.py's module docstring). Real, visible yard
+    # left over, centered on the cross axis, flush at the front.
+    rooms = [{"name": "Studio", "area": 1}]
+    result = layout_floor(rooms, {"length": 150, "width": 150, "unit": "ft"}, facing="north")
+    assert len(result) == 1
+    room = result[0]
+    net_l, net_w = _net_dims(150, 150, "ft")
+    # Genuinely smaller than the net envelope - the actual fix.
+    assert room["w"] < net_l * 0.5
+    assert room["h"] < net_w * 0.5
+    # Front-flush (north => low-y, exactly the exterior-wall offset).
+    assert abs(room["y"] - _exterior("ft")) < 1e-6
+    # Cross-axis (x) centered within the net envelope.
+    ext = _exterior("ft")
+    left_margin = room["x"] - ext
+    right_margin = (ext + net_l) - (room["x"] + room["w"])
+    assert abs(left_margin - right_margin) < 1e-6
+    assert left_margin > 1.0  # a real, meaningful side yard exists
+
+
+def test_layout_floor_shrinks_footprint_anchored_correctly_for_every_facing():
+    # Front-flush (zero offset along the facing axis) + cross-axis-centered
+    # anchoring must hold for all 4 compass facings, not just the north
+    # default - each facing transposes/mirrors coordinates differently (see
+    # layout_floor()'s own docstring), so this is a real regression risk if
+    # the anchor offset were applied at the wrong point in that pipeline.
+    rooms = [{"name": "Studio", "area": 1}]
+    net_l, net_w = _net_dims(150, 150, "ft")
+    ext = _exterior("ft")
+
+    for facing, facing_axis, cross_axis in (
+        ("north", "y", "x"),
+        ("south", "y", "x"),
+        ("east", "x", "y"),
+        ("west", "x", "y"),
+    ):
+        result = layout_floor(rooms, {"length": 150, "width": 150, "unit": "ft"}, facing=facing)
+        room = result[0]
+        assert room["w"] < net_l * 0.5 and room["h"] < net_w * 0.5, facing
+
+        if facing in ("north", "west"):
+            # Flush at the LOW end of the facing axis.
+            flush_coord = room[facing_axis]
+            assert abs(flush_coord - ext) < 1e-6, facing
+        else:
+            # Flush at the HIGH end (south => high-y, east => high-x).
+            net_extent = net_l if facing_axis == "x" else net_w
+            flush_far_edge = room[facing_axis] + room["w" if facing_axis == "x" else "h"]
+            assert abs(flush_far_edge - (ext + net_extent)) < 1e-6, facing
+
+        # Cross-axis centered either way.
+        cross_extent = net_l if cross_axis == "x" else net_w
+        cross_size = room["w" if cross_axis == "x" else "h"]
+        cross_pos = room[cross_axis]
+        low_margin = cross_pos - ext
+        high_margin = (ext + cross_extent) - (cross_pos + cross_size)
+        assert abs(low_margin - high_margin) < 1e-6, facing
+        assert low_margin > 1.0, facing  # a real, meaningful yard on both sides
 
 
 def test_layout_floor_rectangles_tile_the_plot_exactly():
@@ -73,7 +162,7 @@ def test_layout_floor_rectangles_tile_the_plot_exactly():
     rect_names = {r["name"] for r in rects}
     assert {r["name"] for r in rooms} <= rect_names
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - _net_area(40, 60)) < 1e-6
+    assert abs(total_area - _footprint_area(rects)) < 1e-6
 
     # No rectangle extends outside the plot bounds (accounting for the real
     # exterior-wall band every rect is now inset by).
@@ -119,7 +208,7 @@ def test_layout_floor_handles_many_rooms_without_error():
     rects = layout_floor(rooms, {"length": 100, "width": 80, "unit": "ft"})
     assert len(rects) == 12
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - _net_area(100, 80)) < 1e-6
+    assert abs(total_area - _footprint_area(rects)) < 1e-6
 
 
 def test_layout_floor_defaults_missing_dimensions_to_one():
@@ -332,8 +421,18 @@ def test_layout_floor_hallway_width_scales_with_plot_size_but_stays_clamped():
     # like a thin thread on a large plot. The fix must be proportional (a
     # bigger house's hallway should be wider) but bounded to realistic
     # limits on both ends - not a value tuned to any one specific plot.
-    small_rects = layout_floor(_private_room_mix(), {"length": 40, "width": 60, "unit": "ft"})
-    large_rects = layout_floor(_private_room_mix(), {"length": 200, "width": 300, "unit": "ft"})
+    #
+    # Calls _layout_floor_core() directly (not the public layout_floor()) -
+    # 2026-10, Part 1 "smart canvas sizing" decouples the realized footprint
+    # from the raw plot size for an undersized room program (by design - a
+    # tiny room list no longer stretches across an oversized plot), which
+    # would otherwise confound THIS test's own, narrower concern: does the
+    # hallway-width-vs-box-size logic inside the core engine itself still
+    # scale correctly. _layout_floor_core() sits one layer below footprint
+    # sizing (see layout_floor_with_warnings()), so this exercises that
+    # logic directly, independent of Part 1.
+    small_rects = _layout_floor_core(_private_room_mix(), {"length": 40, "width": 60, "unit": "ft"})
+    large_rects = _layout_floor_core(_private_room_mix(), {"length": 200, "width": 300, "unit": "ft"})
 
     small_width = _hallway_thickness(small_rects)
     large_width = _hallway_thickness(large_rects)
@@ -353,8 +452,12 @@ def test_layout_floor_hallway_keeps_scaling_on_a_genuinely_huge_plot():
     # plot rendered an identical capped width. A genuinely huge plot must
     # produce a noticeably wider hallway than a merely-large one, not the
     # same number both times (both still bounded by HALLWAY_MAX_WIDTH_M).
-    large_rects = layout_floor(_private_room_mix(), {"length": 45, "width": 50, "unit": "ft"})
-    huge_rects = layout_floor(_private_room_mix(), {"length": 200, "width": 300, "unit": "ft"})
+    #
+    # Calls _layout_floor_core() directly - see the test above's own note on
+    # why (Part 1's footprint sizing is a separate, lower-priority concern
+    # from this test's own hallway-scaling one).
+    large_rects = _layout_floor_core(_private_room_mix(), {"length": 45, "width": 50, "unit": "ft"})
+    huge_rects = _layout_floor_core(_private_room_mix(), {"length": 200, "width": 300, "unit": "ft"})
 
     large_width = _hallway_thickness(large_rects)
     huge_width = _hallway_thickness(huge_rects)
@@ -487,12 +590,54 @@ def test_layout_floor_interleaves_bathrooms_with_bedrooms_not_clustered():
         assert any(_touch(bath, bed) for bed in bedrooms), f"{bath['name']} touches no bedroom"
 
 
+def test_arrange_suites_groups_standalone_wet_rooms_ahead_of_dry_leftovers():
+    # Wet-wall grouping (2026-10, Part 2 "practical layouts" refinement) -
+    # a standalone (non-suite) wet room among the leftovers (a common
+    # bathroom with no bedroom of its own) should be ordered BEFORE a purely
+    # dry leftover (storage), so real plumbing fixtures cluster together.
+    from app.pipeline.floor_layout import _arrange_suites
+
+    names = ["Bedroom 1", "Bathroom 1", "Common Bathroom", "Storage"]
+    weights = [2.0, 1.0, 1.0, 1.0]
+    ordered_names, _, ordered_suites = _arrange_suites(names, weights)
+
+    # Bedroom 1 + Bathroom 1 form the only suite - both leftovers
+    # (Common Bathroom, Storage) are untagged.
+    common_bath_index = ordered_names.index("Common Bathroom")
+    storage_index = ordered_names.index("Storage")
+    assert common_bath_index < storage_index
+    assert ordered_suites[ordered_names.index("Bedroom 1")] is not None
+
+
+def test_arrange_suites_wet_grouping_never_disturbs_suite_pairing():
+    # The wet-wall reordering only ever touches the LEFTOVER group - it must
+    # never separate an already-formed bed+bath suite pair, or change which
+    # rooms get a suite tag at all.
+    from app.pipeline.floor_layout import _arrange_suites
+
+    names = ["Master Bedroom", "Master Bathroom", "Bedroom 2", "Laundry", "Storage"]
+    weights = [2.0, 1.0, 1.5, 0.8, 0.8]
+    ordered_names, _, ordered_suites = _arrange_suites(names, weights)
+
+    master_bed_idx = ordered_names.index("Master Bedroom")
+    master_bath_idx = ordered_names.index("Master Bathroom")
+    assert abs(master_bed_idx - master_bath_idx) == 1  # still immediately adjacent
+    assert ordered_suites[master_bed_idx] == ordered_suites[master_bath_idx]
+
+    # Laundry (wet) still ends up ahead of Storage (dry) among the
+    # leftovers (Bedroom 2 has no bathroom left to pair with, so it's also
+    # a leftover, but not a wet one).
+    laundry_idx = ordered_names.index("Laundry")
+    storage_idx = ordered_names.index("Storage")
+    assert laundry_idx < storage_idx
+
+
 def test_layout_floor_rectangles_tile_the_plot_exactly_with_a_corridor():
     # The extra Hallway rect must still result in EXACT tiling, no gaps/
     # overlaps from floating-point drift in _pack_row()'s sequential packing.
     rects = layout_floor(_private_room_mix(), {"length": 45, "width": 55, "unit": "ft"})
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - _net_area(45, 55)) < 1e-6
+    assert abs(total_area - _footprint_area(rects)) < 1e-6
 
 
 def test_layout_floor_public_zone_stays_in_the_front_low_y_band():
@@ -661,7 +806,7 @@ def test_layout_floor_every_facing_tiles_the_plot_exactly():
     for facing in ("north", "south", "east", "west"):
         rects = layout_floor(_facing_rooms(), dimensions, facing=facing)
         total_area = sum(_area(r) for r in rects)
-        assert abs(total_area - _net_area(37, 53)) < 1e-6, f"facing={facing} failed to tile exactly"
+        assert abs(total_area - _footprint_area(rects)) < 1e-6, f"facing={facing} failed to tile exactly"
         for r in rects:
             assert r["x"] >= -1e-6 and r["y"] >= -1e-6
             assert r["x"] + r["w"] <= 37 + 1e-6
@@ -723,7 +868,7 @@ def test_layout_floor_garage_carve_out_still_tiles_exactly():
     dimensions = {"length": 48, "width": 40, "unit": "ft"}
     rects = layout_floor(rooms, dimensions, garage_cars=1)
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - _net_area(48, 40)) < 1e-6
+    assert abs(total_area - _footprint_area(rects)) < 1e-6
     for r in rects:
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 48 + 1e-6
@@ -801,7 +946,7 @@ def test_layout_floor_garage_three_region_split_tiles_exactly():
     dimensions = {"length": 60, "width": 50, "unit": "ft"}
     rects = layout_floor(rooms, dimensions, garage_cars=1)
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - _net_area(60, 50)) < 1e-6
+    assert abs(total_area - _footprint_area(rects)) < 1e-6
     for r in rects:
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 60 + 1e-6
@@ -937,7 +1082,7 @@ def test_layout_floor_staircase_tiles_exactly_with_every_facing():
     for facing in ("north", "south", "east", "west"):
         rects = layout_floor(rooms, dimensions, facing=facing)
         total_area = sum(_area(r) for r in rects)
-        assert abs(total_area - _net_area(60, 80)) < 1e-6
+        assert abs(total_area - _footprint_area(rects)) < 1e-6
         for r in rects:
             assert r["x"] >= -1e-6 and r["y"] >= -1e-6
             assert r["x"] + r["w"] <= 60 + 1e-6
@@ -995,7 +1140,7 @@ def test_layout_floor_garage_sparse_room_program_falls_back_cleanly():
     dimensions = {"length": 50, "width": 45, "unit": "ft"}
     rects = layout_floor(rooms, dimensions, garage_cars=1)
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - _net_area(50, 45)) < 1e-6
+    assert abs(total_area - _footprint_area(rects)) < 1e-6
     for r in rects:
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 50 + 1e-6
@@ -1069,7 +1214,7 @@ def test_layout_floor_banded_packing_still_tiles_exactly():
     dimensions = {"length": 90, "width": 70, "unit": "ft"}
     rects = layout_floor(rooms, dimensions)
     total_area = sum(_area(r) for r in rects)
-    assert abs(total_area - _net_area(90, 70)) < 1e-6
+    assert abs(total_area - _footprint_area(rects)) < 1e-6
     for r in rects:
         assert r["x"] >= -1e-6 and r["y"] >= -1e-6
         assert r["x"] + r["w"] <= 90 + 1e-6

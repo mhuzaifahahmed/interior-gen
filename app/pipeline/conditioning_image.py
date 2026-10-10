@@ -55,8 +55,9 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw
 
-from app.pipeline.blueprint_svg import _front_door_opening
-from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, classify_room_category, to_plot_unit
+from app.pipeline.blueprint_svg import _front_door_opening, _largest_part_view
+from app.pipeline.floor_layout import footprint_bbox, room_parts
+from app.pipeline.room_specs import classify_room_category
 
 CANVAS_SIZE = 1024
 # Margin reserved on each side so the plot never touches the canvas edge -
@@ -236,19 +237,26 @@ def plot_to_canvas_box(
 def _draw_plot_boundary(
     draw: ImageDraw.ImageDraw,
     x0: float, y0: float, x1: float, y1: float,
-    length: float, width: float,
     scale_x: float, scale_y: float,
     front_door_edge: dict | None,
-    exterior: float = 0.0,
+    footprint_bbox: tuple[float, float, float, float],
 ) -> None:
-    """Draws the plot's outer boundary as 4 separate line segments instead
-    of one closed rectangle, so a gap can be cut for the front entrance
-    (2026-09-19) when `facing` was given - reuses blueprint_svg.
+    """Draws the HOUSE's own outer wall boundary (NOT necessarily the full
+    plot - see footprint_bbox param below) as 4 separate line segments
+    instead of one closed rectangle, so a gap can be cut for the front
+    entrance (2026-09-19) when `facing` was given - reuses blueprint_svg.
     _front_door_opening() directly, so this edge map, the PNG blueprint,
     and the real DXF export can never disagree about where the entrance
     is. Without this gap the AI Concept Layout model would trace a fully
     closed boundary and never see the entrance at all, regardless of what
-    the deterministic renderers show."""
+    the deterministic renderers show.
+
+    `x0,y0,x1,y1` (2026-10, Part 1 "smart canvas sizing"): the HOUSE's own
+    canvas-pixel bbox (not the lot's) - callers pass the canvas position of
+    footprint_bbox's real-unit corners, so this traces the house's real
+    exterior wall even when it's smaller than the plot (a real yard around
+    it is deliberately left untraced here, since the model should only
+    trace actual wall geometry, not an empty lot line)."""
 
     def gap_on(orientation: str, pos: float) -> tuple[float, float] | None:
         if front_door_edge is None:
@@ -257,7 +265,9 @@ def _draw_plot_boundary(
             return None
         return front_door_edge["start"], front_door_edge["end"]
 
-    top_gap = gap_on("horizontal", exterior)
+    fp_x0, fp_y0, fp_x1, fp_y1 = footprint_bbox
+
+    top_gap = gap_on("horizontal", fp_y0)
     if top_gap is None:
         draw.line([(x0, y0), (x1, y0)], fill=255, width=LINE_WIDTH_PX)
     else:
@@ -265,7 +275,7 @@ def _draw_plot_boundary(
         draw.line([(x0, y0), (gx0, y0)], fill=255, width=LINE_WIDTH_PX)
         draw.line([(gx1, y0), (x1, y0)], fill=255, width=LINE_WIDTH_PX)
 
-    bottom_gap = gap_on("horizontal", width - exterior)
+    bottom_gap = gap_on("horizontal", fp_y1)
     if bottom_gap is None:
         draw.line([(x0, y1), (x1, y1)], fill=255, width=LINE_WIDTH_PX)
     else:
@@ -273,7 +283,7 @@ def _draw_plot_boundary(
         draw.line([(x0, y1), (gx0, y1)], fill=255, width=LINE_WIDTH_PX)
         draw.line([(gx1, y1), (x1, y1)], fill=255, width=LINE_WIDTH_PX)
 
-    left_gap = gap_on("vertical", exterior)
+    left_gap = gap_on("vertical", fp_x0)
     if left_gap is None:
         draw.line([(x0, y0), (x0, y1)], fill=255, width=LINE_WIDTH_PX)
     else:
@@ -281,7 +291,7 @@ def _draw_plot_boundary(
         draw.line([(x0, y0), (x0, gy0)], fill=255, width=LINE_WIDTH_PX)
         draw.line([(x0, gy1), (x0, y1)], fill=255, width=LINE_WIDTH_PX)
 
-    right_gap = gap_on("vertical", length - exterior)
+    right_gap = gap_on("vertical", fp_x1)
     if right_gap is None:
         draw.line([(x1, y0), (x1, y1)], fill=255, width=LINE_WIDTH_PX)
     else:
@@ -321,32 +331,49 @@ def render_conditioning_edge_map(
     """
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
-    unit = dimensions.get("unit") or "ft"
-    # 2026-10 net-envelope refinement - see _draw_plot_boundary()'s own use
-    # of this: rooms no longer touch the bare plot boundary at exactly
-    # 0/length/width, they're inset by the real exterior wall thickness.
-    exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
 
     canvas = Image.new("L", (canvas_size, canvas_size), 0)
     draw = ImageDraw.Draw(canvas)
 
-    x0, y0, box_w, box_h = plot_to_canvas_box(length, width, canvas_size)
+    box_x0, box_y0, box_w, box_h = plot_to_canvas_box(length, width, canvas_size)
     scale_x = box_w / length if length else 0.0
     scale_y = box_h / width if width else 0.0
 
     def to_canvas(px: float, py: float) -> tuple[float, float]:
-        return (x0 + px * scale_x, y0 + py * scale_y)
+        return (box_x0 + px * scale_x, box_y0 + py * scale_y)
 
-    x1, y1 = to_canvas(length, width)
-    front_door_edge = _front_door_opening(rects, length, width, facing, unit) if floor_number == 1 else None
-    _draw_plot_boundary(draw, x0, y0, x1, y1, length, width, scale_x, scale_y, front_door_edge, exterior)
+    # Smart canvas sizing (2026-10, Part 1) - the house's own exterior wall
+    # may sit inside the plot (real yard) rather than flush against it; see
+    # footprint_bbox()'s own docstring. The boundary traced below is the
+    # HOUSE's footprint (real wall geometry the model should trace), not
+    # the bare lot line - numerically identical to the old plot-edge logic
+    # whenever the footprint fills the plot.
+    fp = footprint_bbox(rects) or (0.0, 0.0, length, width)
+    x0, y0 = to_canvas(fp[0], fp[1])
+    x1, y1 = to_canvas(fp[2], fp[3])
+    front_door_edge = _front_door_opening(rects, facing, fp) if floor_number == 1 else None
+    _draw_plot_boundary(draw, x0, y0, x1, y1, scale_x, scale_y, front_door_edge, fp)
 
+    # Parts-aware (2026-10, grid-mask engine): trace EVERY part's own wall
+    # outline, not just a room's bbox - a plain-rectangle room has exactly
+    # one part (its own bbox), so this is byte-identical to before on the
+    # rect engine's output; an L/U room's real wall geometry (the notch
+    # included) must be traced so ControlNet constrains the actual shape,
+    # not an outline that includes empty space the room doesn't occupy.
+    # The furniture hint still draws once per room, on its LARGEST part
+    # only (same "nowhere to draw inside the empty notch" reasoning as
+    # blueprint_svg.py's furniture placement).
     for rect in rects:
-        rx0, ry0 = to_canvas(rect["x"], rect["y"])
-        rx1, ry1 = to_canvas(rect["x"] + rect["w"], rect["y"] + rect["h"])
-        draw.rectangle([rx0, ry0, rx1, ry1], outline=255, width=LINE_WIDTH_PX)
+        for part in room_parts(rect):
+            rx0, ry0 = to_canvas(part["x"], part["y"])
+            rx1, ry1 = to_canvas(part["x"] + part["w"], part["y"] + part["h"])
+            draw.rectangle([rx0, ry0, rx1, ry1], outline=255, width=LINE_WIDTH_PX)
+
+        largest = _largest_part_view(rect)
+        lx0, ly0 = to_canvas(largest["x"], largest["y"])
+        lx1, ly1 = to_canvas(largest["x"] + largest["w"], largest["y"] + largest["h"])
         category = classify_room_category(rect.get("name") or "")
-        _draw_furniture_hint(draw, rx0, ry0, rx1, ry1, category)
+        _draw_furniture_hint(draw, lx0, ly0, lx1, ly1, category)
 
     buffer = BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")

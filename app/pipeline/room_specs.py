@@ -51,8 +51,37 @@ typical US residential room-size surveys (bedroom/living/kitchen/dining/
 bath), and standard masonry wall thickness conventions.
 """
 
+import math
+
 METERS_TO_FEET = 3.280839895
 _SQFT_PER_SQM = METERS_TO_FEET * METERS_TO_FEET  # area conversion factor
+
+# Structural columns (2026-10, Part 3 of the "practical layouts" refinement) -
+# a standard real-world residential maximum CLEAR SPAN before an unsupported
+# floor/ceiling plane needs an intermediate beam or column, grounded in
+# typical light-frame/masonry residential spans (~20ft/6m, a generous but
+# real structural rule of thumb - a genuine engineering span table would vary
+# by material/loading, which this deterministic pipeline has no way to model;
+# this is a single, conservative, always-applicable threshold). Any room
+# whose longer clear dimension exceeds this gets real column marks - see
+# column_fractions_for_span() below.
+MAX_UNSUPPORTED_SPAN_M = 6.1
+
+
+def column_fractions_for_span(w: float, h: float, unit: str) -> list[float]:
+    """Returns fractions (0 < f < 1, evenly spaced) along the room's LONGER
+    axis where a structural column belongs, so no single bay between
+    supports exceeds MAX_UNSUPPORTED_SPAN_M - empty when the room's own
+    longer side already clears that span on its own (the common case; most
+    rooms never get a column mark at all). Columns are spaced EVENLY across
+    the whole span (matching standard structural-grid practice - regularly
+    spaced bays), not just the minimum number crammed toward one end."""
+    max_span = to_plot_unit(MAX_UNSUPPORTED_SPAN_M, unit)
+    span = max(w, h)
+    if max_span <= 0 or span <= max_span:
+        return []
+    bays = math.ceil(span / max_span)
+    return [i / bays for i in range(1, bays)]
 
 
 def to_plot_unit(meters: float, unit: str) -> float:

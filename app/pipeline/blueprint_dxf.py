@@ -46,13 +46,15 @@ from ezdxf.enums import TextEntityAlignment
 from app.pipeline.blueprint_svg import (
     _compute_hallway_adjacent,
     _front_door_opening,
-    _shared_edge,
+    _largest_part_view,
+    _shared_edge_between_rooms,
     _should_suppress_direct_door,
 )
+from app.pipeline.floor_layout import footprint_bbox, room_parts
 from app.pipeline.room_specs import (
-    EXTERIOR_WALL_THICKNESS_M,
     FRONT_DOOR_WIDTH_M,
     classify_room_category,
+    column_fractions_for_span,
     door_width_for_wall,
     to_plot_unit,
 )
@@ -109,13 +111,16 @@ def render_floor_blueprint_dxf(
     door_width = to_plot_unit(FRONT_DOOR_WIDTH_M, unit)
     window_width = to_plot_unit(WINDOW_WIDTH_M, unit)
     window_width_living = to_plot_unit(WINDOW_WIDTH_LIVING_M, unit)
-    # 2026-10 net-envelope refinement - see _draw_exterior_walls_for_room()'s
-    # own docstring for why this real offset is needed.
-    exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
+    # Smart canvas sizing (2026-10, Part 1) - the house's own exterior wall
+    # may sit inside the plot (real yard) rather than flush against it; see
+    # footprint_bbox()'s own docstring. Numerically identical to the old
+    # "exterior inset from 0/length/width" logic whenever the footprint
+    # fills the plot.
+    fp = footprint_bbox(rects) or (0.0, 0.0, length, width)
     # Ground floor only (2026-09-29) - see blueprint_svg.render_floor_
     # blueprint()'s matching gate for why; keeps the PNG and the DXF in
     # agreement about there being no front entrance on upper floors.
-    front_door_edge = _front_door_opening(rects, length, width, facing, unit) if floor_number == 1 else None
+    front_door_edge = _front_door_opening(rects, facing, fp) if floor_number == 1 else None
 
     doc = ezdxf.new(dxfversion="R2010")
     doc.header["$INSUNITS"] = _INSUNITS_BY_UNIT.get(unit, 0)
@@ -126,6 +131,7 @@ def render_floor_blueprint_dxf(
     doc.layers.add("ROOMS", color=8)
     doc.layers.add("TEXT", color=7)
     doc.layers.add("TITLE", color=7)
+    doc.layers.add("COLUMNS", color=1)
 
     msp = doc.modelspace()
 
@@ -140,22 +146,27 @@ def render_floor_blueprint_dxf(
     # edges that actually lie on the plot boundary, so no segment is ever
     # drawn twice.
     facing_normalized = (facing or "").strip().lower()
+    # Parts-aware (2026-10, grid-mask engine): draw exterior walls for
+    # EVERY part of every room, not just a room's own bbox - a plain-
+    # rectangle room has exactly one part (its own bbox), so this is
+    # byte-identical to before on the rect engine's output; an L/U room's
+    # window-arm is often a part other than the largest one, so every part
+    # must be checked for real exterior-boundary contact.
     for rect in rects:
         room_window_width = (
             window_width_living if classify_room_category(rect.get("name") or "") == "living" else window_width
         )
-        _draw_exterior_walls_for_room(
-            msp,
-            rect,
-            length,
-            width,
-            wall_thickness,
-            room_window_width,
-            door_width,
-            front_door_edge,
-            facing_normalized,
-            exterior,
-        )
+        for part in room_parts(rect):
+            _draw_exterior_walls_for_room(
+                msp,
+                part,
+                fp,
+                wall_thickness,
+                room_window_width,
+                door_width,
+                front_door_edge,
+                facing_normalized,
+            )
 
     # Interior walls (with real door gaps where a door isn't suppressed) -
     # one pass per unique adjacent room PAIR (combinations never repeats a
@@ -167,7 +178,7 @@ def render_floor_blueprint_dxf(
     # export never disagree about which doors exist.
     hallway_adjacent = _compute_hallway_adjacent(rects)
     for a, b in combinations(rects, 2):
-        edge = _shared_edge(a, b)
+        edge = _shared_edge_between_rooms(a, b)
         if edge is None:
             continue
         suppress_door = has_hallway and _should_suppress_direct_door(a, b, hallway_adjacent)
@@ -179,8 +190,18 @@ def render_floor_blueprint_dxf(
         )
         _draw_interior_wall(msp, edge, wall_thickness, None if suppress_door else pair_door_width)
 
+    # Parts-aware: labels/columns anchor on a room's LARGEST part (there's
+    # nowhere to draw text in an L/U room's empty notch) - byte-identical
+    # to before for a plain-rectangle room (its only part is its bbox).
     for rect in rects:
-        _draw_room_text(msp, rect, unit)
+        _draw_room_text(msp, _largest_part_view(rect), unit)
+
+    # Structural columns (2026-10, Part 3) - real geometry on their own
+    # layer, mirroring blueprint_svg.py's PNG column marks (same
+    # room_specs.column_fractions_for_span() source, so the two can never
+    # disagree about where a column belongs).
+    for rect in rects:
+        _draw_columns(msp, _largest_part_view(rect), unit)
 
     buffer = io.StringIO()
     doc.write(buffer)
@@ -242,53 +263,53 @@ def _matches_front_door(
 def _draw_exterior_walls_for_room(
     msp,
     rect: dict,
-    length: float,
-    width: float,
+    footprint_bbox: tuple[float, float, float, float],
     wall_thickness: float,
     window_width: float,
     door_width: float | None = None,
     front_door_edge: dict | None = None,
     facing: str = "",
-    exterior: float = 0.0,
 ) -> None:
     x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
-    # 2026-10 net-envelope refinement: rooms no longer touch the bare plot
-    # boundary at exactly 0/length/width - they're inset by the real
-    # exterior wall thickness (see floor_layout.layout_floor_with_
-    # warnings()) - so "is this room's edge the exterior boundary" must
-    # compare against that same real offset (`exterior`, passed in by the
-    # caller - see render_floor_blueprint_dxf()).
+    # Smart canvas sizing (2026-10, Part 1 - replaces the old `length`/
+    # `width`/`exterior` params): "is this room's edge the exterior
+    # boundary" is answered against the HOUSE's own real exterior wall
+    # (footprint_bbox, from floor_layout.footprint_bbox()), not the bare
+    # plot's 0/length/width - a real yard can leave the house's exterior
+    # wall sitting well inside the plot. Numerically identical to the old
+    # logic whenever the footprint fills the plot.
+    fp_x0, fp_y0, fp_x1, fp_y1 = footprint_bbox
 
-    if abs(x - exterior) < _EDGE_TOL:
-        if door_width is not None and _matches_front_door(front_door_edge, "vertical", exterior, y, y + h):
+    if abs(x - fp_x0) < _EDGE_TOL:
+        if door_width is not None and _matches_front_door(front_door_edge, "vertical", fp_x0, y, y + h):
             inward = 1 if facing == "west" else -1
-            _draw_exterior_segment_with_front_door(msp, "vertical", exterior, y, y + h, wall_thickness, door_width, inward)
+            _draw_exterior_segment_with_front_door(msp, "vertical", fp_x0, y, y + h, wall_thickness, door_width, inward)
         else:
-            _draw_exterior_segment(msp, "vertical", exterior, y, y + h, wall_thickness, window_width)
-    if abs((x + w) - (length - exterior)) < _EDGE_TOL:
-        if door_width is not None and _matches_front_door(front_door_edge, "vertical", length - exterior, y, y + h):
+            _draw_exterior_segment(msp, "vertical", fp_x0, y, y + h, wall_thickness, window_width)
+    if abs((x + w) - fp_x1) < _EDGE_TOL:
+        if door_width is not None and _matches_front_door(front_door_edge, "vertical", fp_x1, y, y + h):
             inward = 1 if facing == "west" else -1
             _draw_exterior_segment_with_front_door(
-                msp, "vertical", length - exterior, y, y + h, wall_thickness, door_width, inward
+                msp, "vertical", fp_x1, y, y + h, wall_thickness, door_width, inward
             )
         else:
-            _draw_exterior_segment(msp, "vertical", length - exterior, y, y + h, wall_thickness, window_width)
-    if abs(y - exterior) < _EDGE_TOL:
-        if door_width is not None and _matches_front_door(front_door_edge, "horizontal", exterior, x, x + w):
+            _draw_exterior_segment(msp, "vertical", fp_x1, y, y + h, wall_thickness, window_width)
+    if abs(y - fp_y0) < _EDGE_TOL:
+        if door_width is not None and _matches_front_door(front_door_edge, "horizontal", fp_y0, x, x + w):
             inward = 1 if facing == "north" else -1
             _draw_exterior_segment_with_front_door(
-                msp, "horizontal", exterior, x, x + w, wall_thickness, door_width, inward
+                msp, "horizontal", fp_y0, x, x + w, wall_thickness, door_width, inward
             )
         else:
-            _draw_exterior_segment(msp, "horizontal", exterior, x, x + w, wall_thickness, window_width)
-    if abs((y + h) - (width - exterior)) < _EDGE_TOL:
-        if door_width is not None and _matches_front_door(front_door_edge, "horizontal", width - exterior, x, x + w):
+            _draw_exterior_segment(msp, "horizontal", fp_y0, x, x + w, wall_thickness, window_width)
+    if abs((y + h) - fp_y1) < _EDGE_TOL:
+        if door_width is not None and _matches_front_door(front_door_edge, "horizontal", fp_y1, x, x + w):
             inward = 1 if facing == "north" else -1
             _draw_exterior_segment_with_front_door(
-                msp, "horizontal", width - exterior, x, x + w, wall_thickness, door_width, inward
+                msp, "horizontal", fp_y1, x, x + w, wall_thickness, door_width, inward
             )
         else:
-            _draw_exterior_segment(msp, "horizontal", width - exterior, x, x + w, wall_thickness, window_width)
+            _draw_exterior_segment(msp, "horizontal", fp_y1, x, x + w, wall_thickness, window_width)
 
 
 def _draw_exterior_segment(
@@ -403,6 +424,34 @@ def _draw_window_symbol(msp, orientation: str, pos: float, gap_start: float, gap
         msp.add_line((pos, gap_start), (pos, gap_end), dxfattribs={"layer": "WINDOWS"})
     else:
         msp.add_line((gap_start, pos), (gap_end, pos), dxfattribs={"layer": "WINDOWS"})
+
+
+# Structural column half-size, in the plot's own unit (2026-10, Part 3) -
+# a small, real square footprint (not a point) so it's a genuine, selectable
+# CAD entity, not just a label.
+_COLUMN_HALF_SIZE_M = 0.15
+
+
+def _draw_columns(msp, rect: dict, unit: str) -> None:
+    """Draws a small, closed square LWPOLYLINE on the COLUMNS layer at each
+    structural-column position room_specs.column_fractions_for_span()
+    returns for this room - empty (nothing drawn) for the common case where
+    the room's own longer side is already within the real max span."""
+    fractions = column_fractions_for_span(rect["w"], rect["h"], unit)
+    if not fractions:
+        return
+    half = to_plot_unit(_COLUMN_HALF_SIZE_M, unit)
+    x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
+    for f in fractions:
+        if w >= h:
+            cx, cy = x + w * f, y + h / 2
+        else:
+            cx, cy = x + w / 2, y + h * f
+        points = [
+            (cx - half, cy - half), (cx + half, cy - half),
+            (cx + half, cy + half), (cx - half, cy + half),
+        ]
+        msp.add_lwpolyline(points, close=True, dxfattribs={"layer": "COLUMNS"})
 
 
 def _draw_room_text(msp, rect: dict, unit: str) -> None:

@@ -34,12 +34,14 @@ is **polish-porting, not a retheme**. Specifically:
    equivalent).
 
 4. **Results hierarchy** - make the photoreal `render` the hero card
-   (spanning the grid width), with a secondary row underneath for
-   `render_from_layout` ("3D Layout Render"), the original plot photo, and
-   the per-floor blueprint cards. Today (as of the two-render backend work)
-   all of these render as uniform same-size `.result-card`s in
-   `renderHouseResults()` (`static/app.js`) with no visual hierarchy telling
-   the hero apart from the supporting images.
+   (spanning the grid width), with a secondary row underneath for the
+   original plot photo and the per-floor blueprint/Concept Layout cards.
+   (Note: the doc originally also listed a second "3D Layout Render" card
+   here - `render_from_layout` - but that was removed from the codebase
+   entirely in v4, see CLAUDE.md's "Build a House feature" section. Only
+   one render exists today.) Today all of these render as uniform same-size
+   `.result-card`s in `renderHouseResults()` (`static/app.js`) with no
+   visual hierarchy telling the hero apart from the supporting images.
 
 ## Why deferred
 

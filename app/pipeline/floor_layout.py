@@ -268,9 +268,190 @@ from app.pipeline.room_specs import (
     min_area_for_room,
     min_depth_for_room,
     min_width_for_room,
+    preferred_area_for_room,
     staircase_dimensions,
     to_plot_unit,
 )
+
+# Smart canvas sizing (2026-10, "practical layouts" refinement, Part 1) -
+# real, live-reported bug: the engine always distributed room weights across
+# 100% of whatever net envelope it was given, so a large plot (e.g. 150x150ft
+# for an 8-room house) forced every room to grow huge/elongated regardless of
+# room_specs.py's own per-room ABSOLUTE_MAX_AREA_SQM caps - once every capped
+# room hit its ceiling, the leftover excess still had to go SOMEWHERE
+# (_clamp_to_max_and_redistribute()'s own tier-2 fallback: "let a flexible
+# room modestly exceed its cap"), so it got dumped back onto already-capped
+# rooms anyway, reproducing the exact "9,451 sq ft Lounge" class of bug a
+# cap-only fix can never solve. The real fix is a realistic house FOOTPRINT,
+# sized from what the room program actually needs, with genuine yard left
+# over on an oversized plot - see _footprint_dimensions()/_anchor_offsets()
+# below, wired into layout_floor_with_warnings().
+#
+# A real, approximate overhead (not feasibility.py's own precise formula,
+# duplicated here deliberately rather than imported - importing feasibility.py
+# here would create a cycle, since feasibility.py already imports THIS module
+# via a local, function-scoped import to avoid that same cycle in the other
+# direction) covering interior partition walls, circulation clearance, and a
+# rough hallway allowance all at once - this is a TARGET to aim the footprint
+# at, not a hard guarantee; the real layout engine still tiles exactly
+# whatever footprint it's handed using its own precise per-room reservations,
+# so an imprecise target here only ever affects how MUCH yard ends up
+# unused, never correctness.
+FOOTPRINT_OVERHEAD_FRACTION = 0.35
+
+
+def _footprint_target_area(rooms: list[dict], unit: str, garage_cars: int | None) -> float:
+    """The real, comfortable footprint area (in the plot's unit, squared)
+    this room program actually wants - the sum of each room's own PREFERRED
+    area (not bare minimum, since a footprint sized at the bare minimum would
+    leave every room pinned at its smallest usable size with zero margin),
+    plus FOOTPRINT_OVERHEAD_FRACTION for walls/circulation/hallway. Returns
+    0.0 for an empty room list (the caller's no-shrink fallback handles
+    that)."""
+    if not rooms:
+        return 0.0
+    total_preferred = sum(
+        preferred_area_for_room(str(r.get("name") or ""), unit, garage_cars) for r in rooms
+    )
+    return total_preferred * (1 + FOOTPRINT_OVERHEAD_FRACTION)
+
+
+# A pure area TARGET (sum of preferred areas + a flat overhead) leaves no
+# real guarantee the private zone's own packing (suites, a hallway, banded
+# rooms) can actually settle into a clean shape at that exact size - real
+# testing confirmed this: a 3-suite program's bathrooms came out genuinely
+# too narrow when the footprint was sized at the bare target alone, even
+# though the SAME room program tiled perfectly cleanly at its full,
+# unshrunk net envelope. Mirrors feasibility.py's own
+# _GEOMETRY_CHECK_MARGINS/_geometrically_placeable_area() pattern exactly -
+# search upward through progressively larger multiples of the target
+# (smallest first) until one produces a real, clean candidate layout (zero
+# HARD layout_quality violations), rather than trusting the bare area sum.
+# Capped by the net envelope itself at every step - this can shrink a plot,
+# never grow one past what's actually there.
+_FOOTPRINT_GEOMETRY_MARGINS = (1.0, 1.5, 2.0, 2.5, 3.5, 5.0, 7.0)
+
+
+def _footprint_dimensions(
+    rooms: list[dict], net_length: float, net_width: float, unit: str, garage_cars: int | None, facing: str = "north"
+) -> tuple[float, float]:
+    """Returns (footprint_length, footprint_width) - the real house footprint
+    to actually lay out, given the full net envelope (net_length, net_width)
+    available. Shrinks the envelope proportionally (preserving its aspect
+    ratio) down to the smallest size (see _FOOTPRINT_GEOMETRY_MARGINS above)
+    that both (a) comfortably covers the room program's own target area (see
+    _footprint_target_area()) and (b) genuinely produces a clean, real
+    candidate layout - ONLY when the plot is genuinely larger than needed.
+    This is a STRICT no-op (returns net_length/net_width unchanged) whenever
+    the plot is already right-sized/smaller, OR when no smaller size can be
+    verified clean - so this feature can never make a room program that used
+    to tile cleanly at its full net envelope come out worse."""
+    plot_area = net_length * net_width
+    if plot_area <= 0:
+        return net_length, net_width
+    target_area = _footprint_target_area(rooms, unit, garage_cars)
+    if target_area <= 0 or target_area >= plot_area:
+        return net_length, net_width
+
+    aspect = net_length / net_width if net_width else 1.0
+    for margin in _FOOTPRINT_GEOMETRY_MARGINS:
+        candidate_area = min(target_area * margin, plot_area)
+        candidate_width = (candidate_area / aspect) ** 0.5 if aspect else 0.0
+        candidate_length = candidate_area / candidate_width if candidate_width else 0.0
+        if candidate_length <= 0 or candidate_width <= 0:
+            continue
+        if candidate_length >= net_length - 1e-6 and candidate_width >= net_width - 1e-6:
+            return net_length, net_width  # already at/above the full envelope
+        # Mirror the SAME length/width swap the real caller applies for
+        # east/west facings (see layout_floor_with_warnings()) - without
+        # this, the probe verifies the wrong orientation's geometry (front-
+        # to-back zoning always cuts along the dict's own "width" axis
+        # internally, so swapping length<->width is a REAL geometry change,
+        # not just a relabeling). A real bug, caught via visual inspection:
+        # an east/west-facing room program could pass this check clean yet
+        # still produce a hard violation once the real, swapped dims ran.
+        if facing in ("east", "west"):
+            candidate_dims = {"length": candidate_width, "width": candidate_length, "unit": unit}
+        else:
+            candidate_dims = {"length": candidate_length, "width": candidate_width, "unit": unit}
+        # row_count=2 (the "no bowling-alley rooms" banded-packing knob) -
+        # the more generous, suite-aware option, since a suite-heavy room
+        # program is exactly the case most likely to need real margin here;
+        # the real best-of-N loop in layout_floor_with_warnings() still runs
+        # on whatever footprint this returns and may pick a different
+        # row_count/front-fraction than this probe used.
+        probe = _layout_floor_core(rooms, candidate_dims, garage_cars, private_row_count=2)
+        if not score_floor_layout(probe, candidate_dims, garage_cars).has_hard_violations:
+            return candidate_length, candidate_width
+
+    return net_length, net_width
+
+
+def _anchor_offsets(
+    facing: str, footprint_length: float, footprint_width: float, net_length: float, net_width: float
+) -> tuple[float, float]:
+    """Returns (dx, dy) - the offset to shift a footprint-sized layout (which
+    tiles [0, footprint_length] x [0, footprint_width] after the facing
+    transpose, front always at the low value of whichever axis is the facing
+    axis - see layout_floor()'s own docstring) so it sits correctly within
+    the full [0, net_length] x [0, net_width] envelope: FRONT-FLUSH along the
+    facing axis (offset 0 - any front setback is already handled upstream by
+    generate_house.py shrinking the plot it hands to this function BEFORE a
+    front yard is ever reserved, so "flush" here already respects that), and
+    CENTERED along the cross axis (any leftover width becomes real,
+    symmetric side yard). Returns (0.0, 0.0) whenever the footprint already
+    fills the envelope (the normal, no-yard case) - a true no-op."""
+    if facing in ("north", "south"):
+        return (net_length - footprint_length) / 2, 0.0
+    return 0.0, (net_width - footprint_width) / 2
+
+
+def footprint_bbox(rects: list[dict]) -> tuple[float, float, float, float] | None:
+    """Returns (min_x, min_y, max_x, max_y) - the real bounding box of a
+    floor's already-anchored rects, i.e. where the house's OWN exterior wall
+    actually sits within the full plot. Every renderer (blueprint_svg.py,
+    blueprint_dxf.py, conditioning_image.py) uses this instead of a
+    hardcoded "0/length/width minus wall thickness" assumption, so "is this
+    edge on the exterior boundary" is always answered against where the
+    rooms genuinely are, not where the bare plot happens to be - this is
+    what makes the real yard (when the footprint is smaller than the plot,
+    see _footprint_dimensions() above) render as open ground instead of a
+    solid black wall block, with ZERO behavior change in the normal case
+    (when the footprint fills the plot, this bbox is numerically identical
+    to the old hardcoded exterior-inset values, since that's exactly where
+    the rects' own edges already land).
+
+    Returns None for an empty/degenerate rect list - callers fall back to
+    the full plot dimensions in that case (matches the pre-footprint
+    behavior exactly)."""
+    valid = [r for r in rects if r.get("w", 0) > 0 and r.get("h", 0) > 0]
+    if not valid:
+        return None
+    min_x = min(r["x"] for r in valid)
+    min_y = min(r["y"] for r in valid)
+    max_x = max(r["x"] + r["w"] for r in valid)
+    max_y = max(r["y"] + r["h"] for r in valid)
+    return min_x, min_y, max_x, max_y
+
+
+def room_parts(rect: dict) -> list[dict]:
+    """The L/U-shaped-room bridge (2026-10, grid-mask engine): a room is now
+    a UNION OF RECTANGULAR PARTS, not always a single rectangle. This is the
+    one shared helper every renderer/scorer reads instead of a room's own
+    top-level x/y/w/h directly, so both the original rectangular engine
+    (floor_layout.py's own _layout_floor_core - every room it produces is a
+    single part, [{"x","y","w","h"}] built from the room's own bbox fields)
+    and the new grid-mask engine (floor_layout_mask.py - an L room is 2
+    parts, a U is 3) share one code path with zero special-casing per
+    engine. A room's top-level "x"/"y"/"w"/"h" always stays the real
+    bounding box of ALL its parts (see footprint_bbox() above, and
+    floor_layout_mask.py's own part-decomposition step) - that invariant is
+    what lets footprint_bbox()/the overall plot-dimension lines keep working
+    unchanged on either engine's output without reading `parts` at all."""
+    parts = rect.get("parts")
+    if parts:
+        return parts
+    return [{"x": rect["x"], "y": rect["y"], "w": rect["w"], "h": rect["h"]}]
 
 # Interior-wall area allowance (2026-10, Part 0 of the Measurements Model
 # refinement) - a room's guaranteed minimum area (room_specs.py's NET,
@@ -548,10 +729,17 @@ def layout_floor_with_warnings(
     net_length = max(real_length - 2 * exterior, 1.0)
     net_width = max(real_width - 2 * exterior, 1.0)
 
+    # Smart canvas sizing (2026-10, Part 1 - see FOOTPRINT_OVERHEAD_FRACTION's
+    # own docstring above) - the core engine only ever lays out a realistic
+    # house FOOTPRINT, not necessarily the full net envelope. A no-op
+    # (footprint_length == net_length, footprint_width == net_width) on any
+    # plot that isn't genuinely oversized for its room program.
+    footprint_length, footprint_width = _footprint_dimensions(rooms, net_length, net_width, unit, garage_cars, facing)
+
     if facing in ("east", "west"):
-        core_dimensions = {"length": net_width, "width": net_length, "unit": unit}
+        core_dimensions = {"length": footprint_width, "width": footprint_length, "unit": unit}
     else:
-        core_dimensions = {"length": net_length, "width": net_width, "unit": unit}
+        core_dimensions = {"length": footprint_length, "width": footprint_width, "unit": unit}
 
     best_rects: list[dict] | None = None
     best_warnings: list = []
@@ -572,10 +760,18 @@ def layout_floor_with_warnings(
 
     if facing in ("east", "west"):
         # Transpose back to real coordinates - the core algorithm's own x
-        # (spanning [0, net_width]) becomes the real y, and its own y
-        # (spanning [0, net_length], front at its low end) becomes the
+        # (spanning [0, footprint_width]) becomes the real y, and its own y
+        # (spanning [0, footprint_length], front at its low end) becomes the
         # real x, so front now sits at low real-x (west).
         rects = [{**r, "x": r["y"], "y": r["x"], "w": r["h"], "h": r["w"]} for r in rects]
+
+    # Anchor the (possibly smaller-than-the-envelope) footprint within the
+    # real net envelope - front-flush, cross-axis centered (see
+    # _anchor_offsets()'s own docstring). (0.0, 0.0) in the normal,
+    # non-oversized-plot case, so this is a true no-op there.
+    anchor_dx, anchor_dy = _anchor_offsets(facing, footprint_length, footprint_width, net_length, net_width)
+    if anchor_dx or anchor_dy:
+        rects = [{**r, "x": r["x"] + anchor_dx, "y": r["y"] + anchor_dy} for r in rects]
 
     # Shift out of the net-envelope-local coordinate space into the real,
     # gross plot's coordinate space - every rect now sits inset by the
@@ -1141,6 +1337,17 @@ def _is_master(name: str) -> bool:
     return "master" in (name or "").lower()
 
 
+# Wet-wall grouping (2026-10, Part 2 of the "practical layouts" refinement) -
+# real plumbing fixtures (a bathroom, laundry/utility room, pantry, or
+# secondary "dirty" kitchen) ideally share a wall with each other to keep
+# supply/drain runs short, a standard real-world plumbing convention. Kitchen
+# itself (the one PUBLIC-zone wet room) is already placed last within the
+# public zone by _PUBLIC_ORDER_RANKS specifically so it borders the private
+# zone's own hallway transition - this constant only concerns the PRIVATE
+# zone's own standalone (non-suite) wet rooms, see _arrange_suites() below.
+_WET_CATEGORIES = ("bathroom", "laundry", "pantry", "dirty_kitchen")
+
+
 def _arrange_suites(
     names: list[str], weights: list[float]
 ) -> tuple[list[str], list[float], list[int | None]]:
@@ -1159,7 +1366,16 @@ def _arrange_suites(
          order, until bathrooms run out.
       3. Leftover bathrooms (a common/shared bath with no bedroom of its
          own) and every non-bed/bath room (storage, closet, utility...) stay
-         standalone (suite id None) and go at the END of the row.
+         standalone (suite id None) and go at the END of the row - WET
+         rooms among these leftovers (a common bathroom, laundry/utility,
+         pantry, secondary kitchen - see _WET_CATEGORIES) are stably sorted
+         to the FRONT of that leftover group specifically (2026-10, Part 2
+         "wet-wall grouping" - real plumbing fixtures cluster together,
+         ending up closest to the public zone's own kitchen/hallway
+         transition, rather than scattered among purely dry leftovers like
+         storage/closet). Never disturbs the bed+bath suite pairs above -
+         only the ORDER of what was already going to be a standalone
+         leftover room changes, never which rooms get a suite tag.
 
     The returned order interleaves each bedroom immediately followed by its
     paired bathroom ([MasterBed, MasterBath, Bed2, Bath2, Bed3, ...]) so
@@ -1197,9 +1413,18 @@ def _arrange_suites(
             ordered.append((bi, None))  # bedroom with no bath left - opens onto the hallway
 
     placed = {i for i, _ in ordered}
-    for i in range(len(names)):
-        if i not in placed:  # leftover baths (common) + storage/closet/utility/unrecognized rooms
-            ordered.append((i, None))
+    # Wet-wall grouping (2026-10, Part 2) - a STABLE sort of the leftovers
+    # (same "reorder, never change relative order within a group" technique
+    # the public/private zone split already established) puts wet-category
+    # leftovers (a common bathroom, laundry, pantry...) ahead of purely dry
+    # ones (storage, closet...), so real plumbing fixtures cluster together
+    # instead of scattering wherever the input happened to list them.
+    leftovers = sorted(
+        (i for i in range(len(names)) if i not in placed),
+        key=lambda i: 0 if classify_room_category(names[i]) in _WET_CATEGORIES else 1,
+    )
+    for i in leftovers:
+        ordered.append((i, None))
 
     ordered_names = [names[i] for i, _ in ordered]
     ordered_weights = [weights[i] for i, _ in ordered]

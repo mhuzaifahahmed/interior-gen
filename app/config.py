@@ -295,6 +295,28 @@ class Settings(BaseSettings):
     # only in your own local .env.
     autocad_generation_enabled: bool = True
 
+    # Which deterministic room-layout ALGORITHM run_house_pipeline()/
+    # feasibility.py's geometry probe/kaggle_autocad.py's conditioning image
+    # use (app/pipeline/layout_engine.py is the single dispatcher all three
+    # now import from, routing by this value) - "rect" is the original
+    # rectangle slice-and-dice engine (app/pipeline/floor_layout.py), "mask"
+    # is the new grid-mask region-growing engine (floor_layout_mask.py) that
+    # produces real L/U-shaped rooms, a real circulation loop, and
+    # guaranteed window walls for every bedroom/living room (see
+    # future-plans or the plan file for the full "grid-mask" rationale -
+    # built in response to real structural limits of the rectangle engine:
+    # a dense floor's "Band 2" private rooms have no exterior wall at all,
+    # so some bedroom was always going to end up window-less no matter how
+    # the scorer's soft egress penalty was tuned). Default "rect" - this is
+    # a feature flag, not a replacement: the live site keeps producing
+    # today's proven rectangular output until the mask engine is visually
+    # verified across the full test matrix and this default is deliberately
+    # flipped in its own commit. Deliberately NOT added to .env.example
+    # (same precedent as house_render_enabled/autocad_generation_enabled
+    # above) - set HOUSE_LAYOUT_ENGINE=mask only in a local, gitignored .env
+    # while developing/testing the new engine.
+    house_layout_engine: str = "rect"
+
     # Set ONLY when the frontend is hosted on a different domain from this
     # backend (e.g. static/ deployed to Vercel, this FastAPI app deployed to
     # Render) - blank (the default) means same-origin, which is how local dev

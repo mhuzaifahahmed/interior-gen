@@ -3,7 +3,7 @@ import io
 import ezdxf
 
 from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
-from app.pipeline.floor_layout import layout_floor
+from app.pipeline.floor_layout import footprint_bbox, layout_floor
 from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, to_plot_unit
 
 
@@ -64,20 +64,22 @@ def test_render_floor_blueprint_dxf_exterior_walls_cover_the_full_boundary():
     wall_polylines = [p for p in msp.query("LWPOLYLINE") if p.dxf.layer == "WALLS"]
 
     # At least one wall segment must touch each of the 4 real exterior
-    # boundary lines (x=exterior, x=length-exterior, y=exterior,
-    # y=width-exterior - 2026-10 net-envelope refinement, see _ext()).
-    ext = _ext()
+    # boundary lines of the HOUSE's own footprint (2026-10, Part 1 "smart
+    # canvas sizing" - a sparse room program on an oversized plot no longer
+    # necessarily fills the bare plot bounds; footprint_bbox() is the real,
+    # authoritative boundary the DXF's own walls are drawn against).
+    fp_x0, fp_y0, fp_x1, fp_y1 = footprint_bbox(rects)
     touches_left = touches_right = touches_top = touches_bottom = False
     for pl in wall_polylines:
         xs = [round(p[0], 3) for p in pl.get_points()]
         ys = [round(p[1], 3) for p in pl.get_points()]
-        if round(ext, 3) in xs:
+        if round(fp_x0, 3) in xs:
             touches_left = True
-        if round(40.0 - ext, 3) in xs:
+        if round(fp_x1, 3) in xs:
             touches_right = True
-        if round(ext, 3) in ys:
+        if round(fp_y0, 3) in ys:
             touches_top = True
-        if round(60.0 - ext, 3) in ys:
+        if round(fp_y1, 3) in ys:
             touches_bottom = True
 
     assert touches_left and touches_right and touches_top and touches_bottom
@@ -319,3 +321,31 @@ def test_render_floor_blueprint_dxf_bathroom_door_is_narrower_than_living_door()
     assert expected_bathroom_width in radii
     assert expected_living_width in radii
     assert min(radii) < max(radii)
+
+
+# ---- Structural columns (2026-10, Part 3 "practical layouts" refinement) ----
+
+
+def test_render_floor_blueprint_dxf_adds_columns_for_a_wide_open_room():
+    dimensions = {"length": 60, "width": 18, "unit": "ft"}
+    rects = [
+        {"name": "Living Room", "x": 0, "y": 0, "w": 45, "h": 18},
+        {"name": "Bedroom", "x": 45, "y": 0, "w": 15, "h": 18},
+    ]
+    doc = _parse(render_floor_blueprint_dxf(1, rects, dimensions))
+    columns = [p for p in doc.modelspace().query("LWPOLYLINE") if p.dxf.layer == "COLUMNS"]
+    assert len(columns) == 2  # Living Room (45ft, 3 bays) needs 2; Bedroom (15ft) needs none
+
+    audit_result = doc.audit()
+    assert len(audit_result.errors) == 0
+
+
+def test_render_floor_blueprint_dxf_no_columns_for_rooms_within_the_span():
+    dimensions = {"length": 30, "width": 18, "unit": "ft"}
+    rects = [
+        {"name": "Living Room", "x": 0, "y": 0, "w": 15, "h": 18},
+        {"name": "Bedroom", "x": 15, "y": 0, "w": 15, "h": 18},
+    ]
+    doc = _parse(render_floor_blueprint_dxf(1, rects, dimensions))
+    columns = [p for p in doc.modelspace().query("LWPOLYLINE") if p.dxf.layer == "COLUMNS"]
+    assert len(columns) == 0

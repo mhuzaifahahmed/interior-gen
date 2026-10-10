@@ -1,7 +1,11 @@
+import pytest
+
 from app.pipeline.room_specs import (
     EXTERIOR_WALL_THICKNESS_M,
     INTERIOR_WALL_THICKNESS_M,
+    MAX_UNSUPPORTED_SPAN_M,
     classify_room_category,
+    column_fractions_for_span,
     door_width_for_wall,
     garage_dimensions,
     garage_min_area_sqm,
@@ -205,5 +209,48 @@ def test_family_leisure_category_has_a_tighter_cap_than_living():
     # caps lower than "living" - it's a secondary leisure space, not the
     # dominant social room.
     assert max_area_for_room("Media Room", "ft") < max_area_for_room("Living Room", "ft")
+
+
+# ---- Structural columns (2026-10, Part 3 "practical layouts" refinement) ----
+
+
+def test_column_fractions_for_span_empty_below_the_real_max_span():
+    max_span_ft = to_plot_unit(MAX_UNSUPPORTED_SPAN_M, "ft")
+    assert column_fractions_for_span(max_span_ft - 1, 10, "ft") == []
+    assert column_fractions_for_span(max_span_ft, 10, "ft") == []  # exactly at the bound - still fine
+
+
+def test_column_fractions_for_span_adds_one_column_just_above_the_bound():
+    max_span_ft = to_plot_unit(MAX_UNSUPPORTED_SPAN_M, "ft")
+    fractions = column_fractions_for_span(max_span_ft + 5, 10, "ft")
+    assert fractions == [0.5]  # one bay split in half clears the bound again
+
+
+def test_column_fractions_for_span_adds_more_columns_for_a_longer_span():
+    max_span_ft = to_plot_unit(MAX_UNSUPPORTED_SPAN_M, "ft")
+    fractions = column_fractions_for_span(max_span_ft * 3.5, 10, "ft")
+    assert len(fractions) == 3  # needs 4 bays -> 3 interior columns
+    # Evenly spaced, not clustered toward one end.
+    assert fractions == sorted(fractions)
+    assert fractions[0] == pytest.approx(0.25)
+    assert fractions[1] == pytest.approx(0.5)
+    assert fractions[2] == pytest.approx(0.75)
+
+
+def test_column_fractions_for_span_uses_the_room_s_longer_axis():
+    max_span_ft = to_plot_unit(MAX_UNSUPPORTED_SPAN_M, "ft")
+    # Same room, transposed - the long axis is whichever of w/h is bigger,
+    # not a fixed "w always" assumption.
+    assert column_fractions_for_span(max_span_ft + 5, 10, "ft") == column_fractions_for_span(10, max_span_ft + 5, "ft")
+
+
+def test_column_fractions_for_span_real_world_example_clears_bound():
+    # A real 40ft living room (just under 2x the ~20ft/6.1m span) gets one
+    # column splitting it into 2 bays of 20ft each, clearing the bound.
+    fractions = column_fractions_for_span(40, 15, "ft")
+    assert len(fractions) == 1
+    max_span_ft = to_plot_unit(MAX_UNSUPPORTED_SPAN_M, "ft")
+    bay_len = 40 / (len(fractions) + 1)
+    assert bay_len <= max_span_ft + 1e-6
 
 

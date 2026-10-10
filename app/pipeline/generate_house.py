@@ -10,7 +10,7 @@ from app.models import HouseProject
 from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
 from app.pipeline.blueprint_svg import render_floor_blueprint
 from app.pipeline.feasibility import check_feasibility
-from app.pipeline.floor_layout import layout_floor_with_warnings
+from app.pipeline.layout_engine import layout_floor_with_warnings
 from app.pipeline.house_prompts import (
     build_house_elevation_prompt,
     build_house_prompt,

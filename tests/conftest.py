@@ -106,3 +106,17 @@ def _default_autocad_generation_enabled(monkeypatch):
     the one test that specifically exercises autocad_generation_enabled=False
     sets it back itself within its own body, which still wins."""
     monkeypatch.setattr(settings, "autocad_generation_enabled", True)
+
+
+@pytest.fixture(autouse=True)
+def _default_house_layout_engine(monkeypatch):
+    """Same exact shape/purpose as _default_house_render_enabled above, for
+    settings.house_layout_engine (app/config.py) - the "rect"/"mask" layout-
+    engine rollout flag, a dev-only local .env toggle not meant to affect
+    the test suite's own behavior. Forces the functional/live default
+    ("rect") for every test regardless of the real .env; tests that
+    specifically exercise the mask engine (tests/test_floor_layout_mask.py,
+    tests/test_layout_engine.py) set it explicitly within their own body,
+    which still wins (same per-test monkeypatch instance, last write
+    applies)."""
+    monkeypatch.setattr(settings, "house_layout_engine", "rect")

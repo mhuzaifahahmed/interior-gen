@@ -34,15 +34,55 @@ from app.pipeline.room_specs import (
     preferred_area_for_room,
 )
 
+# Local re-implementation of floor_layout.room_parts() (not imported -
+# floor_layout.py already imports score_floor_layout FROM this module, so
+# importing floor_layout.py back here would create a circular import, same
+# reason _touches_exterior()/_shared_edge_length() below are local
+# re-implementations rather than importing blueprint_svg.py's versions).
+# A room's own top-level x/y/w/h always stays the true bounding box of its
+# parts (floor_layout_mask.py's own invariant) - this is the ONE place
+# every area/aspect/exterior-touch check below reads a room's REAL
+# occupied cells from, instead of its bbox, so an L/U room's notch is
+# never mistaken for floor area it doesn't actually have.
+def _room_parts(rect: dict) -> list[dict]:
+    parts = rect.get("parts")
+    if parts:
+        return parts
+    return [{"x": rect["x"], "y": rect["y"], "w": rect["w"], "h": rect["h"]}]
+
 # A room whose longer side is more than this many times its shorter side
 # reads as a visibly unusable sliver (e.g. the real, reported 20.9x88.1ft
 # bedroom) - a soft penalty, not a hard violation, since a somewhat elongated
 # room can still be functional.
 SLIVER_ASPECT_RATIO = 2.8
 
+# "Realistic packing rules" (2026-10, Part 2 of the "practical layouts"
+# refinement) - a real-world room proportion target of ~2:1, grounded in
+# standard residential room-proportion conventions, SOFTER than and BELOW
+# SLIVER_ASPECT_RATIO - a room between this and the sliver threshold is
+# noticeably elongated (not yet a true sliver) and scores a smaller penalty,
+# gently steering the best-of-N candidate loop toward squarer rooms WITHOUT
+# ever hard-rejecting a tight-but-valid layout (a hard 2:1 cap would mark
+# many genuinely fine, slightly-elongated programs infeasible - deliberately
+# avoided, see this module's own "best-of-SCORED-CANDIDATES, not a
+# guarantee" doctrine).
+PROPORTION_TARGET_RATIO = 2.0
+ELONGATED_PENALTY = 8.0
+
 # Categories whose shape is INTENTIONALLY linear/elongated by design - never
-# penalized for a high aspect ratio.
+# penalized for a high aspect ratio (sliver OR the softer elongated tier).
 _LINEAR_CATEGORIES = ("hallway", "staircase")
+
+# "Realistic packing rules" (2026-10, Part 2) - a bedroom/living room with NO
+# edge on the floor's own exterior boundary has no possible window wall at
+# all (a real egress/natural-light requirement, not just a style preference)
+# - soft, since the best-of-N loop should prefer a windowed layout over a
+# fully-interior one, but a tight program may have no alternative. Only
+# bedroom/living are checked - every other category (bathroom, closet,
+# hallway, garage...) has no real egress expectation in this codebase's own
+# existing room taxonomy.
+EGRESS_PENALTY = 15.0
+_EGRESS_CATEGORIES = ("bedroom", "living")
 
 # The smallest door that can still be called a real door (half the standard
 # "closet/powder" base) - a wall too short for even this is a genuine hard
@@ -53,6 +93,7 @@ _MIN_PRACTICAL_DOOR_M = 0.6
 HARD_VIOLATION_PENALTY = 1000.0
 SLIVER_PENALTY = 25.0
 IMBALANCE_PENALTY = 10.0
+_EDGE_TOL = 1e-4
 
 # Real-world area tolerance for float/rounding noise in the min-area
 # guarantee pass (floor_layout.py's own weighted redistribution can leave a
@@ -104,8 +145,22 @@ def score_floor_layout(
             violations.append(Violation(name, "degenerate", True, "zero or negative dimension"))
             continue
 
-        governing_width = min(w, h)
-        area = w * h
+        # Parts-aware (2026-10, grid-mask engine): a room is a UNION OF
+        # RECTANGULAR PARTS now (see _room_parts() above), not always a
+        # single rectangle - a plain-rectangle room's single part IS its
+        # bbox, so every check below is numerically identical to before on
+        # the rect engine's own output (byte-compatible), and only differs
+        # for an L/U room, where the bbox would otherwise overstate its
+        # real area and exaggerate its aspect ratio (an L's bbox always
+        # includes its own empty notch).
+        parts = _room_parts(rect)
+        valid_parts = [p for p in parts if p.get("w", 0) > 0 and p.get("h", 0) > 0]
+        if not valid_parts:
+            violations.append(Violation(name, "degenerate", True, "zero or negative dimension"))
+            continue
+
+        area = sum(p["w"] * p["h"] for p in valid_parts)
+        governing_width = min(min(p["w"], p["h"]) for p in valid_parts)
 
         # HARD: too small in area for this room type at all.
         min_area = min_area_for_room(name, unit, garage_cars)
@@ -143,7 +198,13 @@ def score_floor_layout(
         if category == "foyer":
             min_w = min_width_for_room(name, unit)
             min_depth = min_depth_for_room(name, unit)
-            narrow_dim, long_dim = governing_width, max(w, h)
+            # Judged on the LARGEST part (a multi-part foyer is unlikely,
+            # but if one occurs, what matters is whether it has ONE real
+            # entry-shaped nook, not its overstated bbox) - same "largest
+            # part" convention blueprint_svg.py's furniture/label/column
+            # placement uses for multi-part rooms.
+            largest = max(valid_parts, key=lambda p: p["w"] * p["h"])
+            narrow_dim, long_dim = min(largest["w"], largest["h"]), max(largest["w"], largest["h"])
             if narrow_dim < min_w * _AREA_TOLERANCE or long_dim < min_depth * _AREA_TOLERANCE:
                 violations.append(
                     Violation(
@@ -152,12 +213,37 @@ def score_floor_layout(
                     )
                 )
 
-        # SOFT: a visible sliver (aspect ratio), excluding categories meant
-        # to be linear (hallway/staircase).
+        # SOFT: a visible sliver (aspect ratio) OR merely elongated past the
+        # real ~2:1 proportion target (2026-10, Part 2 "realistic packing
+        # rules") - excluding categories meant to be linear (hallway/
+        # staircase). The elongated tier is a strictly smaller penalty than
+        # a true sliver, so the candidate loop prefers squarer rooms without
+        # ever treating "a bit longer than 2:1" as being as bad as a real
+        # sliver.
         if category not in _LINEAR_CATEGORIES:
-            aspect = max(w, h) / max(governing_width, 0.01)
+            # Judged per PART, worst part wins - an L/U room's bbox aspect
+            # ratio always overstates elongation (the bbox includes the
+            # empty notch), so a room with a square main body and a short
+            # connecting arm must not be judged by its bbox; its own
+            # thinnest/most-elongated PART is the real signal (and a
+            # genuinely too-thin part is already caught separately by the
+            # HARD "narrow" check above, which is also now parts-aware).
+            aspect = max(max(p["w"], p["h"]) / max(min(p["w"], p["h"]), 0.01) for p in valid_parts)
             if aspect > SLIVER_ASPECT_RATIO:
                 violations.append(Violation(name, "sliver", False, f"aspect ratio {aspect:.1f}"))
+            elif aspect > PROPORTION_TARGET_RATIO:
+                violations.append(Violation(name, "elongated", False, f"aspect ratio {aspect:.1f}"))
+
+        # SOFT: a bedroom/living room with no edge on the floor's own
+        # exterior boundary has no possible window wall (2026-10, Part 2
+        # "realistic packing rules" - a real egress/natural-light
+        # expectation). `dimensions` here is the candidate's OWN box (see
+        # floor_layout.layout_floor_with_warnings()'s best-of-N loop, which
+        # always scores a candidate against the exact box it was built to
+        # tile) - rects genuinely touch its 0/length/width edges directly,
+        # no further wall-thickness offset needed at this layer.
+        if category in _EGRESS_CATEGORIES and not any(_touches_exterior(p, dimensions) for p in valid_parts):
+            violations.append(Violation(name, "no_egress", False, "no exterior wall for a window"))
 
         # SOFT: well under its own preferred size while other rooms on the
         # same floor sit comfortably at/above theirs - a crude but real
@@ -170,10 +256,33 @@ def score_floor_layout(
     violations.extend(_door_clearance_violations(rects, unit))
 
     score = 0.0
+    _SOFT_PENALTY_BY_KIND = {
+        "sliver": SLIVER_PENALTY,
+        "elongated": ELONGATED_PENALTY,
+        "no_egress": EGRESS_PENALTY,
+    }
     for v in violations:
-        score -= HARD_VIOLATION_PENALTY if v.hard else (SLIVER_PENALTY if v.kind == "sliver" else IMBALANCE_PENALTY)
+        score -= HARD_VIOLATION_PENALTY if v.hard else _SOFT_PENALTY_BY_KIND.get(v.kind, IMBALANCE_PENALTY)
 
     return LayoutScore(score=score, violations=violations)
+
+
+def _touches_exterior(rect: dict, dimensions: dict) -> bool:
+    """True when `rect` has at least one edge on `dimensions`'s own box
+    boundary (0 or length/width) - i.e. a real exterior wall, where a window
+    could actually go. Used by the egress check above; a local, tolerant
+    comparison (same style as _shared_edge_length() below) rather than
+    importing floor_layout.footprint_bbox() here, which would create a
+    circular import (floor_layout.py imports FROM this module)."""
+    length = float(dimensions.get("length") or 0)
+    width = float(dimensions.get("width") or 0)
+    x, y, w, h = rect.get("x", 0.0), rect.get("y", 0.0), rect.get("w", 0.0), rect.get("h", 0.0)
+    return (
+        abs(x) < _EDGE_TOL
+        or abs(y) < _EDGE_TOL
+        or abs((x + w) - length) < _EDGE_TOL
+        or abs((y + h) - width) < _EDGE_TOL
+    )
 
 
 def _door_clearance_violations(rects: list[dict], unit: str) -> list[Violation]:
@@ -189,8 +298,17 @@ def _door_clearance_violations(rects: list[dict], unit: str) -> list[Violation]:
     tol = 1e-4
     for i, a in enumerate(rects):
         for b in rects[i + 1 :]:
-            shared = _shared_edge_length(a, b, tol)
-            if shared is None or shared < 0.3:
+            # Parts-aware (2026-10): the LONGEST shared wall across any
+            # pair of the two rooms' own parts, not the two rooms' bbox -
+            # an L/U room's bbox can touch a neighbor's bbox along a span
+            # neither room actually has real floor against (the notch),
+            # which would wrongly demand door clearance against empty air.
+            shared = max(
+                (_shared_edge_length(pa, pb, tol) or 0.0)
+                for pa in _room_parts(a)
+                for pb in _room_parts(b)
+            )
+            if shared < 0.3:
                 continue
             cat_a, cat_b = classify_room_category(a.get("name") or ""), classify_room_category(b.get("name") or "")
             door_w = door_width_for_wall(cat_a, cat_b, unit)

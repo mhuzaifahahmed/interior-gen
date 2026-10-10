@@ -10,6 +10,7 @@ from app.pipeline.blueprint_svg import (
     WINDOW_MAX_LENGTH_LIVING_M,
     WINDOW_MAX_LENGTH_M,
     _adaptive_target_longest_side_px,
+    _draw_columns,
     _draw_furniture,
     _draw_room_label,
     _draw_windows,
@@ -21,7 +22,7 @@ from app.pipeline.blueprint_svg import (
     _should_suppress_garage_direct_door,
     render_floor_blueprint,
 )
-from app.pipeline.floor_layout import layout_floor
+from app.pipeline.floor_layout import footprint_bbox, layout_floor
 from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, to_plot_unit
 
 
@@ -50,8 +51,9 @@ def test_draw_windows_caps_length_regardless_of_room_size():
     # x/y sit at the real exterior-wall offset (2026-10), matching what
     # layout_floor() itself now produces.
     rect = {"name": "Bedroom 1", "x": ext, "y": ext, "w": plot_length - 2 * ext, "h": plot_width - 2 * ext}
+    fp = (ext, ext, plot_length - ext, plot_width - ext)
 
-    _draw_windows(draw, rect, plot_length, plot_width, 0.0, 0.0, scale, "ft")
+    _draw_windows(draw, rect, fp, 0.0, 0.0, scale, "ft")
 
     top_row = [image.getpixel((px, 0)) for px in range(int(plot_length))]
     window_px = sum(1 for p in top_row if p == WINDOW_COLOR)
@@ -72,7 +74,8 @@ def test_draw_windows_gives_the_living_room_a_larger_picture_window_cap():
         image = Image.new("RGB", (int(plot_length) + 1, int(plot_width) + 1), PAPER)
         draw = ImageDraw.Draw(image)
         rect = {"name": room_name, "x": ext, "y": ext, "w": plot_length - 2 * ext, "h": plot_width - 2 * ext}
-        _draw_windows(draw, rect, plot_length, plot_width, 0.0, 0.0, scale, "ft")
+        fp = (ext, ext, plot_length - ext, plot_width - ext)
+        _draw_windows(draw, rect, fp, 0.0, 0.0, scale, "ft")
         top_row = [image.getpixel((px, 0)) for px in range(int(plot_length))]
         return sum(1 for p in top_row if p == WINDOW_COLOR)
 
@@ -388,8 +391,9 @@ def _draw_furniture_and_diff_from_blank(rect, scale, door_walls=None):
 
 def test_front_door_opening_none_without_a_facing():
     rects = layout_floor([{"name": "Living Room", "area": 1}], {"length": 40, "width": 60, "unit": "ft"})
-    assert _front_door_opening(rects, 40, 60, None) is None
-    assert _front_door_opening(rects, 40, 60, "sideways") is None
+    fp = footprint_bbox(rects)
+    assert _front_door_opening(rects, None, fp) is None
+    assert _front_door_opening(rects, "sideways", fp) is None
 
 
 def test_front_door_opening_lands_on_the_correct_edge_for_each_facing():
@@ -408,22 +412,22 @@ def test_front_door_opening_lands_on_the_correct_edge_for_each_facing():
     ext = _ext()
 
     north_rects = layout_floor(rooms, dimensions, facing="north")
-    north_edge = _front_door_opening(north_rects, length, width, "north")
+    north_edge = _front_door_opening(north_rects, "north", footprint_bbox(north_rects))
     assert north_edge["orientation"] == "horizontal"
     assert abs(north_edge["pos"] - ext) < 1e-6
 
     south_rects = layout_floor(rooms, dimensions, facing="south")
-    south_edge = _front_door_opening(south_rects, length, width, "south")
+    south_edge = _front_door_opening(south_rects, "south", footprint_bbox(south_rects))
     assert south_edge["orientation"] == "horizontal"
     assert abs(south_edge["pos"] - (width - ext)) < 1e-6
 
     east_rects = layout_floor(rooms, dimensions, facing="east")
-    east_edge = _front_door_opening(east_rects, length, width, "east")
+    east_edge = _front_door_opening(east_rects, "east", footprint_bbox(east_rects))
     assert east_edge["orientation"] == "vertical"
     assert abs(east_edge["pos"] - (length - ext)) < 1e-6
 
     west_rects = layout_floor(rooms, dimensions, facing="west")
-    west_edge = _front_door_opening(west_rects, length, width, "west")
+    west_edge = _front_door_opening(west_rects, "west", footprint_bbox(west_rects))
     assert west_edge["orientation"] == "vertical"
     assert abs(west_edge["pos"] - ext) < 1e-6
 
@@ -437,7 +441,7 @@ def test_front_door_opening_prefers_the_entry_room():
         {"name": "Bedroom", "area": 2},
     ]
     rects = layout_floor(rooms, dimensions, facing="north")
-    edge = _front_door_opening(rects, dimensions["length"], dimensions["width"], "north")
+    edge = _front_door_opening(rects, "north", footprint_bbox(rects))
     entry = next(r for r in rects if r["name"] == "Entry")
     # The opening's span must fall within the entry room's own edge span.
     assert edge["start"] >= entry["x"] - 1e-4
@@ -654,7 +658,13 @@ def test_narrow_room_label_no_longer_overflows_into_neighboring_room():
     dimensions = {"length": 100, "width": 40, "unit": "ft"}
     rects = layout_floor(rooms, dimensions)
     bathroom = next(r for r in rects if r["name"] == "Master Bathroom")
-    scale = 780 / max(dimensions["length"], dimensions["width"])
+    # Real adaptive scale (not a hardcoded constant) - the renderer grows
+    # resolution to keep small rooms legible (see _adaptive_target_
+    # longest_side_px()'s own docstring), which matters here now that Part
+    # 1's realistic footprint sizing can shrink a sparse room program's
+    # rooms well below what a fixed legacy scale would have assumed.
+    target_px = _adaptive_target_longest_side_px(rects, dimensions["length"], dimensions["width"])
+    scale = target_px / max(dimensions["length"], dimensions["width"])
     box_w_px = bathroom["w"] * scale
 
     draw = _draw_ctx()
@@ -786,3 +796,39 @@ def test_render_floor_blueprint_grows_for_a_dense_small_room_program():
     simple_image = Image.open(BytesIO(simple_png))
     dense_image = Image.open(BytesIO(dense_png))
     assert max(dense_image.size) >= max(simple_image.size)
+
+
+# ---- Structural columns (2026-10, Part 3 "practical layouts" refinement) ----
+
+
+def _draw_columns_and_diff_from_blank(rect, scale):
+    image = Image.new("RGB", (400, 200), "white")
+    blank = image.copy()
+    draw = ImageDraw.Draw(image)
+    _draw_columns(draw, rect, plot_x0=0, plot_y0=0, scale=scale, unit="ft")
+    return ImageChops.difference(image, blank).getbbox() is not None
+
+
+def test_draw_columns_draws_nothing_for_a_room_within_the_max_span():
+    rect = {"name": "Bedroom", "x": 0, "y": 0, "w": 12, "h": 10}
+    assert _draw_columns_and_diff_from_blank(rect, scale=10.0) is False
+
+
+def test_draw_columns_draws_a_mark_for_a_room_beyond_the_max_span():
+    rect = {"name": "Living Room", "x": 0, "y": 0, "w": 40, "h": 15}
+    assert _draw_columns_and_diff_from_blank(rect, scale=5.0) is True
+
+
+def test_render_floor_blueprint_renders_cleanly_with_a_wide_open_room():
+    # End-to-end smoke test: a real generation with one genuinely oversized
+    # room (long enough to need a structural column) must still render a
+    # valid PNG, not error out - the real column-mark confirmation is the
+    # direct unit-level checks above (_draw_columns_and_diff_from_blank).
+    rects = [
+        {"name": "Living Room", "x": 0, "y": 0, "w": 45, "h": 18},
+        {"name": "Bedroom", "x": 45, "y": 0, "w": 15, "h": 18},
+    ]
+    dimensions = {"length": 60, "width": 18, "unit": "ft"}
+    png_bytes = render_floor_blueprint(1, rects, dimensions)
+    image = Image.open(BytesIO(png_bytes))
+    assert image.size[0] > 0 and image.size[1] > 0

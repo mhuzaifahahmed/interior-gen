@@ -94,7 +94,8 @@ from app.pipeline.blueprint_svg import (
     _should_suppress_garage_direct_door,
 )
 from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box, render_conditioning_edge_map
-from app.pipeline.floor_layout import layout_floor
+from app.pipeline.floor_layout import footprint_bbox
+from app.pipeline.layout_engine import layout_floor
 from app.pipeline.room_specs import FRONT_DOOR_WIDTH_M, classify_room_category, door_width_for_wall, to_plot_unit
 from app.providers.session_errors import KaggleSessionUnavailableError, classify_kaggle_failure
 from app.providers.gemini import _explicit_floor_count
@@ -295,7 +296,8 @@ def _door_specs_for_floor(
         if spec:
             specs.append(spec)
 
-    front_edge = _front_door_opening(rects, length, width, facing_normalized, unit) if floor_number == 1 else None
+    fp = footprint_bbox(rects) or (0.0, 0.0, length, width)
+    front_edge = _front_door_opening(rects, facing_normalized, fp) if floor_number == 1 else None
     if front_edge:
         front_nominal_len_px = max(10.0, min(26.0, to_plot_unit(FRONT_DOOR_WIDTH_M, unit) * scale))
         spec = _front_door_spec(front_edge, facing_normalized, x0c, y0c, scale, front_nominal_len_px)

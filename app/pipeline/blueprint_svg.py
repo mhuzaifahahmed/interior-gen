@@ -59,11 +59,11 @@ from itertools import combinations
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.pipeline.floor_layout import _zone_key
+from app.pipeline.floor_layout import _zone_key, footprint_bbox, room_parts
 from app.pipeline.room_specs import (
-    EXTERIOR_WALL_THICKNESS_M,
     FRONT_DOOR_WIDTH_M,
     classify_room_category,
+    column_fractions_for_span,
     door_width_for_wall,
     to_plot_unit,
 )
@@ -215,19 +215,55 @@ def render_floor_blueprint(
     plot_x0, plot_y0 = float(MARGIN_LEFT_PX), float(MARGIN_TOP_PX)
     plot_x1, plot_y1 = plot_x0 + plot_w_px, plot_y0 + plot_h_px
 
+    # Smart canvas sizing (2026-10, Part 1) - the house's own exterior wall
+    # may sit INSIDE the plot (not flush against it) whenever floor_layout.py
+    # shrank the footprint to a realistic size on an oversized plot, leaving
+    # real yard around it. footprint_bbox() (real units) is this house's
+    # actual outer edge - every exterior-boundary decision below (poché
+    # fill, windows, the front door) uses this, not the bare plot bounds,
+    # so a real yard renders as open ground instead of a wrongly-walled
+    # extension of the house. None/empty falls back to the full plot (the
+    # pre-existing behavior, and numerically identical to it whenever the
+    # footprint already fills the plot).
+    fp = footprint_bbox(rects) or (0.0, 0.0, length, width)
+    house_x0 = plot_x0 + fp[0] * scale
+    house_y0 = plot_y0 + fp[1] * scale
+    house_x1 = plot_x0 + fp[2] * scale
+    house_y1 = plot_y0 + fp[3] * scale
+
     # Drawn across the WHOLE canvas (not just the plot box) - room fills
     # cover the plot area completely (layout_floor always tiles it edge to
     # edge), so a plot-only grid would be entirely invisible. Extending it
     # into the margins gives a "drafting sheet" backdrop that's actually seen.
     _draw_grid(draw, img_w, img_h, plot_x0, plot_y0, plot_x1, plot_y1, scale)
 
-    # Solid poché wall base - fill the whole plot footprint (extended
+    # A real yard (house footprint smaller than the plot) gets a thin
+    # property-line outline at the TRUE plot boundary, so the lot reads as
+    # a real, bounded piece of land rather than ambiguous canvas margin -
+    # omitted when there's no yard (house already flush with the plot) to
+    # avoid drawing a redundant line directly on/near the wall itself.
+    if house_x0 > plot_x0 + 0.5 or house_y0 > plot_y0 + 0.5 or house_x1 < plot_x1 - 0.5 or house_y1 < plot_y1 - 0.5:
+        _draw_property_line(draw, plot_x0, plot_y0, plot_x1, plot_y1)
+
+    # Solid poché wall base - fill the HOUSE's own footprint (extended
     # outward for the exterior wall) black, THEN carve each room's
     # interior back out of it. See module docstring for why this single
     # fill+carve technique replaces all the old separate wall-line drawing.
-    _draw_wall_base(draw, plot_x0, plot_y0, plot_x1, plot_y1)
+    # Scoped to the house footprint, not the full plot, so any real yard
+    # around an oversized plot renders as open ground, not a solid black
+    # wall block.
+    _draw_wall_base(draw, house_x0, house_y0, house_x1, house_y1)
+    # Parts-aware (2026-10, grid-mask engine): carve EVERY part of every
+    # room, not just a room's own bbox - a plain-rectangle room has exactly
+    # one part (its own bbox), so this is byte-identical to before on the
+    # rect engine's output; for an L/U room, the notch between two of its
+    # own parts is correctly left uncarved here (solid wall) unless/until
+    # some OTHER room's or the Hallway's own part claims it in this same
+    # loop - the whole grid is a strict partition, so nothing is ever
+    # double-carved or left as an unexplained solid block.
     for rect in rects:
-        _carve_room(draw, _room_bbox(rect, plot_x0, plot_y0, scale))
+        for part in room_parts(rect):
+            _carve_room(draw, _room_bbox(part, plot_x0, plot_y0, scale))
 
     # Real door openings (post-suppression), computed BEFORE furniture is
     # drawn - not because drawing order matters for the doors themselves,
@@ -255,7 +291,7 @@ def render_floor_blueprint(
     interior_door_edges = []
     interior_door_widths_px = []
     for a, b in combinations(rects, 2):
-        edge = _shared_edge(a, b)
+        edge = _shared_edge_between_rooms(a, b)
         if edge is None:
             continue
         if has_hallway and _should_suppress_direct_door(a, b, hallway_adjacent):
@@ -283,7 +319,7 @@ def render_floor_blueprint(
     # floor of a multi-storey building, including upper floors that have no
     # real exterior walk-in door at all.
     front_door_edge = (
-        _front_door_opening(rects, length, width, facing_normalized, unit) if floor_number == 1 else None
+        _front_door_opening(rects, facing_normalized, fp) if floor_number == 1 else None
     )
     all_door_edges = interior_door_edges + ([front_door_edge] if front_door_edge else [])
 
@@ -292,10 +328,25 @@ def render_floor_blueprint(
     # furniture pass so _furnish_staircase() can draw the right arrow/label
     # inside whichever rect is actually named "Staircase" (see
     # floor_layout.py/generate_house.py for how that room gets reserved).
+    # Parts-aware (2026-10, grid-mask engine): furniture/columns/labels all
+    # anchor on a room's LARGEST part (_largest_part_view()) rather than its
+    # bbox - an L/U room's empty notch must never place a bed/column/label
+    # over space the room doesn't actually occupy. Byte-identical to before
+    # for a plain-rectangle room (its only part IS its bbox).
     stair_direction = ("UP" if floor_number < total_floors else "DN") if total_floors > 1 else None
     for rect in rects:
-        door_walls = _room_door_walls(rect, all_door_edges)
-        _draw_furniture(draw, rect, plot_x0, plot_y0, scale, small_font, stair_direction, door_walls)
+        geom = _largest_part_view(rect)
+        door_walls = _room_door_walls(geom, all_door_edges)
+        _draw_furniture(draw, geom, plot_x0, plot_y0, scale, small_font, stair_direction, door_walls)
+
+    # Structural columns (2026-10, Part 3) - any room whose longer clear
+    # span exceeds room_specs.MAX_UNSUPPORTED_SPAN_M gets real column marks,
+    # evenly spaced along that long axis - a real, engineered-looking
+    # signal that a wide-open room can't just float unsupported. Drawn
+    # after furniture (never obscured by/obscuring a furniture symbol -
+    # most real rooms never trigger this at all) and before doors/labels.
+    for rect in rects:
+        _draw_columns(draw, _largest_part_view(rect), plot_x0, plot_y0, scale, unit)
 
     for edge, width_px in zip(interior_door_edges, interior_door_widths_px):
         _draw_door(draw, edge, plot_x0, plot_y0, scale, width_px)
@@ -308,11 +359,21 @@ def render_floor_blueprint(
             draw, front_door_edge, facing_normalized, plot_x0, plot_y0, scale, front_door_width_px, small_font
         )
 
+    # Parts-aware: a window can land on ANY part's own exterior edge, not
+    # just the room's bbox (an L/U room's window-arm is often a part other
+    # than the largest one - this is the whole point of the grid-mask
+    # engine's egress-by-construction design, so windows must check every
+    # part, not just one).
     for rect in rects:
-        _draw_windows(draw, rect, length, width, plot_x0, plot_y0, scale, unit)
+        for part in room_parts(rect):
+            _draw_windows(draw, {**rect, **part}, fp, plot_x0, plot_y0, scale, unit)
 
     for rect in rects:
-        _draw_room_label(draw, rect, plot_x0, plot_y0, scale, unit, label_font, small_font)
+        label_geom = {
+            **_largest_part_view(rect),
+            "_area_override": sum(p["w"] * p["h"] for p in room_parts(rect)),
+        }
+        _draw_room_label(draw, label_geom, plot_x0, plot_y0, scale, unit, label_font, small_font)
 
     _draw_dimensions(draw, rects, length, width, plot_x0, plot_y0, plot_x1, plot_y1, scale, unit, small_font)
     _draw_north_arrow(draw, plot_x1 - 30, plot_y0 + 34, small_font)
@@ -341,6 +402,47 @@ def _draw_wall_base(draw: ImageDraw.ImageDraw, plot_x0: float, plot_y0: float, p
     draw.rectangle([plot_x0 - ext, plot_y0 - ext, plot_x1 + ext, plot_y1 + ext], fill=WALL_COLOR)
 
 
+def _draw_property_line(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float) -> None:
+    """A thin outline at the real plot boundary (2026-10, Part 1 - smart
+    canvas sizing) - drawn ONLY when the house footprint is smaller than the
+    plot (see render_floor_blueprint()'s caller), so the real yard reads as
+    a bounded lot rather than ambiguous canvas margin. A plain 1px rectangle
+    in the same soft ink used for dimension lines - legible, but clearly
+    secondary to the solid poché wall it surrounds."""
+    draw.rectangle([x0, y0, x1, y1], outline=DIM_LINE_COLOR, width=1)
+
+
+# Structural columns (2026-10, Part 3) - a small, solid square, slightly
+# bigger than the wall's own half-thickness so it reads as a real column
+# rather than a stray dot, same print-resolution-pixel convention as the
+# furniture symbols below.
+COLUMN_HALF_PX = 7
+
+
+def _draw_columns(
+    draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_y0: float, scale: float, unit: str
+) -> None:
+    """Draws a filled square at each structural-column position
+    room_specs.column_fractions_for_span() returns for this room (empty for
+    the common case - a room whose longer side is already within
+    MAX_UNSUPPORTED_SPAN_M gets no columns at all). Columns are centered on
+    the room's SHORT axis and spaced along its LONG axis - a real engineered
+    signal that a wide-open room has intermediate support, not an unexplained
+    void."""
+    fractions = column_fractions_for_span(rect["w"], rect["h"], unit)
+    if not fractions:
+        return
+    x0, y0 = plot_x0 + rect["x"] * scale, plot_y0 + rect["y"] * scale
+    w_px, h_px = rect["w"] * scale, rect["h"] * scale
+    half = COLUMN_HALF_PX
+    for f in fractions:
+        if w_px >= h_px:
+            cx, cy = x0 + w_px * f, y0 + h_px / 2
+        else:
+            cx, cy = x0 + w_px / 2, y0 + h_px * f
+        draw.rectangle([cx - half, cy - half, cx + half, cy + half], fill=WALL_COLOR)
+
+
 def _carve_room(draw: ImageDraw.ImageDraw, bbox: tuple[float, float, float, float]) -> None:
     """Carves one room's interior back out of the solid wall base, inset by
     WALL_HALF_THICKNESS_PX on every side - whatever black remains between
@@ -356,6 +458,22 @@ def _carve_room(draw: ImageDraw.ImageDraw, bbox: tuple[float, float, float, floa
 
 _EDGE_TOL = 1e-4
 _MIN_SHARED_EDGE_UNITS = 0.3  # ignore corner-touching pairs with no real shared wall
+
+
+def _largest_part_view(rect: dict) -> dict:
+    """A rect-like dict (the same {"name","x","y","w","h"[,"suite"]} shape
+    every single-part room always had) describing this room's LARGEST
+    rectangular part - used by every renderer step that only ever made
+    sense for one rectangle (furniture placement, the name/area label,
+    structural columns, door-wall detection for furniture-avoidance) so an
+    L/U room's empty notch can never cause a bed/label/column to land over
+    space the room doesn't actually occupy. A plain-rectangle room (no
+    "parts") returns itself unchanged - byte-identical to before."""
+    parts = rect.get("parts")
+    if not parts:
+        return rect
+    best = max(parts, key=lambda p: p["w"] * p["h"])
+    return {**rect, **best}
 
 
 def _shared_edge(a: dict, b: dict) -> dict | None:
@@ -378,6 +496,29 @@ def _shared_edge(a: dict, b: dict) -> dict | None:
     return None
 
 
+def _shared_edge_between_rooms(a: dict, b: dict) -> dict | None:
+    """Parts-aware wrapper around _shared_edge(): the LONGEST shared-wall
+    segment across every (part of a, part of b) pair - one real door per
+    connected room pair, never one per part-pair (an L/U room's own 2-3
+    parts could each border the same neighbor, which must still only ever
+    draw ONE door, same as a plain-rectangle room always has). A
+    plain-rectangle room's single part is its own bbox, so this is
+    byte-identical to a direct _shared_edge(a, b) call whenever neither
+    room has `parts`."""
+    best: dict | None = None
+    best_len = 0.0
+    for pa in room_parts(a):
+        for pb in room_parts(b):
+            edge = _shared_edge(pa, pb)
+            if edge is None:
+                continue
+            length = edge["end"] - edge["start"]
+            if length > best_len:
+                best_len = length
+                best = edge
+    return best
+
+
 def _compute_hallway_adjacent(rects: list[dict]) -> frozenset[int]:
     """The id() of every rect that shares a real wall with the Hallway rect
     (2026-10, see floor_layout.py's "NO-BOWLING-ALLEY ROOMS" / banded
@@ -393,7 +534,7 @@ def _compute_hallway_adjacent(rects: list[dict]) -> frozenset[int]:
     if hallway_rect is None:
         return frozenset()
     return frozenset(
-        id(r) for r in rects if r is not hallway_rect and _shared_edge(r, hallway_rect) is not None
+        id(r) for r in rects if r is not hallway_rect and _shared_edge_between_rooms(r, hallway_rect) is not None
     )
 
 
@@ -506,7 +647,7 @@ _FACING_ORDER = ("north", "south", "east", "west")
 
 
 def _front_door_opening(
-    rects: list[dict], length: float, width: float, facing: str | None, unit: str = "ft"
+    rects: list[dict], facing: str | None, footprint_bbox: tuple[float, float, float, float]
 ) -> dict | None:
     """Picks the exterior boundary edge matching `facing` and returns a
     door-opening edge-dict of the SAME shape _shared_edge() returns
@@ -521,12 +662,14 @@ def _front_door_opening(
     a garage was requested, and the public zone is always placed on the
     front edge by layout_floor()'s own front-to-back zoning).
 
-    `unit` (2026-10, net-envelope refinement): since floor_layout.py now
-    insets every room by the real exterior wall thickness (rooms no longer
-    touch the bare plot boundary at exactly 0/length/width), "pos" and the
-    candidate-matching comparison must use that SAME real offset, not a
-    literal 0/length/width - otherwise no room ever matches (every rect sits
-    a real wall's-width inside the boundary now).
+    `footprint_bbox` (2026-10, Part 1 "smart canvas sizing" - replaces the
+    old `length`/`width`/`unit` params): (min_x, min_y, max_x, max_y) of the
+    HOUSE's own exterior wall, from floor_layout.footprint_bbox() - not the
+    bare plot's 0/length/width, since a real yard (an oversized plot shrunk
+    to a realistic footprint) can leave the house's own exterior wall sitting
+    well inside the plot. Numerically identical to the old "exterior inset
+    from 0/length/width" logic whenever the footprint fills the plot (the
+    normal case), so this is a behavior-preserving refactor there.
 
     Returns None when `facing` isn't a real value - matches this module's
     existing "no signal, no mark" restraint (e.g. `_furnish_*`'s silent
@@ -535,34 +678,41 @@ def _front_door_opening(
     if facing not in _FACING_ORDER:
         return None
 
-    exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
+    fp_x0, fp_y0, fp_x1, fp_y1 = footprint_bbox
 
     if facing == "north":
-        orientation, pos = "horizontal", exterior
-        candidates = [r for r in rects if abs(r["y"] - pos) < _EDGE_TOL]
-        span = lambda r: (r["x"], r["x"] + r["w"])
+        orientation, pos = "horizontal", fp_y0
+        touches = lambda p: abs(p["y"] - pos) < _EDGE_TOL
+        span = lambda p: (p["x"], p["x"] + p["w"])
     elif facing == "south":
-        orientation, pos = "horizontal", width - exterior
-        candidates = [r for r in rects if abs((r["y"] + r["h"]) - pos) < _EDGE_TOL]
-        span = lambda r: (r["x"], r["x"] + r["w"])
+        orientation, pos = "horizontal", fp_y1
+        touches = lambda p: abs((p["y"] + p["h"]) - pos) < _EDGE_TOL
+        span = lambda p: (p["x"], p["x"] + p["w"])
     elif facing == "west":
-        orientation, pos = "vertical", exterior
-        candidates = [r for r in rects if abs(r["x"] - pos) < _EDGE_TOL]
-        span = lambda r: (r["y"], r["y"] + r["h"])
+        orientation, pos = "vertical", fp_x0
+        touches = lambda p: abs(p["x"] - pos) < _EDGE_TOL
+        span = lambda p: (p["y"], p["y"] + p["h"])
     else:  # east
-        orientation, pos = "vertical", length - exterior
-        candidates = [r for r in rects if abs((r["x"] + r["w"]) - pos) < _EDGE_TOL]
-        span = lambda r: (r["y"], r["y"] + r["h"])
+        orientation, pos = "vertical", fp_x1
+        touches = lambda p: abs((p["x"] + p["w"]) - pos) < _EDGE_TOL
+        span = lambda p: (p["y"], p["y"] + p["h"])
 
+    # Parts-aware (2026-10, grid-mask engine): a room's own PART touching
+    # the facing edge, not just its bbox - an L/U room's bbox can touch the
+    # facing edge even when none of its real parts do (the empty notch),
+    # which would wrongly offer a door opening onto space the room doesn't
+    # actually occupy. A plain-rectangle room's single part is its bbox, so
+    # this is byte-identical to before there.
+    candidates = [(r, p) for r in rects for p in room_parts(r) if touches(p)]
     if not candidates:
         return None
 
-    foyers = [r for r in candidates if classify_room_category(r["name"]) == "foyer"]
-    public = [r for r in candidates if _zone_key(r["name"]) == 0]
+    foyers = [(r, p) for r, p in candidates if classify_room_category(r["name"]) == "foyer"]
+    public = [(r, p) for r, p in candidates if _zone_key(r["name"]) == 0]
     pool = foyers or public or candidates
-    room = max(pool, key=lambda r: span(r)[1] - span(r)[0])
+    _room, part = max(pool, key=lambda rp: span(rp[1])[1] - span(rp[1])[0])
 
-    start, end = span(room)
+    start, end = span(part)
     return {"orientation": orientation, "pos": pos, "start": start, "end": end}
 
 
@@ -738,41 +888,43 @@ def _draw_front_door(
 def _draw_windows(
     draw: ImageDraw.ImageDraw,
     rect: dict,
-    plot_length: float,
-    plot_width: float,
+    footprint_bbox: tuple[float, float, float, float],
     plot_x0: float,
     plot_y0: float,
     scale: float,
     unit: str = "ft",
 ) -> None:
-    """Marks a window on each of the room's edges that lie on the exterior
-    plot boundary - cuts straight through the solid exterior wall band (back
-    to PAPER, i.e. genuinely open to the outside, not just a color change)
-    with a colored glazing line centered on the cut. Length is capped at
-    WINDOW_MAX_LENGTH_M regardless of room size (see that constant's
-    docstring) - without the cap, a large room's window scaled proportionally
-    could become dozens of feet wide, reading as an unexplained gap in the
-    wall rather than a window. The living room uses the larger
-    WINDOW_MAX_LENGTH_LIVING_M cap instead - a real, wider "picture window"
-    is a genuine architectural feature for that room type specifically."""
+    """Marks a window on each of the room's edges that lie on the HOUSE's
+    own exterior boundary - cuts straight through the solid exterior wall
+    band (back to PAPER, i.e. genuinely open to the outside, not just a
+    color change) with a colored glazing line centered on the cut. Length
+    is capped at WINDOW_MAX_LENGTH_M regardless of room size (see that
+    constant's docstring) - without the cap, a large room's window scaled
+    proportionally could become dozens of feet wide, reading as an
+    unexplained gap in the wall rather than a window. The living room uses
+    the larger WINDOW_MAX_LENGTH_LIVING_M cap instead - a real, wider
+    "picture window" is a genuine architectural feature for that room type
+    specifically.
+
+    `footprint_bbox` (2026-10, Part 1 "smart canvas sizing" - replaces the
+    old `plot_length`/`plot_width` params): (min_x, min_y, max_x, max_y) of
+    the house's own exterior wall (see floor_layout.footprint_bbox()) - not
+    the bare plot's 0/length/width, since a real yard can leave the house's
+    exterior wall sitting well inside the plot. Numerically identical to the
+    old "exterior inset from 0/length/width" logic whenever the footprint
+    fills the plot."""
     x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
     is_living = classify_room_category(rect.get("name") or "") == "living"
     max_win_units = to_plot_unit(WINDOW_MAX_LENGTH_LIVING_M if is_living else WINDOW_MAX_LENGTH_M, unit)
-    # 2026-10 net-envelope refinement: rooms no longer touch the bare plot
-    # boundary at exactly 0/plot_length/plot_width - they're inset by the
-    # real exterior wall thickness (see floor_layout.layout_floor_with_
-    # warnings()) - so "does this room's edge lie on the exterior boundary"
-    # must compare against that same real offset, not a literal 0/length/
-    # width, or no room ever matches and no window is ever drawn.
-    exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
+    fp_x0, fp_y0, fp_x1, fp_y1 = footprint_bbox
     edges = []
-    if abs(x - exterior) < _EDGE_TOL:
+    if abs(x - fp_x0) < _EDGE_TOL:
         edges.append(("left", y, y + h))
-    if abs((x + w) - (plot_length - exterior)) < _EDGE_TOL:
+    if abs((x + w) - fp_x1) < _EDGE_TOL:
         edges.append(("right", y, y + h))
-    if abs(y - exterior) < _EDGE_TOL:
+    if abs(y - fp_y0) < _EDGE_TOL:
         edges.append(("top", x, x + w))
-    if abs((y + h) - (plot_width - exterior)) < _EDGE_TOL:
+    if abs((y + h) - fp_y1) < _EDGE_TOL:
         edges.append(("bottom", x, x + w))
 
     for side, start_units, end_units in edges:
@@ -790,12 +942,12 @@ def _draw_windows(
         erase_width = WALL_HALF_THICKNESS_PX + WALL_EXTERIOR_EXTRA_PX + 6
 
         if side in ("left", "right"):
-            px = plot_x0 + (0.0 if side == "left" else plot_length) * scale
+            px = plot_x0 + (fp_x0 if side == "left" else fp_x1) * scale
             py0, py1 = plot_y0 + w_start_px * scale, plot_y0 + w_end_px * scale
             draw.line([(px, py0), (px, py1)], fill=PAPER, width=erase_width)
             draw.line([(px, py0), (px, py1)], fill=WINDOW_COLOR, width=3)
         else:
-            py = plot_y0 + (0.0 if side == "top" else plot_width) * scale
+            py = plot_y0 + (fp_y0 if side == "top" else fp_y1) * scale
             px0, px1 = plot_x0 + w_start_px * scale, plot_x0 + w_end_px * scale
             draw.line([(px0, py), (px1, py)], fill=PAPER, width=erase_width)
             draw.line([(px0, py), (px1, py)], fill=WINDOW_COLOR, width=3)
@@ -1319,7 +1471,14 @@ def _draw_room_label(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot
         return  # too small to label legibly
 
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    area_units = rect["w"] * rect["h"]
+    # Parts-aware (2026-10): the label is POSITIONED/sized on the room's
+    # largest part (see _largest_part_view() - there's nowhere to draw text
+    # in an L/U room's empty notch), but the printed area must still be the
+    # room's REAL total area across every part, not just that one part's -
+    # callers pass this explicitly via "_area_override" for a multi-part
+    # room; a plain-rectangle room (no override given) keeps the original
+    # w*h computation, byte-identical to before.
+    area_units = rect.get("_area_override", rect["w"] * rect["h"])
     area_text = f"{rect['w']:.1f}x{rect['h']:.1f} {unit} ({area_units:.0f} sq {unit})"
     # Real architectural floor plans conventionally render the room name in
     # all-caps within its label - a small typographic change (display only,
