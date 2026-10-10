@@ -1,3 +1,4 @@
+from app.config import settings
 from app.pipeline.feasibility import (
     _geometrically_placeable_area,
     _realistic_other_count,
@@ -257,3 +258,49 @@ def test_room_count_requirements_table_areas_are_strictly_monotonic_across_floor
     for rows in (one_floor["bedrooms"], one_floor["bathrooms"], two_floor["bedrooms"], two_floor["bathrooms"]):
         areas = [row["min_area"] for row in rows]
         assert areas == sorted(areas)
+
+
+# ---- lru_cache is NOT engine-aware - a real staleness risk flagged in the ----
+# ---- mask-engine-adoption plan (Phase B), proven + guarded here ----
+
+
+def test_room_count_requirements_table_cache_is_engine_aware_when_cleared(monkeypatch):
+    """room_count_requirements_table()'s @functools.lru_cache key is purely
+    (total_floors, unit) - settings.house_layout_engine is NOT part of the
+    key, even though the function's body calls the layout-engine dispatcher
+    (via _geometrically_placeable_area -> layout_floor_with_warnings) and
+    its result genuinely depends on which engine is active. So toggling the
+    engine mid-process (exactly what a test monkeypatch does) and calling
+    this function again with the SAME (total_floors, unit) args returns a
+    STALE table computed under the OLD engine, not a fresh one - unless the
+    caller explicitly clears the cache right after switching.
+
+    This test proves both halves directly: (1) the staleness is real -
+    without clearing, the identical cached dict object is returned even
+    after switching engines; (2) calling .cache_clear() right after the
+    switch actually fixes it - a fresh table is computed.
+
+    conftest.py's autouse _default_house_layout_engine fixture clears this
+    cache at both setup and teardown specifically to bound this leakage to
+    within a single test's own body - it can't help WITHIN a test that
+    itself toggles the engine, which is exactly why this test (and any
+    future test doing the same) must call .cache_clear() itself between the
+    two calls, as done below."""
+    room_count_requirements_table.cache_clear()
+    rect_table = room_count_requirements_table(total_floors=1, unit="ft")
+    assert settings.house_layout_engine == "rect"  # conftest's autouse fixture
+
+    monkeypatch.setattr(settings, "house_layout_engine", "mask")
+    # Without a cache_clear(), the SAME cached object comes back even though
+    # the engine just changed - this is the real staleness bug.
+    stale_table = room_count_requirements_table(total_floors=1, unit="ft")
+    assert stale_table is rect_table
+
+    room_count_requirements_table.cache_clear()
+    fresh_mask_table = room_count_requirements_table(total_floors=1, unit="ft")
+    assert fresh_mask_table is not rect_table
+
+    # Leave the cache clean so a later test in this same process never
+    # inherits this test's mask-flavored (1, "ft") entry - mirrors what the
+    # conftest fixture's own teardown already does, belt-and-suspenders.
+    room_count_requirements_table.cache_clear()

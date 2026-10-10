@@ -118,5 +118,27 @@ def _default_house_layout_engine(monkeypatch):
     specifically exercise the mask engine (tests/test_floor_layout_mask.py,
     tests/test_layout_engine.py) set it explicitly within their own body,
     which still wins (same per-test monkeypatch instance, last write
-    applies)."""
+    applies).
+
+    Also clears feasibility.room_count_requirements_table()'s lru_cache at
+    both setup and teardown - that function's cache key is purely
+    (total_floors, unit), with NO engine component at all, so toggling
+    settings.house_layout_engine mid-process (exactly what a mask-opt-in
+    test does) can serve a STALE table computed under the other engine for
+    an identical (total_floors, unit) pair. Clearing at setup means no test
+    ever inherits a leftover entry from whatever a PRIOR test happened to
+    cache under mask; clearing at teardown means a test that itself opted
+    into mask never leaves a stale mask-flavored entry behind for the NEXT
+    test (which runs back under this fixture's forced "rect") to
+    accidentally reuse. A test that itself toggles the engine mid-body and
+    calls room_count_requirements_table under both engines still needs its
+    own explicit .cache_clear() between the two calls (see
+    test_room_count_requirements_table_cache_is_engine_aware_when_cleared in
+    tests/test_feasibility.py) - this fixture only bounds leakage ACROSS
+    tests, not within a single test's own body."""
+    from app.pipeline.feasibility import room_count_requirements_table
+
+    room_count_requirements_table.cache_clear()
     monkeypatch.setattr(settings, "house_layout_engine", "rect")
+    yield
+    room_count_requirements_table.cache_clear()
