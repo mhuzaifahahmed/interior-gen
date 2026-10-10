@@ -344,7 +344,13 @@ def _grow_floor(
     for (c, r) in spine_cells:
         owner[r][c] = -2
 
-    seeds = _seed_rooms(targets, public_idx, circulation_idx, private_idx, cols, rows, spine_cells)
+    target_cells = [max(1, round(t["preferred_area"] / cell_area)) for t in targets]
+    min_cells = [max(1, round(t["min_area"] / cell_area)) for t in targets]
+    max_cells = [max(min_cells[i], round(targets[i]["max_area"] / cell_area)) for i in range(len(targets))]
+
+    seeds = _seed_rooms(
+        targets, public_idx, circulation_idx, private_idx, cols, rows, spine_cells, min_cells
+    )
 
     cells_by_room: list[set[tuple[int, int]]] = [set() for _ in targets]
     for i, seed in enumerate(seeds):
@@ -352,12 +358,8 @@ def _grow_floor(
             cells_by_room[i].add(seed)
             owner[seed[1]][seed[0]] = i
 
-    target_cells = [max(1, round(t["preferred_area"] / cell_area)) for t in targets]
-    min_cells = [max(1, round(t["min_area"] / cell_area)) for t in targets]
-    max_cells = [max(min_cells[i], round(targets[i]["max_area"] / cell_area)) for i in range(len(targets))]
-
     _grow_rooms(owner, cells_by_room, seeds, cols, rows, target_cells, min_cells, max_cells)
-    _fill_leftovers(owner, cells_by_room, target_cells, max_cells, cols, rows)
+    _fill_leftovers(owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells)
     _ensure_minimum_presence(cells_by_room, min_cells, owner)
 
     rooms_out = []
@@ -369,8 +371,15 @@ def _grow_floor(
             room["suite"] = t["suite"]
         rooms_out.append(room)
 
-    if spine_cells:
-        hallway = _cells_to_room("Hallway", spine_cells, cell_w, cell_h)
+    # Recompute the spine's own final cell-set from `owner` rather than
+    # reusing the ORIGINAL `spine_cells` local - _fill_leftovers() can grow
+    # it (see that function's own docstring: a leftover pocket bordered only
+    # by spine cells and the grid edge, with no real room neighbor at all,
+    # is absorbed into the spine/Hallway rather than left permanently
+    # unclaimed - this is what actually closes Bug A, the "black hole").
+    final_spine_cells = {(c, r) for r in range(rows) for c in range(cols) if owner[r][c] == -2}
+    if final_spine_cells:
+        hallway = _cells_to_room("Hallway", final_spine_cells, cell_w, cell_h)
         if hallway is not None:
             rooms_out.append(hallway)
 
@@ -443,6 +452,7 @@ def _seed_rooms(
     cols: int,
     rows: int,
     spine_cells: set[tuple[int, int]],
+    min_cells: list[int],
 ) -> list[tuple[int, int] | None]:
     """One anchor cell per room, matching floor_layout.py's own front-to-
     back convention (front = low-y). Bedroom/living rooms seed ON the
@@ -463,7 +473,31 @@ def _seed_rooms(
     each other in - and only THEN seeding each non-egress room (a suite's
     own bathroom, or a standalone wet/dry leftover) adjacent to its real
     anchor (its own suite's bedroom seed, or the last-placed private room
-    for an unpaired leftover)."""
+    for an unpaired leftover).
+
+    Real bug fixed 2026-10 (Phase A2, "Bug B" - a room that collapses to a
+    ~1-cell-wide sliver, confirmed reproducible under east/west facing and
+    on a dense upper floor): the proportional boundary-path index above
+    picks a position purely by COUNT/SPACING, with no idea whether that
+    specific spot has enough real free territory behind it to ever reach
+    the room's own minimum area. On the reproduced case, the ideal spot
+    landed in a pocket wedged between an already-seeded neighbor (a
+    suite's own bathroom, claimed first) and the circulation cross-link
+    spine (see _reserve_spine()) on the opposite side - a pocket with ZERO
+    reachable free cells beyond the seed itself, so growth's whole-strip
+    extension (see _grow_rooms()) never had anywhere to go and even the
+    arm-fallback BFS found nothing left to claim: the room was stuck at its
+    single seed cell (or whatever thin leftover _fill_leftovers() later
+    glued on), nowhere near its real minimum. Fixed by making egress
+    seeding REACHABILITY-aware: `_best_reachable_boundary_seed()` still
+    tries the ideal proportional position FIRST (so every case that
+    already worked renders byte-identical to before this fix - the common
+    case always resolves on its first probe), but when that position's
+    locally reachable free-cell count falls short of the room's own
+    min_cells, it searches outward along the SAME boundary path (the
+    deterministic offset sequence 0, +1, -1, +2, -2, ...) for a nearby spot
+    with real room to grow into, falling back to whichever probed position
+    had the LARGEST reachable pocket if none fully clears the bar."""
     occupied: set[tuple[int, int]] = set(spine_cells)
     seeds: list[tuple[int, int] | None] = [None] * len(targets)
 
@@ -495,8 +529,7 @@ def _seed_rooms(
     boundary_path = _exterior_boundary_path(cols, rows)
     for k, i in enumerate(private_egress):
         idx = _clamp(round(((k + 0.5) / n_egress) * (len(boundary_path) - 1)), 0, len(boundary_path) - 1) if n_egress else 0
-        col, row = boundary_path[idx]
-        cell = _first_free_near(col, row, cols, rows, occupied)
+        cell = _best_reachable_boundary_seed(boundary_path, idx, cols, rows, occupied, min_cells[i])
         if cell is None:
             cell = _seed_on_exterior(cols, rows, occupied)
         if cell is not None:
@@ -562,6 +595,79 @@ def _first_free_near(col: int, row: int, cols: int, rows: int, occupied: set[tup
                     return (nc, nr)
                 queue.append((nc, nr))
     return None
+
+
+def _reachable_free_count(
+    start: tuple[int, int], cols: int, rows: int, occupied: set[tuple[int, int]], cap: int
+) -> int:
+    """How many free (non-occupied) cells are reachable from `start` via a
+    4-connected flood fill, counted up to `cap` (early-exits the moment the
+    cap is hit - callers only ever need "is this at least N", not the exact
+    total, so this stays cheap even on a large open region). `start` itself
+    counts as reachable only if it's actually free; a seed candidate that's
+    already occupied has 0 reachable free cells by this measure."""
+    if cap <= 0:
+        return 0
+    if start in occupied:
+        return 0
+    seen = {start}
+    queue = deque([start])
+    count = 0
+    while queue and count < cap:
+        c, r = queue.popleft()
+        count += 1
+        if count >= cap:
+            break
+        for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            nc, nr = c + dc, r + dr
+            if 0 <= nc < cols and 0 <= nr < rows and (nc, nr) not in seen and (nc, nr) not in occupied:
+                seen.add((nc, nr))
+                queue.append((nc, nr))
+    return count
+
+
+def _best_reachable_boundary_seed(
+    boundary_path: list[tuple[int, int]],
+    ideal_idx: int,
+    cols: int,
+    rows: int,
+    occupied: set[tuple[int, int]],
+    needed: int,
+) -> tuple[int, int] | None:
+    """Picks a seed cell for an egress room from `boundary_path`, preferring
+    the ideal proportional-spacing position but verifying it actually has
+    `needed` reachable free cells behind it (see _seed_rooms()'s own
+    docstring, "Bug B" fix, for the real trap this avoids - a boundary
+    position wedged between an already-seeded neighbor and the circulation
+    spine with zero room to grow into). Probes outward from `ideal_idx` in
+    the fixed, deterministic order 0, +1, -1, +2, -2, ... (so the common
+    case - the ideal spot already has plenty of room - resolves on the
+    very first probe, byte-identical to the pre-fix behavior) and returns
+    the first position whose reachable-free-cell count meets `needed`;
+    falls back to whichever probed position had the LARGEST reachable
+    pocket if none fully clears the bar (a genuinely tight room program
+    still gets the best available spot, not nothing)."""
+    path_len = len(boundary_path)
+    if path_len == 0:
+        return None
+    best_cell: tuple[int, int] | None = None
+    best_count = -1
+    max_offset = max(ideal_idx, path_len - 1 - ideal_idx)
+    for offset in range(0, max_offset + 1):
+        for idx in ((ideal_idx + offset, ideal_idx - offset) if offset else (ideal_idx,)):
+            if idx < 0 or idx >= path_len:
+                continue
+            col, row = boundary_path[idx]
+            cell = _first_free_near(col, row, cols, rows, occupied)
+            if cell is None:
+                continue
+            count = _reachable_free_count(cell, cols, rows, occupied, needed)
+            if count >= needed:
+                return cell
+            if count > best_count:
+                best_count = count
+                best_cell = cell
+    return best_cell
 
 
 def _exterior_boundary_path(cols: int, rows: int) -> list[tuple[int, int]]:
@@ -723,6 +829,85 @@ def _grow_rooms(
             continue
         _grow_arm(owner, cells_by_room[i], i, cols, rows, min_cells[i] - len(cells_by_room[i]), max_cells[i])
 
+    # Steal fallback (2026-10, Phase A2 "Bug B" fix - absolute last resort,
+    # one rung below the free-cell arm fallback above): a room can still be
+    # genuinely under its own minimum here even after BOTH whole-strip
+    # extension AND the free-cell arm BFS - confirmed via direct
+    # instrumentation on the real reproducing case (east/west-facing Master
+    # Bedroom): its seed ended up completely walled in by an already-grown
+    # neighbor on one side and a circulation spine cell (owner == -2) on
+    # the other, with ZERO free (-1) cells reachable at all, so _grow_arm's
+    # free-cell-only BFS found nothing to claim. A seed-time reachability
+    # check was tried first and rejected - at seed placement almost the
+    # whole grid is still empty, so a reachability probe can never predict
+    # which direction OTHER rooms' own whole-strip growth will race to
+    # claim first later in the SAME round-robin pass; the trap is a
+    # dynamic race during growth, not a static seed-placement defect. This
+    # pass instead lets a still-starved room reach into an ALREADY-CLAIMED
+    # neighbor's cells (never a spine cell - circulation is never
+    # stealable), nearest first, but only takes a cell whose current owner
+    # would stay at/above ITS OWN real minimum afterward - a donor is never
+    # pushed into its own violation to fix this room's.
+    for i in range(n):
+        if not cells_by_room[i] or len(cells_by_room[i]) >= min_cells[i]:
+            continue
+        _steal_arm(
+            owner, cells_by_room, i, cols, rows, min_cells[i] - len(cells_by_room[i]), max_cells[i], min_cells
+        )
+
+
+def _steal_arm(
+    owner: list[list[int]],
+    cells_by_room: list[set[tuple[int, int]]],
+    room_id: int,
+    cols: int,
+    rows: int,
+    needed: int,
+    cap: int,
+    min_cells: list[int],
+) -> None:
+    """Absolute last resort for a room still under its own real minimum
+    after both whole-strip growth and the free-cell arm fallback
+    (_grow_arm) - see _grow_rooms()'s own call-site comment for the real,
+    reproduced trap this exists for. A single-source BFS reach from the
+    room's own claimed cells, exactly like _grow_arm, but allowed to cross
+    into a NEIGHBORING room's already-claimed territory (never a spine
+    cell - owner == -2 is skipped, circulation is never stealable) when
+    free cells alone run out. Claims the nearest stealable cell first;
+    skips (but still expands the search past) any candidate whose current
+    owner would drop below its OWN min_cells if it lost that cell - this
+    bounds the damage to "borrow only genuine slack", never cascading one
+    room's shortfall into a different hard violation. Like
+    _ensure_minimum_presence()'s own last-resort donor logic, a stolen
+    cell can in a genuinely pathological case leave the donor with an odd
+    notch - an accepted, honestly-stated edge case for an absolute last
+    resort, not a general guarantee."""
+    heap: list[tuple[int, int, int]] = []
+    seen: set[tuple[int, int]] = set(cells_by_room[room_id])
+    for (c, r) in cells_by_room[room_id]:
+        for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            nc, nr = c + dc, r + dr
+            if 0 <= nc < cols and 0 <= nr < rows and (nc, nr) not in seen:
+                seen.add((nc, nr))
+                heapq.heappush(heap, (1, nr, nc))
+
+    claimed = 0
+    while heap and claimed < needed and len(cells_by_room[room_id]) < cap:
+        dist, r, c = heapq.heappop(heap)
+        owner_val = owner[r][c]
+        if owner_val >= 0 and owner_val != room_id:
+            donor_cells = cells_by_room[owner_val]
+            if len(donor_cells) - 1 >= min_cells[owner_val]:
+                donor_cells.discard((c, r))
+                owner[r][c] = room_id
+                cells_by_room[room_id].add((c, r))
+                claimed += 1
+        for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            nc, nr = c + dc, r + dr
+            if 0 <= nc < cols and 0 <= nr < rows and (nc, nr) not in seen:
+                seen.add((nc, nr))
+                heapq.heappush(heap, (dist + 1, nr, nc))
+
 
 def _grow_arm(
     owner: list[list[int]],
@@ -769,10 +954,48 @@ def _fill_leftovers(
     max_cells: list[int],
     cols: int,
     rows: int,
+    spine_cells: set[tuple[int, int]],
 ) -> None:
     """Any cell still unclaimed after growth stalls (owner == -1, not
     spine) is absorbed by an adjacent already-claimed room - the footprint
     always tiles completely.
+
+    Real bug fixed 2026-10 (Phase A2, "Bug A" - a literal unlabeled solid
+    black hole rendered inside the house, reproduced deterministically on
+    several Phase A baseline cases): a leftover connected region whose ONLY
+    real-room neighbors are NONE at all - every bordering cell is either
+    another unclaimed cell already in the same region, a SPINE cell
+    (owner == -2), or the grid edge - used to be silently skipped
+    (`if not adjacent_rooms: continue`), because the neighbor scan below
+    only ever recorded `owner_val >= 0` (a real room) into `adjacent_rooms`;
+    a spine cell is neither -1 (joins the region) nor >= 0 (counted as an
+    adjacent room), so it was simply ignored as a neighbor. This is a real,
+    reproducible geometry case, not a hypothetical: the cross-link spine
+    (see _reserve_spine()) is a plus-shape that can fully wall off one of
+    its four quadrants if growth stalls there before reaching every cell -
+    the trapped pocket's only real borders are the spine arms + the grid's
+    own outer edge, so `adjacent_rooms` came back empty and the region
+    stayed owner == -1 forever, rendering as an unexplained solid black
+    poché block (blueprint_svg.py only carves cells it was actually handed
+    a room/part for). Fixed by giving a spine-bordered, room-less region
+    the SAME treatment _grow_floor() already gives genuine circulation
+    cells: it's absorbed INTO the spine/Hallway, not left unclaimed - a
+    spine cell is a valid, intentional occupant of the grid, so widening
+    the Hallway by a dead-end pocket it already walls off is architecturally
+    sound (it just means the corridor's own poché fills that leftover
+    nook), unlike silently discarding the cells. `_grow_floor()` recomputes
+    the Hallway's final rect from `owner` (not the original, pre-fill
+    `spine_cells` set) specifically so this absorption is reflected in the
+    rendered output, not just internal bookkeeping.
+
+    A second, narrower last-resort case (not expected to occur in practice -
+    kept only so NO cell can ever stay unclaimed under any room program,
+    not even a pathological one with zero rooms seeded and no spine at all)
+    hands a region with neither a real-room neighbor NOR a spine neighbor to
+    whichever room anywhere on the floor is furthest under its own target -
+    the same "most under target" selection rule used for a normal adjacent
+    region, just without requiring physical adjacency, since there is no
+    adjacent candidate at all to choose from.
 
     Real bug fixed during development, found by actually RENDERING real
     output and visually inspecting it (confirming this project's own
@@ -836,6 +1059,7 @@ def _fill_leftovers(
                 visited.add((c0, r0))
                 stack = [(c0, r0)]
                 adjacent_rooms: set[int] = set()
+                touches_spine = False
                 while stack:
                     c, r = stack.pop()
                     for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
@@ -850,7 +1074,35 @@ def _fill_leftovers(
                                 stack.append((nc, nr))
                         elif owner_val >= 0:
                             adjacent_rooms.add(owner_val)
+                        elif owner_val == -2:
+                            touches_spine = True
                 if not adjacent_rooms:
+                    # No real room borders this pocket at all - see this
+                    # function's own docstring ("Real bug fixed 2026-10,
+                    # Phase A2 Bug A") for why this is a real, reproducible
+                    # case (a quadrant fully walled off by the cross-link
+                    # spine), not a hypothetical. A spine-bordered pocket is
+                    # absorbed into the spine/Hallway itself; a pocket with
+                    # NEITHER a room nor a spine neighbor (only possible on
+                    # a pathological room program, e.g. zero rooms seeded at
+                    # all) falls through to the universal last resort below
+                    # rather than being left permanently unclaimed.
+                    if touches_spine:
+                        for (c, r) in region:
+                            owner[r][c] = -2
+                            spine_cells.add((c, r))
+                        assigned = True
+                        continue
+                    fallback_candidates = [j for j, c in enumerate(cells_by_room) if c]
+                    if not fallback_candidates:
+                        continue
+                    best = min(
+                        fallback_candidates, key=lambda i: len(cells_by_room[i]) - target_cells[i]
+                    )
+                    for (c, r) in region:
+                        owner[r][c] = best
+                        cells_by_room[best].add((c, r))
+                    assigned = True
                     continue
                 under_cap = [i for i in adjacent_rooms if len(cells_by_room[i]) < max_cells[i]]
                 pool = under_cap or adjacent_rooms

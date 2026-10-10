@@ -254,6 +254,7 @@ def score_floor_layout(
             violations.append(Violation(name, "below_preferred", False, f"{area:.1f} well under preferred {preferred:.1f}"))
 
     violations.extend(_door_clearance_violations(rects, unit))
+    violations.extend(_coverage_violation(rects, dimensions))
 
     score = 0.0
     _SOFT_PENALTY_BY_KIND = {
@@ -265,6 +266,50 @@ def score_floor_layout(
         score -= HARD_VIOLATION_PENALTY if v.hard else _SOFT_PENALTY_BY_KIND.get(v.kind, IMBALANCE_PENALTY)
 
     return LayoutScore(score=score, violations=violations)
+
+
+_COVERAGE_TOLERANCE_FRACTION = 0.02
+
+
+def _coverage_violation(rects: list[dict], dimensions: dict) -> list[Violation]:
+    """HARD violation when the real occupied area across every returned
+    room's own PARTS doesn't add up to (approximately) the floor's own
+    length x width - a direct, permanent regression guard for the
+    "black hole" bug fixed 2026-10 (Phase A2, floor_layout_mask.py's
+    _fill_leftovers()): an unclaimed grid cell never appears as part of
+    ANY room, so it was previously invisible to this scorer entirely (no
+    rect was wrong, there was simply a cell missing from every rect) - a
+    floor could render with a literal unexplained solid black hole and
+    still score as if it had zero problems. This check doesn't care WHY
+    coverage is short (a future regression in either engine would be
+    caught the same way, not just this one historical cause) - it only
+    verifies the floor's own arithmetic adds up, the same "does the real
+    output explain 100% of the footprint" question a human inspecting the
+    PNG would ask. A small tolerance absorbs ordinary floating-point
+    accumulation across many small rect/part multiplications, not a real
+    gap - not a loophole for an actual missing region, which is typically
+    many cells (a visibly obvious fraction of the floor), not a rounding
+    sliver."""
+    length = float(dimensions.get("length") or 0)
+    width = float(dimensions.get("width") or 0)
+    floor_area = length * width
+    if floor_area <= 0:
+        return []
+    covered = sum(
+        p["w"] * p["h"]
+        for rect in rects
+        for p in _room_parts(rect)
+        if p.get("w", 0) > 0 and p.get("h", 0) > 0
+    )
+    shortfall = floor_area - covered
+    if shortfall > floor_area * _COVERAGE_TOLERANCE_FRACTION:
+        return [
+            Violation(
+                "__floor__", "coverage_gap", True,
+                f"{covered:.1f} covered vs {floor_area:.1f} floor area ({shortfall:.1f} unexplained)",
+            )
+        ]
+    return []
 
 
 def _touches_exterior(rect: dict, dimensions: dict) -> bool:

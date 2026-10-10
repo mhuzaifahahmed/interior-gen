@@ -1,6 +1,13 @@
 # Mask-engine adoption + layout practicality refinement — execution plan
 
-**Status:** APPROVED, not started. Author: architecture review (2026-10-09).
+**Status:** IN PROGRESS. Phase A (baseline render) is COMPLETE — see
+`future-plans/mask-adoption-phase-a-findings.md`. Headline: `mask` is NOT ready to ship as-is;
+bedrooms are mostly fixed in the common orientation but public rooms (Living/Dining/Hallway) are
+still bowling-alley shapes in every case, Master still isn't in the quiet corner, and yard (#1) is
+WORSE than `rect`. Two new, more severe bugs were also found (not among the original 7) — see
+**PHASE A2** below, inserted 2026-10-10 by explicit user decision ("go with 1": insert a dedicated
+investigation/fix phase now, before C/D/G). **Phase A2 must complete and be verified before Phase B
+starts.**
 **For:** the models implementing this, one task at a time.
 **Decision already made by the user:** adopt the **`mask`** layout engine as the shipping
 engine and fix the architectural-practicality problems around it. This is locked — do
@@ -227,6 +234,167 @@ PNG evidence. **Report this to the user before proceeding to Phase B.** This not
 C/D if `mask` already solved more (or less) than predicted.
 
 **Acceptance:** PNGs rendered and inspected; findings note written; nothing in `app/` changed.
+
+**STATUS: ✅ COMPLETE.** See `future-plans/mask-adoption-phase-a-findings.md` for the full,
+evidence-backed report (10 renders inspected). Do not re-run Phase A — proceed to Phase A2.
+
+---
+
+## PHASE A2 — Fix two new, more-severe bugs found during Phase A (inserted 2026-10-10)
+
+**Why this phase exists:** Phase A's visual inspection (not just "no exception raised") found two
+bugs in the `mask` engine that are NOT among the original 7 reported problems and are, if anything,
+worse — a literal unexplained solid-black render and rooms that geometrically collapse to near-zero
+width. The user's explicit decision (2026-10-10): fix these now, in their own dedicated phase,
+before any of Phases B/C/D/G proceed. **Do not skip this phase or fold it quietly into Phase D.**
+
+Both bugs are reproducible via the Phase A scratch script, `scripts/phase_a_render.py` (gitignored
+but already in the repo — re-run it, don't rewrite it from scratch). Read
+`future-plans/mask-adoption-phase-a-findings.md` §"New bugs found" in full before starting — it has
+the exact room lists, exact coordinates, and exact PNG crops (`scripts/output/phase_a/*_crop.png`)
+that reproduce each bug deterministically.
+
+**Scope:** `app/pipeline/floor_layout_mask.py` only (and, only if investigation proves the bug is
+genuinely in the renderer rather than the engine, `app/pipeline/blueprint_svg.py`'s poché-fill
+carving — read its own module docstring on the "fill-the-whole-footprint-black-then-carve-out-each-
+room" technique before touching it). **Do NOT touch `app/pipeline/floor_layout.py` (the `rect`
+engine) — Golden Rule 1 still applies.**
+
+### A2.1 — Reproduce both bugs deterministically (no code changes yet)
+
+Re-run `./.venv/Scripts/python.exe scripts/phase_a_render.py` (or extract just the two reproducing
+cases into a smaller scratch script for faster iteration). Confirm you can reproduce, before any
+fix:
+- **Bug A (black hole):** the 50×60 ft / 3-bed / 2-bath / living+kitchen+dining+entry room list, ANY
+  facing (south, north, east, west all reproduce it) — a solid black rectangle renders inside the
+  house's own exterior wall with no room label/furniture/door, not accounted for by any returned
+  rect.
+- **Bug B (degenerate rooms):** (i) the SAME 50×60 room list under east OR west facing specifically
+  — Master Bedroom's bbox comes back ~1.1 ft wide (aspect ratio ~17); (ii) the 150×150/2-floor
+  case's UPPER floor — a "Bedroom 5" comes back ~0.8 ft wide.
+
+### A2.2 — Root-cause Bug A (the black hole)
+
+This is almost certainly ONE of two root causes — investigate both, don't guess:
+
+1. **An engine-side gap: some cell inside the computed footprint is never actually claimed by any
+   room**, despite `_fill_leftovers()`'s own docstring claiming "the footprint always tiles
+   completely." Add temporary debug instrumentation (print/assert) in `_grow_floor()` right after
+   `_fill_leftovers()` + `_ensure_minimum_presence()` run: iterate every `(c, r)` in the grid and
+   confirm `owner[r][c] >= -2` for every cell (i.e. every cell is either a real room index or the
+   spine, never still `-1`). If any cell is still `-1` after both passes, that's the bug — trace
+   WHY (e.g. a region whose `adjacent_rooms` set came back empty, or a bug in the connected-region
+   flood-fill in `_fill_leftovers()` itself).
+2. **A renderer-side mismatch: the engine's returned rects/parts ARE complete and correct, but
+   `blueprint_svg.py`'s poché-fill carving doesn't carve every part of every room** — e.g. it uses a
+   room's own `x/y/w/h` bbox for a quick full-rectangle carve instead of iterating
+   `room_parts(rect)` for an L/U-shaped room, so a multi-part room's un-carved notch area (which
+   should be SOMEONE ELSE's floor, not this room's) stays black because nothing ever carves THAT
+   region's real owner's shape over it, OR a part gets dropped somewhere in the decompose→render
+   pipeline. Check `_carve_room()`'s call site(s) in `blueprint_svg.py` and confirm every part of
+   every room in the `rects` list (via `room_parts()`) is actually passed to a carve call — not just
+   each room's top-level bbox.
+
+**Print/log your actual finding before fixing** — which of the two (or a third cause you found) is
+it, with evidence (e.g. "cell (14, 9) stayed owner=-1 after fill_leftovers because region X's
+adjacent_rooms was empty" or "Dining Room has 2 parts per room_parts() but only part[0] was carved").
+
+### A2.3 — Fix Bug A
+
+Fix at the root cause found in A2.2 — if it's a growth/fill gap, fix `_grow_floor()`/
+`_fill_leftovers()`/`_ensure_minimum_presence()` so every cell is provably claimed (consider adding
+a permanent, cheap assertion or a `layout_quality.py` hard-violation check that would have caught
+this — see A2.6). If it's a renderer carving gap, fix `blueprint_svg.py` to carve every part of
+every room, not just each room's bbox. **Re-render both Bug-A reproduction cases (A2.1) and visually
+confirm (Read the PNG) the black region is gone** — the carved interior should show real room floors
+tiling the entire footprint with no unexplained fill.
+
+### A2.4 — Root-cause Bug B (degenerate/near-zero-width rooms)
+
+Likely candidates to check, in `floor_layout_mask.py` — investigate, don't assume:
+1. **Seeding interacting badly with the east/west transpose.** `_mask_footprint_dimensions()` /
+   `_grow_floor()` run on `core_dimensions` which, for east/west facing, already has length/width
+   swapped (see `layout_floor_with_warnings()`). Check whether `_exterior_boundary_path()` /
+   `_seed_rooms()`'s "spread egress rooms across 3 walls" logic produces a sane, well-spaced seed
+   for the master bedroom specifically under the swapped cols/rows — or whether the swap causes two
+   seeds to land pathologically close together (which `_grow_rooms()`'s own docstring already
+   documents as a known historical failure mode it was redesigned to avoid, so if it's recurring,
+   something about the east/west path isn't going through the same protections as north/south).
+2. **The `_grow_arm()` fallback topping up AREA without checking resulting WIDTH.** `_grow_arm()`
+   is a last-resort BFS "reach outward and claim the nearest N cells" to hit a room's minimum AREA —
+   re-read its docstring. If a room's main rectangle-extension growth stalls early (boxed in) and
+   `_grow_arm()` then claims a thin one-cell-wide trail of cells to hit min_area, the result
+   satisfies `score_floor_layout()`'s AREA check but produces exactly the ~1-ft-wide sliver
+   reported. Confirm by checking whether the Master Bedroom's cells (under the E/W repro case) form
+   a thin trail/corridor shape rather than a compact blob.
+3. Check whether `layout_quality.py`'s existing "narrow" hard-violation check (governing_width <
+   min_width) is actually firing for these rooms, but the best-of-N candidate loop
+   (`_CANDIDATE_SPINE_WIDTH_DELTAS` × `_CANDIDATE_CROSS_LINK`) has NO candidate that avoids it for
+   this room count/facing combination — i.e. the scorer correctly flags it as bad, but all 4
+   candidates are equally bad in this dimension, so "least bad" is still a sliver.
+
+**Print/log your actual finding before fixing.**
+
+### A2.5 — Fix Bug B
+
+Fix at the root cause found in A2.4. Plausible real fixes depending on cause:
+- If it's the `_grow_arm()` area-only top-up: make the arm-reach prefer cells that keep the room's
+  resulting bbox aspect ratio reasonable (not just nearest-by-BFS-distance), or widen the search to
+  claim a 2-cell-thick strip instead of a 1-cell trail when possible.
+- If it's an east/west-specific seeding bug: fix the boundary-path/seed-spacing computation so it's
+  genuinely facing-agnostic (same quality of seed spacing under any of the 4 facings).
+- If it's "no good candidate exists in the current best-of-N set": consider whether a new candidate
+  knob is needed (this would be a larger change — if you find this is the true cause, STOP and
+  report it rather than guessing at a bigger redesign; this is exactly the kind of finding Golden
+  Rule 8 says to escalate rather than improvise).
+
+**Re-render both Bug-B reproduction cases and visually confirm** the Master Bedroom (east/west case)
+and Bedroom 5 (upper-floor case) now have a reasonable aspect ratio (no stated hard threshold here,
+but "clearly a real room, not a sliver" — cross-check against `SLIVER_ASPECT_RATIO = 2.8` in
+`layout_quality.py` as a rough bar).
+
+### A2.6 — Close the detection gap
+
+Phase A's finding noted `layout_quality.score_floor_layout()` did NOT flag the black-hole bug at all
+(no rects were missing from its own data, so there was nothing wrong from the scorer's point of
+view — the bug is about UNCLAIMED cells the scorer never sees, not about a reported room being
+wrong). Add a cheap, pure check — either inside `score_floor_layout()` itself (parts-aware: sum of
+every returned room's real area, compared against the footprint's own `length × width`, must be
+≈equal within tolerance) or as a standalone assertion/test — so a future regression of Bug A would
+be caught automatically (by a test, and ideally by the scorer penalizing it as a hard violation) in
+the actual layout-generation pipeline, not just by manually eyeballing a PNG.
+
+### A2.7 — Full re-render of the Phase A matrix + tests
+
+- Re-run the FULL 10-render Phase A matrix (not just the 2 repro cases) and confirm: zero
+  black-hole renders, zero near-zero-width rooms, across all 10. Note (but don't feel obligated to
+  fully fix here) whether overall hard-violation counts improved — that's Phase D's job, this phase
+  is scoped to the two specific bugs.
+- Add regression tests to `tests/test_floor_layout_mask.py`: one reproducing the exact Bug-A room
+  list/facing and asserting full cell/area coverage (no gaps — this is the mask-engine equivalent of
+  the existing "exact tiling, no gaps/overlaps" tests already in that file), and one reproducing the
+  exact Bug-B room list/facing and asserting every room's governing width meets its real
+  `room_specs.min_width_for_room()` (or is at least above a sane sliver threshold).
+- Run the full suite (`./.venv/Scripts/python.exe -m pytest -q`). Report the pass count — this phase
+  should not break anything under the still-default `rect` engine, since only `floor_layout_mask.py`
+  (and possibly `blueprint_svg.py`'s carving, which must stay correct for `rect`'s own single-part
+  rooms too — re-check `rect`-engine renders are unaffected if you touch `blueprint_svg.py`).
+
+### A2.8 — Update the findings doc with a dated addendum
+
+Append (don't rewrite) a short "Phase A2 addendum" section to
+`future-plans/mask-adoption-phase-a-findings.md`: what the root causes were, what was fixed, and the
+new re-render evidence (zero black holes, zero degenerate rooms across the matrix). This keeps the
+findings doc an honest, append-only record rather than quietly erasing what was found.
+
+**Acceptance for Phase A2:** both bugs root-caused (not guessed) and fixed in `floor_layout_mask.py`
+(or, only if genuinely warranted, `blueprint_svg.py`'s carving, verified not to affect `rect`); full
+Phase A 10-render matrix re-confirmed free of both bugs via actual PNG inspection; new regression
+tests added and passing; full suite green; findings doc has a dated addendum. Do NOT touch
+`app/pipeline/floor_layout.py`. Do NOT commit/push — report back for review, matching this plan's
+established pattern.
+
+**Only after Phase A2 is complete and reported does Phase B begin.**
 
 ---
 
@@ -522,9 +690,10 @@ isn't forgotten:
 
 ## Suggested commit sequencing (only when the user asks to commit)
 
-1. Phase B (test harness / conftest fixture) — infra, no behavior change.
-2. Phase C (C0 footprint coverage + yard/driveway rendering) — engine-independent, shippable on its own.
-3. Phase G ("every/each floor" parsing) — independent, small; can land any time.
-4. Phase D sub-tasks — one commit each.
-5. Phase E (flip default) — its own commit, as the project requires.
-6. Phase F regression tests + `CLAUDE.md` — docs/tests.
+1. Phase A2 (fix the two new mask-engine bugs) — its own commit(s), lands before everything below.
+2. Phase B (test harness / conftest fixture) — infra, no behavior change.
+3. Phase C (C0 footprint coverage + yard/driveway rendering) — engine-independent, shippable on its own.
+4. Phase G ("every/each floor" parsing) — independent, small; can land any time.
+5. Phase D sub-tasks — one commit each.
+6. Phase E (flip default) — its own commit, as the project requires.
+7. Phase F regression tests + `CLAUDE.md` — docs/tests.

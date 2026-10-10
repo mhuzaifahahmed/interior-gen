@@ -8,9 +8,11 @@ solid black poché block), determinism, correct facing/egress behavior by
 construction, and that the engine never crashes on a range of real room
 programs."""
 
+import pytest
+
 from app.pipeline.floor_layout import footprint_bbox, room_parts
 from app.pipeline.floor_layout_mask import layout_floor, layout_floor_with_warnings
-from app.pipeline.room_specs import classify_room_category
+from app.pipeline.room_specs import classify_room_category, min_area_for_room
 
 # Deliberately NOT a clean divisor of the engine's own internal grid cell
 # size (e.g. 0.1 divides evenly into a common 1.5ft cell size, which makes
@@ -225,3 +227,137 @@ def test_layout_floor_with_warnings_mask_returns_a_list_of_violations():
 def test_layout_floor_mask_empty_rooms_returns_empty():
     rects = layout_floor([], {"length": 40, "width": 40, "unit": "ft"})
     assert rects == []
+
+
+# ---------------------------------------------------------------------------
+# Phase A2 regression tests (2026-10) - the exact two bugs found during
+# Phase A's visual baseline inspection (future-plans/
+# mask-adoption-phase-a-findings.md), fixed in floor_layout_mask.py's
+# _fill_leftovers()/_seed_rooms()/_grow_rooms(). Both reproduce
+# deterministically with the EXACT room lists/facings recorded in that
+# findings doc - kept here verbatim so a future regression is caught by a
+# real, known-bad case, not a synthetic one.
+# ---------------------------------------------------------------------------
+
+_BUG_A_ROOM_LIST = [
+    {"name": "Living Room", "area": 3},
+    {"name": "Kitchen", "area": 1},
+    {"name": "Dining Room", "area": 2},
+    {"name": "Entry", "area": 1},
+    {"name": "Master Bedroom", "area": 2},
+    {"name": "Master Bathroom", "area": 1},
+    {"name": "Bedroom 2", "area": 1},
+    {"name": "Bedroom 3", "area": 1},
+    {"name": "Bathroom 2", "area": 1},
+]
+_BUG_A_DIMENSIONS = {"length": 50.0, "width": 60.0, "unit": "ft"}
+
+
+def _total_area(rect: dict) -> float:
+    return sum(p["w"] * p["h"] for p in room_parts(rect))
+
+
+def test_layout_floor_mask_bug_a_black_hole_full_coverage_south():
+    """Phase A2 Bug A - the 50x60/3-bed/2-bath/LKD/entry room list used to
+    render a literal unexplained solid black hole inside the house's own
+    footprint (an unclaimed grid cell trapped by the cross-link circulation
+    spine, with no real room neighbor - see floor_layout_mask.py's
+    _fill_leftovers() docstring). Asserts the real, exact SUM of every
+    returned room's own parts equals the footprint bbox's own area - this
+    is the same invariant layout_quality.py's new coverage check guards in
+    the real pipeline (see test_score_floor_layout_flags_an_artificially_
+    introduced_coverage_gap below), computed directly here rather than via
+    the sampling-grid _tiles_exactly() helper - a real false-positive
+    "hole" from pure sampling-grid aliasing at this exact geometry was
+    found while writing this test (confirmed by comparing against this
+    exact-arithmetic check, which agreed there was no real gap) - the
+    module docstring above already flags that sampling aliasing risk for
+    _tiles_exactly(), so an exact area-sum comparison is the more reliable
+    choice for a hole-sensitive regression test specifically."""
+    for facing in ("south", "north", "east", "west"):
+        rects = layout_floor(_BUG_A_ROOM_LIST, _BUG_A_DIMENSIONS, facing=facing)
+        fp = footprint_bbox(rects)
+        assert fp is not None
+        fp_area = (fp[2] - fp[0]) * (fp[3] - fp[1])
+        covered = sum(_total_area(r) for r in rects)
+        assert covered == pytest.approx(fp_area, rel=1e-6), (
+            f"facing={facing}: covered={covered:.2f} vs footprint={fp_area:.2f} "
+            "- a region inside the footprint was never claimed by any room"
+        )
+        no_holes, no_overlaps = _tiles_exactly(rects)
+        assert no_overlaps, f"facing={facing}"
+
+
+def test_layout_floor_mask_bug_b_master_bedroom_not_collapsed_east_west():
+    """Phase A2 Bug B - the SAME room list collapsed Master Bedroom to a
+    ~1.1ft-wide, ~20 sq ft single-rectangle sliver (aspect ~17, real min
+    area 135 sq ft) specifically under east/west facing - a room boxed in
+    by an already-grown neighbor on one side and the circulation spine on
+    the other, with zero free cells left for either whole-strip growth or
+    the free-cell arm fallback to claim (see _seed_rooms()'s and
+    _grow_rooms()'s own "Bug B" docstrings). Asserts Master Bedroom's real
+    TOTAL area (summed across parts, not just its bbox) now reaches a
+    substantial fraction of its own real minimum - the actual guarantee
+    Bug B was about (a room's usable area/shape collapsing to near-
+    nothing), not a blanket ban on any room ever having a thin attached
+    leftover part (that's a separate, already-documented, accepted M1
+    engine limitation - see _fill_leftovers()'s own docstring - not what
+    this bug was)."""
+    for facing in ("east", "west"):
+        rects = layout_floor(_BUG_A_ROOM_LIST, _BUG_A_DIMENSIONS, facing=facing)
+        master = next(r for r in rects if r["name"] == "Master Bedroom")
+        min_area = min_area_for_room("Master Bedroom", "ft")
+        area = _total_area(master)
+        assert area >= min_area * 0.9, (
+            f"facing={facing}: Master Bedroom real area {area:.1f} vs min {min_area:.1f} "
+            "looks collapsed"
+        )
+
+
+def test_layout_floor_mask_bug_b_upper_floor_bedroom_not_collapsed():
+    """Phase A2 Bug B, second reproduction - the 150x150/2-floor case's
+    UPPER floor (bedrooms + staircase + sitting area, no facing swap
+    involved) produced a 'Bedroom 5' whose real area (59.5 sq ft, summed
+    across its parts) was well under its own 100 sq ft minimum, with a
+    governing width of just 0.8ft from a thin leftover-glued part - even
+    though its bbox alone looked reasonable (12.9x9.1ft). Asserts its real
+    total area now reaches a substantial fraction of its own minimum."""
+    dimensions = {"length": 150.0, "width": 150.0, "unit": "ft"}
+    rooms = [
+        {"name": "Bedroom 4", "area": 1},
+        {"name": "Bathroom 3", "area": 1},
+        {"name": "Bedroom 5", "area": 1},
+        {"name": "Bathroom 4", "area": 1},
+        {"name": "Staircase", "area": 1},
+        {"name": "Sitting Area", "area": 2},
+    ]
+    rects = layout_floor(rooms, dimensions, facing="south")
+    bedroom5 = next(r for r in rects if r["name"] == "Bedroom 5")
+    min_area = min_area_for_room("Bedroom 5", "ft")
+    area = _total_area(bedroom5)
+    assert area >= min_area * 0.9, f"Bedroom 5 real area {area:.1f} vs min {min_area:.1f} looks collapsed"
+
+
+def test_score_floor_layout_flags_an_artificially_introduced_coverage_gap():
+    """Phase A2.6 - closes the detection gap the Phase A findings called
+    out directly: score_floor_layout() never noticed the black-hole bug at
+    all, since no RETURNED rect was individually wrong - the bug was an
+    UNCLAIMED cell no rect ever accounted for. Simulates that exact shape
+    (a valid layout with one room's area artificially shrunk, as if a
+    region had gone unclaimed) and confirms the scorer's new coverage
+    check (layout_quality._coverage_violation) now catches it as a hard
+    violation - a real regression guard for the FIX's own detection half,
+    not just the engine fix itself."""
+    from app.pipeline.layout_quality import score_floor_layout
+
+    dimensions = {"length": 50.0, "width": 60.0, "unit": "ft"}
+    rects = layout_floor(_BUG_A_ROOM_LIST, dimensions, facing="south")
+    assert rects
+    # Shrink one room's first part well below its real extent - simulates
+    # a chunk of the footprint going unclaimed/unexplained.
+    rects[0] = {**rects[0], "w": rects[0]["w"] * 0.5, "parts": None}
+    rects[0].pop("parts", None)
+    scored = score_floor_layout(rects, dimensions, None)
+    coverage_violations = [v for v in scored.violations if v.kind == "coverage_gap"]
+    assert coverage_violations, "shrinking a room's area should leave an unexplained coverage gap"
+    assert all(v.hard for v in coverage_violations)
