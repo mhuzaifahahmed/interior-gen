@@ -1983,6 +1983,118 @@ def test_run_house_pipeline_per_floor_extras_box_is_unioned_with_the_shared_box(
     assert ("dirty_kitchen", "Dirty Kitchen", 3) in captured[0]
 
 
+class IgnoresEveryFloorRequestProvider(FakeProvider):
+    """Mirrors IgnoresExtraRoomRequestProvider above but for 3 floors, none
+    of which Gemini gave a Dining Room or a Utility/Laundry room - the
+    realistic failure mode Phase G's "every floor" guarantee protects
+    against. Floor 1 also omits Kitchen/Living Room so the ground-floor
+    public-room guarantee's own injections don't accidentally satisfy the
+    dining-room assertion for the wrong reason."""
+
+    def generate_room_layout(
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
+    ):
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+        return {
+            "floors": [
+                {"floor_number": 1, "rooms": [{"name": "Entry", "area": 2}]},
+                {"floor_number": 2, "rooms": [{"name": "Bedroom 1", "area": 2}]},
+                {"floor_number": 3, "rooms": [{"name": "Bedroom 2", "area": 2}]},
+            ]
+        }
+
+
+def test_run_house_pipeline_every_floor_extras_request_lands_on_every_floor(monkeypatch):
+    # Phase G (mask-engine-adoption-and-layout-refinement.md): "dining room
+    # on every floor" typed in the SHARED extras box has no digit for
+    # _FLOOR_REF_RE to match, so before this phase it silently fell through
+    # to the ground-floor-only guarantees - honored on floor 1 only. This
+    # proves the real, deterministic guarantee across all 3 floors, not
+    # just that the prompt text changed (IgnoresEveryFloorRequestProvider's
+    # response omits Dining Room/Utility Room from every floor).
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["heveryfloor1/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="heveryfloor1", status="queued", plot_image_key="heveryfloor1/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = IgnoresEveryFloorRequestProvider()
+    run_house_pipeline(
+        "heveryfloor1",
+        provider,
+        storage,
+        {"length": 60, "width": 80, "unit": "ft"},
+        prompt="3 floors. Extras: dining room on every floor, utility on each floor",
+        floor_count=3,
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "heveryfloor1")
+        assert house_project.status == "done"
+        room_layout = json.loads(house_project.room_layout_json)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    for floor in room_layout["floors"]:
+        rooms = floor["rooms"]
+        categories = [classify_room_category(r["name"]) for r in rooms]
+        assert "dining" in categories, f"floor {floor['floor_number']} missing a dining room: {rooms}"
+        assert "laundry" in categories, f"floor {floor['floor_number']} missing a utility room: {rooms}"
+
+
+def test_parse_extra_rooms_by_floor_numbered_request_unaffected_by_every_floor_support(monkeypatch):
+    # Direct regression guard, at the pipeline-integration level, that
+    # adding "every floor" support did not disturb the pre-existing
+    # numbered-floor path - mirrors
+    # test_run_house_pipeline_guarantees_an_explicit_kitchen_on_floor_2
+    # exactly, just re-asserted here alongside the new "every floor" test
+    # for easy side-by-side comparison.
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+
+    storage = FakeStorage()
+    storage.objects["heveryfloor2/plot.png"] = b"plot-bytes"
+
+    with Session(engine) as session:
+        house_project = HouseProject(id="heveryfloor2", status="queued", plot_image_key="heveryfloor2/plot.png")
+        session.add(house_project)
+        session.commit()
+
+    provider = IgnoresExtraRoomRequestProvider()
+    run_house_pipeline(
+        "heveryfloor2",
+        provider,
+        storage,
+        {"length": 60, "width": 80, "unit": "ft"},
+        prompt="2 floors. Extras: kitchen on the 2nd floor",
+        floor_count=2,
+    )
+
+    with Session(engine) as session:
+        house_project = session.get(HouseProject, "heveryfloor2")
+        room_layout = json.loads(house_project.room_layout_json)
+
+    from app.pipeline.room_specs import classify_room_category
+
+    floor1_rooms = room_layout["floors"][0]["rooms"]
+    floor2_rooms = room_layout["floors"][1]["rooms"]
+    # The numbered request only guarantees the kitchen on floor 2 - it must
+    # not have been (mis)expanded onto floor 1 too.
+    assert any(classify_room_category(r["name"]) == "kitchen" for r in floor2_rooms)
+
+
 def test_run_house_pipeline_reserves_front_yard_before_layout(monkeypatch):
     # A requested front yard must reduce the actual building footprint
     # passed to layout_floor()/the blueprint renderers - reserved BEFORE any

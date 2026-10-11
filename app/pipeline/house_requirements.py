@@ -171,25 +171,55 @@ _FLOOR_REF_RE = re.compile(r"floor\s*(\d+)|(\d+)\s*(?:st|nd|rd|th)\s*floor", re.
 # the comma first avoids this entirely.
 _CLAUSE_SPLIT_RE = re.compile(r"[,.;]|\band\b", re.IGNORECASE)
 
+# Phase G (2026-10, mask-engine-adoption-and-layout-refinement.md): "kitchen/
+# dining/utility on EVERY floor" has no digit for _FLOOR_REF_RE to match, so
+# it used to silently fall through to the ground-floor-only guarantees
+# elsewhere in generate_house.py - a real, user-reported gap (an "every
+# floor" request was honored on the ground floor only). This regex catches
+# the no-digit phrasing ("every floor"/"each floor"/"all floors"/"both
+# floors").
+_EVERY_FLOOR_RE = re.compile(r"\b(?:every|each|all|both)\s+floors?\b", re.IGNORECASE)
+
+# Sentinel floor number returned by parse_extra_rooms_by_floor() for an
+# "every floor"/"each floor"/"all floors"/"both floors" request - this
+# function has no idea how many floors the building actually has, so it
+# cannot emit real floor numbers itself. The caller (generate_house.py's
+# run_house_pipeline(), right after total_floors is known from the real
+# generate_room_layout() response) MUST expand any tuple carrying this
+# sentinel into one real (category, label, floor_number) tuple per floor
+# 1..total_floors before passing extra_rooms into
+# _ensure_requested_rooms_by_floor() - that function silently skips any
+# floor_number it can't find in room_layout["floors"], so an unexpanded
+# sentinel would otherwise just quietly do nothing on every real floor.
+ALL_FLOORS_SENTINEL = 0
+
 
 def parse_extra_rooms_by_floor(text: str) -> list[tuple[str, str, int]]:
     """Scans free text for explicit "<room type> on/in floor N" (or "Nth
-    floor <room type>") requests - returns deduplicated
+    floor <room type>") requests, AND for "<room type> on every/each/all/
+    both floor(s)" requests (no digit) - returns deduplicated
     (category, canonical_label, floor_number) tuples, sorted by floor then
-    category. Best-effort free-text parsing, not full NLP - only acts on
-    requests phrased plainly enough that the room keyword and a floor
-    reference share the same comma/period-separated clause; a vaguer
-    request (no floor number in the same clause) is left to Gemini's own
-    judgement, same as before this function existed."""
+    category. An "every floor"-style request is returned with
+    floor_number == ALL_FLOORS_SENTINEL (0) - see that constant's docstring
+    for why this function can't resolve it to real floor numbers itself, and
+    who must expand it before use. Best-effort free-text parsing, not full
+    NLP - only acts on requests phrased plainly enough that the room
+    keyword and a floor reference (numbered or "every floor"-style) share
+    the same comma/period-separated clause; a vaguer request (neither in
+    the same clause) is left to Gemini's own judgement, same as before this
+    function existed."""
     if not text:
         return []
     results: set[tuple[str, str, int]] = set()
     for clause in _CLAUSE_SPLIT_RE.split(text):
         floor_match = _FLOOR_REF_RE.search(clause)
-        if not floor_match:
-            continue
-        floor_number = int(floor_match.group(1) or floor_match.group(2))
-        if floor_number <= 0:
+        if floor_match:
+            floor_number = int(floor_match.group(1) or floor_match.group(2))
+            if floor_number <= 0:
+                continue
+        elif _EVERY_FLOOR_RE.search(clause):
+            floor_number = ALL_FLOORS_SENTINEL
+        else:
             continue
         for category, keywords in _CATEGORY_KEYWORDS:
             if category not in _EXTRA_ROOM_CATEGORIES:

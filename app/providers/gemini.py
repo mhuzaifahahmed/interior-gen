@@ -228,7 +228,21 @@ def _format_extra_rooms_block(extra_rooms: list[tuple[str, str, int]] | None) ->
     what Gemini's response actually contains."""
     if not extra_rooms:
         return ""
-    lines = [f"- Floor {floor_number} MUST also include a {label}." for _, label, floor_number in extra_rooms]
+    # Phase G (2026-10): house_requirements.ALL_FLOORS_SENTINEL (0) marks an
+    # "every floor"/"each floor"-style request that parse_extra_rooms_by_
+    # floor() can't resolve to real floor numbers on its own (it doesn't
+    # know the floor count) - render it as a plain "every floor" sentence
+    # here rather than the nonsensical "Floor 0". The real, floor-number-
+    # exact guarantee still happens afterward in generate_house.py once the
+    # real floor count is known (see _ensure_requested_rooms_by_floor()) -
+    # this is only the prompt-level hint, same "defense in depth, not the
+    # actual guarantee" caveat as the rest of this function.
+    def _line(label: str, floor_number: int) -> str:
+        if floor_number == 0:
+            return f"- Every floor MUST also include a {label}."
+        return f"- Floor {floor_number} MUST also include a {label}."
+
+    lines = [_line(label, floor_number) for _, label, floor_number in extra_rooms]
     return (
         "The user explicitly requested these additional rooms on specific floors - honor them "
         "exactly, even where they conflict with the general ground/upper convention above:\n"

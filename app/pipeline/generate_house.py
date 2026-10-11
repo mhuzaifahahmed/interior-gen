@@ -18,6 +18,7 @@ from app.pipeline.house_prompts import (
     house_style_words,
 )
 from app.pipeline.house_requirements import (
+    ALL_FLOORS_SENTINEL,
     extra_rooms_from_floor_text,
     mentions_garage,
     mentions_utility,
@@ -677,6 +678,36 @@ def run_house_pipeline(
                     extra_rooms=extra_rooms,
                 )
                 total_floors = len(room_layout["floors"])
+
+                # Phase G (2026-10, mask-engine-adoption-and-layout-
+                # refinement.md): expand any "every floor"/"each floor"
+                # sentinel entries (house_requirements.ALL_FLOORS_SENTINEL,
+                # floor_number == 0) parsed above into one real
+                # (category, label, floor_number) tuple per floor 1..
+                # total_floors, now that the real floor count is finally
+                # known. Must happen BEFORE _ensure_requested_rooms_by_
+                # floor() below - that function silently skips any
+                # floor_number it can't find in room_layout["floors"], so
+                # an unexpanded sentinel would otherwise do nothing on
+                # every real floor (the exact "every floor" request is
+                # honored on the ground floor only" gap this phase fixes).
+                # Numbered requests ("kitchen on floor 2") pass through
+                # unchanged. Utility/laundry ("laundry" is already in
+                # _EXTRA_ROOM_CATEGORIES) rides this same expansion - "utility
+                # on every floor" therefore appears on every floor via
+                # _ensure_requested_rooms_by_floor() below, not via the
+                # ground-floor-only mentions_utility() injection further
+                # down (which still handles the ordinary, non-"every floor"
+                # case unchanged).
+                expanded_extra_rooms: list[tuple[str, str, int]] = []
+                for category, label, floor_number in extra_rooms:
+                    if floor_number == ALL_FLOORS_SENTINEL:
+                        expanded_extra_rooms.extend(
+                            (category, label, fn) for fn in range(1, total_floors + 1)
+                        )
+                    else:
+                        expanded_extra_rooms.append((category, label, floor_number))
+                extra_rooms = list(dict.fromkeys(expanded_extra_rooms))
 
                 # Deterministic bedroom/bathroom-count guarantee - see
                 # _enforce_room_counts()'s own docstring for the real bug

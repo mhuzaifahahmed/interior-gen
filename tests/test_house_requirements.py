@@ -1,4 +1,5 @@
 from app.pipeline.house_requirements import (
+    ALL_FLOORS_SENTINEL,
     DEFAULT_FRONT_YARD_DEPTH_M,
     extra_rooms_from_floor_text,
     mentions_front_yard,
@@ -129,6 +130,57 @@ def test_parse_extra_rooms_by_floor_deduplicates_and_sorts():
     result = parse_extra_rooms_by_floor(text)
     assert result.count(("kitchen", "Kitchen", 2)) == 1
     assert result[0][2] <= result[-1][2]  # sorted by floor number
+
+
+# ---- Phase G (2026-10, mask-engine-adoption-and-layout-refinement.md): ----
+# ---- "every floor"/"each floor"/"all floors"/"both floors" requests ----
+
+
+def test_parse_extra_rooms_by_floor_finds_kitchen_on_every_floor():
+    result = parse_extra_rooms_by_floor("Extras: kitchen on every floor")
+    assert ("kitchen", "Kitchen", ALL_FLOORS_SENTINEL) in result
+
+
+def test_parse_extra_rooms_by_floor_finds_dining_room_on_each_floor():
+    result = parse_extra_rooms_by_floor("Extras: dining room on each floor")
+    assert ("dining", "Dining Room", ALL_FLOORS_SENTINEL) in result
+
+
+def test_parse_extra_rooms_by_floor_finds_utility_on_all_floors():
+    result = parse_extra_rooms_by_floor("Extras: utility on all floors")
+    assert ("laundry", "Laundry Room", ALL_FLOORS_SENTINEL) in result
+
+
+def test_parse_extra_rooms_by_floor_finds_a_request_on_both_floors():
+    result = parse_extra_rooms_by_floor("Extras: study on both floors")
+    assert ("study", "Study", ALL_FLOORS_SENTINEL) in result
+
+
+def test_parse_extra_rooms_by_floor_every_floor_and_numbered_requests_coexist():
+    # Mixing an "every floor" request with a separate numbered request in
+    # the same text must resolve both correctly, independently - the new
+    # "every floor" branch must not interfere with the existing numbered
+    # path at all.
+    text = "Extras: kitchen on every floor, dining room on floor 2"
+    result = parse_extra_rooms_by_floor(text)
+    assert ("kitchen", "Kitchen", ALL_FLOORS_SENTINEL) in result
+    assert ("dining", "Dining Room", 2) in result
+
+
+def test_parse_extra_rooms_by_floor_numbered_requests_unchanged_by_every_floor_support():
+    # Direct regression guard: adding "every floor" support must not change
+    # a single byte of the pre-existing numbered-floor behavior.
+    text = "Extras: kitchen on floor 2, dining room on floor 3"
+    result = parse_extra_rooms_by_floor(text)
+    assert result == [("kitchen", "Kitchen", 2), ("dining", "Dining Room", 3)]
+
+
+def test_parse_extra_rooms_by_floor_every_floor_requires_the_word_floor():
+    # "every day", "every room" etc. must not accidentally match - the
+    # phrase needs the literal word "floor"/"floors" right after
+    # every/each/all/both.
+    result = parse_extra_rooms_by_floor("Extras: kitchen every day, modern style")
+    assert result == []
 
 
 # ---- extra_rooms_from_floor_text() - Part 5 per-floor extras boxes ----
