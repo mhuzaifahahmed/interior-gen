@@ -154,6 +154,33 @@ _CANDIDATE_CROSS_LINK = (True, False)
 # the rect engine's geometry-verification probe.
 FOOTPRINT_EXTRA_MARGIN = 1.3
 
+# ---- Phase C0: auto site-planning (2026-10) ----
+# "This is going to be used for HOUSES" (explicit user directive) - a large
+# residential plot must always leave real yard around the house, not sprawl
+# edge-to-edge just because the room program happens to be big enough to
+# absorb that much area. Values DECIDED by the user (see the plan file's
+# §1.5 "RESOLVED DECISIONS" - do not re-tune without the Phase F rendered
+# matrix making them look visibly wrong):
+#   - AUTO_YARD_PLOT_THRESHOLD_M: below this (on the plot's SHORTER net
+#     side), no auto-yard behavior triggers at all - a compact/urban lot
+#     keeps filling edge-to-edge exactly as before this feature existed.
+#   - MAX_PLOT_COVERAGE: once over threshold, the footprint is additionally
+#     capped at this fraction of the net plot area, so there is always real
+#     yard left over regardless of how large the room program's own target
+#     area would otherwise have been.
+#   - MIN_FRONT_SETBACK_M: a real push-back of the footprint's own facing
+#     edge, so a driveway + a parked car has somewhere to actually fit
+#     between the house and the road, instead of all the coverage-cap
+#     slack landing entirely at the rear (see _front_setback_offset()).
+# Both are strict no-ops on a small/right-sized plot: the coverage cap only
+# ever TIGHTENS an already-larger target_area (min() with the existing
+# value), and the setback is bounded by the real slack the coverage cap (or
+# a naturally small room program) actually freed up - never larger than
+# that, never negative.
+AUTO_YARD_PLOT_THRESHOLD_M = 12.0
+MAX_PLOT_COVERAGE = 0.60
+MIN_FRONT_SETBACK_M = 5.5
+
 
 def layout_floor(
     rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None
@@ -217,7 +244,7 @@ def layout_floor_with_warnings(
     rooms_out = best_rooms or []
     rooms_out = _apply_facing_transform(
         rooms_out, facing, footprint_length, footprint_width, net_length, net_width,
-        exterior, real_length, real_width,
+        exterior, real_length, real_width, unit,
     )
     return rooms_out, best_warnings
 
@@ -253,6 +280,18 @@ def _mask_footprint_dimensions(
     )
     if max_absorbable > 0:
         target_area = min(target_area, max_absorbable)
+
+    # Phase C0 auto site-planning: a genuinely large plot always keeps real
+    # yard, even when the room program is big enough to otherwise want more
+    # than that - see the module-level constants' own docstring. `min()`
+    # only ever TIGHTENS target_area (never raises it), so this is a strict
+    # no-op whenever the room program's own natural target was already
+    # smaller than the coverage cap, and a strict no-op whenever the plot's
+    # shorter side doesn't clear the threshold at all (a compact/urban lot).
+    threshold = to_plot_unit(AUTO_YARD_PLOT_THRESHOLD_M, unit)
+    if min(net_length, net_width) > threshold:
+        target_area = min(target_area, plot_area * MAX_PLOT_COVERAGE)
+
     if target_area <= 0 or target_area >= plot_area:
         return net_length, net_width
     aspect = net_length / net_width if net_width else 1.0
@@ -1196,6 +1235,39 @@ def _map_room(room: dict, fn) -> dict:
     return new_room
 
 
+def _front_setback_offset(
+    facing: str, footprint_length: float, footprint_width: float, net_length: float, net_width: float, unit: str
+) -> tuple[float, float]:
+    """Phase C0's "real front offset, not left to centering" - extra (dx,
+    dy) added ON TOP OF `_anchor_offsets()`'s own plain front-flush (always
+    0 on the facing axis). Without this, every bit of slack a Phase-C0
+    coverage-cap shrink freed up would land entirely at the REAR (since
+    `_anchor_offsets` only centers the CROSS axis and front-flushes the
+    facing axis) - leaving zero room between the house and the road for a
+    driveway + a parked car even on a plot that's genuinely reserving yard.
+
+    Bounded by whatever real slack exists on the facing axis
+    (`net_* - footprint_*`) - never larger than that, never negative, so
+    this is a strict no-op (0.0) whenever the footprint already fills the
+    net envelope on that axis (a small/right-sized plot, or a plot whose
+    room program was never shrunk by the coverage cap in the first place).
+    Deliberately NOT gated on a garage/driveway actually existing - a real
+    front yard (lawn + walkway, even with no driveway) is still the correct
+    "house on a property" look per the priority directive, and gating this
+    on garage presence would make otherwise-identical large plots look
+    inconsistent depending on whether a garage happened to be requested.
+
+    `_anchor_offsets` itself (shared with the frozen `rect` engine, Golden
+    Rule 1) is NOT modified - this is applied here, in mask's own transform
+    pipeline, as the plan's own C0 task explicitly calls for."""
+    setback = to_plot_unit(MIN_FRONT_SETBACK_M, unit)
+    if facing in ("north", "south"):
+        slack = max(net_width - footprint_width, 0.0)
+        return 0.0, min(slack, setback)
+    slack = max(net_length - footprint_length, 0.0)
+    return min(slack, setback), 0.0
+
+
 def _apply_facing_transform(
     rooms: list[dict],
     facing: str,
@@ -1206,16 +1278,23 @@ def _apply_facing_transform(
     exterior: float,
     real_length: float,
     real_width: float,
+    unit: str,
 ) -> list[dict]:
     """The same 4-step transform floor_layout.layout_floor_with_warnings()
     applies around its core algorithm (east/west transpose, anchor within
     any real yard, net-envelope offset, south/east mirror) - applied here
     per-ROOM via _map_room() so it reaches every part, not just the room's
-    own bbox."""
+    own bbox. Phase C0 (2026-10) adds one more offset on top of the plain
+    anchor - see _front_setback_offset()'s own docstring."""
     if facing in ("east", "west"):
         rooms = [_map_room(r, lambda p: {**p, "x": p["y"], "y": p["x"], "w": p["h"], "h": p["w"]}) for r in rooms]
 
     anchor_dx, anchor_dy = _anchor_offsets(facing, footprint_length, footprint_width, net_length, net_width)
+    setback_dx, setback_dy = _front_setback_offset(
+        facing, footprint_length, footprint_width, net_length, net_width, unit
+    )
+    anchor_dx += setback_dx
+    anchor_dy += setback_dy
     if anchor_dx or anchor_dy:
         rooms = [
             _map_room(r, lambda p, dx=anchor_dx, dy=anchor_dy: {**p, "x": p["x"] + dx, "y": p["y"] + dy})

@@ -132,6 +132,12 @@ def render_floor_blueprint_dxf(
     doc.layers.add("TEXT", color=7)
     doc.layers.add("TITLE", color=7)
     doc.layers.add("COLUMNS", color=1)
+    # Phase C3 (2026-10, auto site-planning) - the real plot boundary/yard
+    # band dividers and the driveway apron, as real selectable line geometry
+    # (this module's own line-only doctrine - see module docstring - no
+    # hatch fill, unlike blueprint_svg.py's PNG rendering).
+    doc.layers.add("YARD", color=3)
+    doc.layers.add("DRIVEWAY", color=9)
 
     msp = doc.modelspace()
 
@@ -146,6 +152,14 @@ def render_floor_blueprint_dxf(
     # edges that actually lie on the plot boundary, so no segment is ever
     # drawn twice.
     facing_normalized = (facing or "").strip().lower()
+
+    # Phase C3 - auto site-planning yard boundary + driveway, mirroring
+    # blueprint_svg.py's PNG rendering (C1/C2) as real line geometry instead
+    # of a raster hatch. Ground-floor-only (both functions self-gate on
+    # floor_number), strict no-op whenever the footprint already fills the
+    # plot - same guarantees as the PNG.
+    _draw_yard_dxf(msp, length, width, fp, floor_number)
+    _draw_driveway_dxf(msp, rects, fp, facing_normalized, length, width, floor_number)
     # Parts-aware (2026-10, grid-mask engine): draw exterior walls for
     # EVERY part of every room, not just a room's own bbox - a plain-
     # rectangle room has exactly one part (its own bbox), so this is
@@ -467,3 +481,98 @@ def _draw_room_text(msp, rect: dict, unit: str) -> None:
         dxfattribs={"layer": "TEXT", "height": label_height * 0.75},
     )
     dims_text.set_placement((cx, cy - label_height * 0.6), align=TextEntityAlignment.MIDDLE_CENTER)
+
+
+# ---- Auto site-planning: yard + driveway (Phase C3, 2026-10) ----
+# Mirrors blueprint_svg.py's PNG rendering (_draw_yard()/_draw_driveway(),
+# C1/C2) as real, selectable DXF line geometry instead of a raster hatch -
+# this module's own established "editable lines, not a filled region"
+# doctrine (see module docstring: walls are LWPOLYLINEs here, not poché).
+
+
+def _draw_yard_dxf(msp, length: float, width: float, fp: tuple[float, float, float, float], floor_number: int) -> None:
+    """The real plot boundary (property line) plus the house footprint's
+    own edges projected out to that boundary on all four sides - the same
+    front/rear/side yard-band dividers blueprint_svg._draw_yard() hatches,
+    drawn here as plain lines on the YARD layer. Ground-floor-only (matches
+    the PNG's own gate - §1.5 "RESOLVED DECISIONS" #3, upper floors have no
+    real exterior ground-level yard). A strict no-op (nothing drawn) when
+    the footprint already fills the plot - the normal no-op case for a
+    small/right-sized plot."""
+    if floor_number != 1:
+        return
+    fp_x0, fp_y0, fp_x1, fp_y1 = fp
+    if fp_x0 <= 1e-6 and fp_y0 <= 1e-6 and fp_x1 >= length - 1e-6 and fp_y1 >= width - 1e-6:
+        return
+
+    msp.add_lwpolyline(
+        [(0, 0), (length, 0), (length, width), (0, width)],
+        close=True,
+        dxfattribs={"layer": "YARD"},
+    )
+    for (x0, y0, x1, y1) in (
+        (0, fp_y0, length, fp_y0), (0, fp_y1, length, fp_y1),
+        (fp_x0, 0, fp_x0, width), (fp_x1, 0, fp_x1, width),
+    ):
+        msp.add_line((x0, y0), (x1, y1), dxfattribs={"layer": "YARD"})
+
+
+def _draw_driveway_dxf(
+    msp,
+    rects: list[dict],
+    fp: tuple[float, float, float, float],
+    facing: str,
+    length: float,
+    width: float,
+    floor_number: int,
+) -> None:
+    """A real DXF rectangle outline for the driveway apron, on its own
+    DRIVEWAY layer - same "garage has a real part touching the house's own
+    facing edge" gate as blueprint_svg._draw_driveway() (a garage not
+    adjacent to the facing edge is Phase D4's job, not this function's -
+    skipped rather than drawn disconnected). The touches/span branching is
+    duplicated here in REAL units (not imported from blueprint_svg.py,
+    which computes the equivalent in PIXELS) - simpler and safer than
+    exporting private per-facing lambdas across modules for four lines of
+    arithmetic."""
+    if floor_number != 1:
+        return
+    facing = (facing or "").strip().lower()
+    if facing not in ("north", "south", "east", "west"):
+        return
+    garage = next((r for r in rects if classify_room_category(str(r.get("name") or "")) == "garage"), None)
+    if garage is None:
+        return
+
+    fp_x0, fp_y0, fp_x1, fp_y1 = fp
+    if facing == "north":
+        touches = lambda p: abs(p["y"] - fp_y0) < _EDGE_TOL
+        span = lambda p: (p["x"], p["x"] + p["w"])
+    elif facing == "south":
+        touches = lambda p: abs((p["y"] + p["h"]) - fp_y1) < _EDGE_TOL
+        span = lambda p: (p["x"], p["x"] + p["w"])
+    elif facing == "west":
+        touches = lambda p: abs(p["x"] - fp_x0) < _EDGE_TOL
+        span = lambda p: (p["y"], p["y"] + p["h"])
+    else:  # east
+        touches = lambda p: abs((p["x"] + p["w"]) - fp_x1) < _EDGE_TOL
+        span = lambda p: (p["y"], p["y"] + p["h"])
+
+    touching_parts = [p for p in room_parts(garage) if touches(p)]
+    if not touching_parts:
+        return
+    part = max(touching_parts, key=lambda p: span(p)[1] - span(p)[0])
+    start, end = span(part)
+    if end - start <= 1e-6:
+        return
+
+    if facing == "north":
+        box = [(start, 0), (end, 0), (end, fp_y0), (start, fp_y0)]
+    elif facing == "south":
+        box = [(start, fp_y1), (end, fp_y1), (end, width), (start, width)]
+    elif facing == "west":
+        box = [(0, start), (0, end), (fp_x0, end), (fp_x0, start)]
+    else:  # east
+        box = [(fp_x1, start), (fp_x1, end), (length, end), (length, start)]
+
+    msp.add_lwpolyline(box, close=True, dxfattribs={"layer": "DRIVEWAY"})

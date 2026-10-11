@@ -245,6 +245,16 @@ def render_floor_blueprint(
     if house_x0 > plot_x0 + 0.5 or house_y0 > plot_y0 + 0.5 or house_x1 < plot_x1 - 0.5 or house_y1 < plot_y1 - 0.5:
         _draw_property_line(draw, plot_x0, plot_y0, plot_x1, plot_y1)
 
+    # Auto site-planning: labeled yard zones + driveway apron (Phase C,
+    # 2026-10) - ground floor ONLY (§1.5 "RESOLVED DECISIONS" #3: an upper
+    # floor has no real exterior ground-level yard of its own, so it keeps
+    # the plain open-space look above - just the property line, nothing
+    # more). Drawn after the grid/property line but before the house's own
+    # solid poché walls, matching the plan's own C1 ordering.
+    if floor_number == 1:
+        _draw_yard(draw, plot_x0, plot_y0, plot_x1, plot_y1, house_x0, house_y0, house_x1, house_y1, facing, small_font)
+        _draw_driveway(draw, rects, fp, facing, plot_x0, plot_y0, plot_x1, plot_y1, scale, small_font)
+
     # Solid poché wall base - fill the HOUSE's own footprint (extended
     # outward for the exterior wall) black, THEN carve each room's
     # interior back out of it. See module docstring for why this single
@@ -410,6 +420,197 @@ def _draw_property_line(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: flo
     in the same soft ink used for dimension lines - legible, but clearly
     secondary to the solid poché wall it surrounds."""
     draw.rectangle([x0, y0, x1, y1], outline=DIM_LINE_COLOR, width=1)
+
+
+# ---- Auto site-planning: yard + driveway (Phase C, 2026-10) ----
+# C0 (floor_layout_mask.py) can now cap a large plot's footprint and push it
+# back from the facing edge, so a real front/rear/side yard genuinely
+# exists for the mask engine - these two functions draw that gap instead of
+# leaving it blank "drafting sheet" (the single biggest perceived-quality
+# gap found during Phase A: a tiny house floating in a sea of empty grid).
+# Engine-independent - works identically whenever footprint_bbox(rects) is
+# smaller than the plot, whichever engine produced that gap.
+YARD_REAR_HATCH_COLOR = (158, 178, 157)   # soft sage, reads as "garden"
+YARD_SIDE_HATCH_COLOR = (191, 184, 162)   # soft neutral, reads as "setback"
+DRIVEWAY_FILL = (214, 210, 199)           # light paving gray-beige
+DRIVEWAY_OUTLINE = (110, 108, 92)         # INK_SOFT
+
+_MIN_ZONE_LABEL_W_PX = 46
+_MIN_ZONE_LABEL_H_PX = 16
+
+
+def _draw_hatch(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, color: tuple, spacing: float = 14) -> None:
+    """A plain 45-degree diagonal hatch, clipped to [x0,x1]x[y0,y1] - a
+    lightweight stand-in for a real crosshatch fill, used to mark an
+    outdoor yard zone as visually distinct from an interior room's solid
+    poché fill WITHOUT drawing a filled rectangle (which would read as a
+    room, not outdoor ground - see render_floor_blueprint()'s own "do NOT
+    fill it like a room or a wall" requirement). A degenerate (near-zero)
+    box draws nothing - this is what makes the yard drawing a strict no-op
+    on a right-sized plot where the footprint already fills it."""
+    if x1 - x0 < 1 or y1 - y0 < 1:
+        return
+    c_min = x0 - y1
+    c_max = x1 - y0
+    c = c_min
+    while c <= c_max:
+        candidates = []
+        for px, py in ((x0, x0 - c), (x1, x1 - c), (c + y0, y0), (c + y1, y1)):
+            if x0 - 0.5 <= px <= x1 + 0.5 and y0 - 0.5 <= py <= y1 + 0.5:
+                candidates.append((px, py))
+        if len(candidates) >= 2:
+            p0 = candidates[0]
+            p1 = max(candidates, key=lambda p: (p[0] - p0[0]) ** 2 + (p[1] - p0[1]) ** 2)
+            if p1 != p0:
+                draw.line([p0, p1], fill=color, width=1)
+        c += spacing
+
+
+def _draw_zone_label(draw: ImageDraw.ImageDraw, box: tuple, text: str, font: ImageFont.FreeTypeFont) -> None:
+    """Same restraint as every other label in this module (_draw_room_label
+    etc.) - drawn only when the zone is actually big enough to hold it
+    legibly; a thin sliver of side yard gets the hatch with no text rather
+    than overlapping/illegible text."""
+    x0, y0, x1, y1 = box
+    if (x1 - x0) < _MIN_ZONE_LABEL_W_PX or (y1 - y0) < _MIN_ZONE_LABEL_H_PX:
+        return
+    _draw_centered_text(draw, ((x0 + x1) / 2, (y0 + y1) / 2), text, font, INK_SOFT)
+
+
+def _draw_yard(
+    draw: ImageDraw.ImageDraw,
+    plot_x0: float, plot_y0: float, plot_x1: float, plot_y1: float,
+    house_x0: float, house_y0: float, house_x1: float, house_y1: float,
+    facing: str | None,
+    font: ImageFont.FreeTypeFont,
+) -> None:
+    """Phase C1 - labeled outdoor zones in the gap between the house's own
+    footprint (house_x0..y1, pixel coords - from footprint_bbox()) and the
+    full plot (plot_x0..y1). `facing` decides which band is the FRONT
+    (road-side, between the plot's facing edge and the house's matching
+    edge - same edge `_front_door_opening()` already uses, so the two can
+    never disagree about which side the road is on): the opposite band is
+    the REAR GARDEN, and the two remaining bands (spanning only the house's
+    own depth, not double-counted into front/rear) are the SIDE YARDS.
+
+    Ground-floor-only treatment is the CALLER's job (render_floor_
+    blueprint() only invokes this for floor_number == 1, per the plan's
+    §1.5 "RESOLVED DECISIONS" #3 - upper floors keep the plain, unlabeled
+    open-space look that already existed before this feature: just the
+    property-line outline, nothing more).
+
+    A strict no-op whenever the footprint already fills the plot on a given
+    axis (a small/right-sized plot) - each band collapses to a degenerate
+    box and _draw_hatch()/_draw_zone_label() both already no-op on that, so
+    nothing renders differently there at all."""
+    facing = (facing or "").strip().lower()
+    if facing not in _FACING_ORDER:
+        # No real facing signal - draw nothing rather than guess which side
+        # is the road (same "no signal, no mark" restraint this module
+        # already uses for the front door - see _front_door_opening()).
+        return
+
+    if facing in ("north", "south"):
+        if facing == "north":
+            front_box = (plot_x0, plot_y0, plot_x1, house_y0)
+            rear_box = (plot_x0, house_y1, plot_x1, plot_y1)
+        else:
+            front_box = (plot_x0, house_y1, plot_x1, plot_y1)
+            rear_box = (plot_x0, plot_y0, plot_x1, house_y0)
+        left_box = (plot_x0, house_y0, house_x0, house_y1)
+        right_box = (house_x1, house_y0, plot_x1, house_y1)
+    else:
+        if facing == "west":
+            front_box = (plot_x0, plot_y0, house_x0, plot_y1)
+            rear_box = (house_x1, plot_y0, plot_x1, plot_y1)
+        else:
+            front_box = (house_x1, plot_y0, plot_x1, plot_y1)
+            rear_box = (plot_x0, plot_y0, house_x0, plot_y1)
+        left_box = (house_x0, plot_y0, house_x1, house_y0)
+        right_box = (house_x0, house_y1, house_x1, plot_y1)
+
+    _draw_hatch(draw, *rear_box, YARD_REAR_HATCH_COLOR, spacing=14)
+    _draw_zone_label(draw, rear_box, "GARDEN", font)
+
+    for side_box in (left_box, right_box):
+        _draw_hatch(draw, *side_box, YARD_SIDE_HATCH_COLOR, spacing=18)
+        _draw_zone_label(draw, side_box, "SIDE YARD", font)
+
+    # The front zone is left UNHATCHED here - the driveway (C2, drawn
+    # separately, on top of this same band) is the real feature there; a
+    # hatch underneath it would visually compete with the driveway's own
+    # paving fill. Still gets a label whenever there's real room (the
+    # driveway itself is narrower than the full front band when the garage
+    # is narrower than the house, leaving visible plain front-yard beside
+    # it).
+    _draw_zone_label(draw, front_box, "FRONT YARD", font)
+
+
+def _draw_driveway(
+    draw: ImageDraw.ImageDraw,
+    rects: list[dict],
+    fp: tuple[float, float, float, float],
+    facing: str | None,
+    plot_x0: float, plot_y0: float, plot_x1: float, plot_y1: float,
+    scale: float,
+    font: ImageFont.FreeTypeFont,
+) -> None:
+    """Phase C2 - a driveway apron from the plot's facing (road) boundary
+    to the garage, drawn only when a room classifies as `garage`
+    (room_specs.classify_room_category) AND that garage has a real part
+    touching the HOUSE's own facing edge (the same edge _front_door_
+    opening() checks against) - the normal case, since generate_house.py's
+    garage injection already targets the front zone and Phase D4 is where
+    the engine's own road-edge bias belongs. A garage that isn't adjacent
+    to the facing edge is a known, separate gap (Phase D4's job, not this
+    renderer's) - this function simply skips drawing a driveway rather than
+    drawing one that doesn't actually connect to anything, which would be
+    more misleading than no driveway at all."""
+    facing = (facing or "").strip().lower()
+    if facing not in _FACING_ORDER:
+        return
+    garage = next((r for r in rects if classify_room_category(r["name"]) == "garage"), None)
+    if garage is None:
+        return
+
+    fp_x0, fp_y0, fp_x1, fp_y1 = fp
+    if facing == "north":
+        touches = lambda p: abs(p["y"] - fp_y0) < _EDGE_TOL
+        span = lambda p: (p["x"], p["x"] + p["w"])
+    elif facing == "south":
+        touches = lambda p: abs((p["y"] + p["h"]) - fp_y1) < _EDGE_TOL
+        span = lambda p: (p["x"], p["x"] + p["w"])
+    elif facing == "west":
+        touches = lambda p: abs(p["x"] - fp_x0) < _EDGE_TOL
+        span = lambda p: (p["y"], p["y"] + p["h"])
+    else:  # east
+        touches = lambda p: abs((p["x"] + p["w"]) - fp_x1) < _EDGE_TOL
+        span = lambda p: (p["y"], p["y"] + p["h"])
+
+    touching_parts = [p for p in room_parts(garage) if touches(p)]
+    if not touching_parts:
+        return
+    part = max(touching_parts, key=lambda p: span(p)[1] - span(p)[0])
+    start, end = span(part)
+
+    # The band runs from the PLOT's own facing boundary out to the HOUSE's
+    # matching edge (fp_*), spanning the garage's own [start,end] on the
+    # cross axis - same front-band geometry _draw_yard() uses, just
+    # restricted to the garage's own width instead of the full plot width.
+    if facing == "north":
+        box = (plot_x0 + start * scale, plot_y0, plot_x0 + end * scale, plot_y0 + fp_y0 * scale)
+    elif facing == "south":
+        box = (plot_x0 + start * scale, plot_y0 + fp_y1 * scale, plot_x0 + end * scale, plot_y1)
+    elif facing == "west":
+        box = (plot_x0, plot_y0 + start * scale, plot_x0 + fp_x0 * scale, plot_y0 + end * scale)
+    else:  # east
+        box = (plot_x0 + fp_x1 * scale, plot_y0 + start * scale, plot_x1, plot_y0 + end * scale)
+
+    x0, y0, x1, y1 = box
+    if (x1 - x0) < 2 or (y1 - y0) < 2:
+        return
+    draw.rectangle([x0, y0, x1, y1], fill=DRIVEWAY_FILL, outline=DRIVEWAY_OUTLINE, width=1)
+    _draw_zone_label(draw, box, "DRIVEWAY", font)
 
 
 # Structural columns (2026-10, Part 3) - a small, solid square, slightly

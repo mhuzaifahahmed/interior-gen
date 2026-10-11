@@ -3,6 +3,8 @@ from io import BytesIO
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from app.pipeline.blueprint_svg import (
+    MARGIN_LEFT_PX,
+    MARGIN_TOP_PX,
     MAX_TARGET_PLOT_LONGEST_SIDE_PX,
     PAPER,
     TARGET_PLOT_LONGEST_SIDE_PX,
@@ -11,9 +13,11 @@ from app.pipeline.blueprint_svg import (
     WINDOW_MAX_LENGTH_M,
     _adaptive_target_longest_side_px,
     _draw_columns,
+    _draw_driveway,
     _draw_furniture,
     _draw_room_label,
     _draw_windows,
+    _draw_yard,
     _fit_room_name,
     _front_door_opening,
     _furnish_bedroom,
@@ -832,3 +836,120 @@ def test_render_floor_blueprint_renders_cleanly_with_a_wide_open_room():
     png_bytes = render_floor_blueprint(1, rects, dimensions)
     image = Image.open(BytesIO(png_bytes))
     assert image.size[0] > 0 and image.size[1] > 0
+
+
+# ---------------------------------------------------------------------------
+# Phase C1/C2 (2026-10) - auto site-planning: labeled yard zones + a
+# driveway apron in the gap between the house's own footprint and the full
+# plot. Engine-independent (works purely off footprint_bbox(rects) vs. the
+# plot, whichever engine produced the gap) - tested here directly against
+# hand-built rects/footprint boxes, not through either layout engine, per
+# this module's own "no I/O, pure" convention for its renderer-level tests.
+# ---------------------------------------------------------------------------
+
+
+def _yard_canvas(size=400):
+    image = Image.new("RGB", (size, size), PAPER)
+    draw = ImageDraw.Draw(image)
+    return image, draw
+
+
+_YARD_FONT = ImageFont.load_default(size=11)
+
+
+def test_draw_yard_draws_something_in_the_gap_for_a_real_facing():
+    # South facing: the REAR garden band is the strip OPPOSITE the facing
+    # edge (low-y, since south's facing/road edge is high-y) - well away
+    # from the house box itself.
+    image, draw = _yard_canvas()
+    _draw_yard(draw, 0, 0, 400, 400, 150, 150, 250, 250, "south", _YARD_FONT)
+    blank = Image.new("RGB", image.size, PAPER)
+    band = (0, 0, 400, 140)
+    assert ImageChops.difference(image.crop(band), blank.crop(band)).getbbox() is not None
+
+
+def test_draw_yard_is_a_strict_no_op_when_footprint_fills_the_plot():
+    # The small/right-sized-plot case - house box == plot box exactly, the
+    # same geometry C0 guarantees for a plot that never needed shrinking.
+    image, draw = _yard_canvas()
+    _draw_yard(draw, 0, 0, 400, 400, 0, 0, 400, 400, "south", _YARD_FONT)
+    blank = Image.new("RGB", image.size, PAPER)
+    assert ImageChops.difference(image, blank).getbbox() is None
+
+
+def test_draw_yard_draws_nothing_without_a_real_facing_signal():
+    # Same "no signal, no mark" restraint this module already uses for the
+    # front door (_front_door_opening()) - an unrecognized/missing facing
+    # must never guess which side the road is on.
+    image, draw = _yard_canvas()
+    _draw_yard(draw, 0, 0, 400, 400, 150, 150, 250, 250, None, _YARD_FONT)
+    blank = Image.new("RGB", image.size, PAPER)
+    assert ImageChops.difference(image, blank).getbbox() is None
+
+
+def test_draw_driveway_drawn_when_garage_touches_the_facing_edge():
+    image, draw = _yard_canvas()
+    fp = (150.0, 150.0, 250.0, 250.0)
+    # South facing: the house's facing edge is fp_y1 (250) - this garage's
+    # bottom edge sits exactly there.
+    rects = [{"name": "Garage", "x": 150.0, "y": 200.0, "w": 50.0, "h": 50.0}]
+    _draw_driveway(draw, rects, fp, "south", 0, 0, 400, 400, 1.0, _YARD_FONT)
+    blank = Image.new("RGB", image.size, PAPER)
+    band = (150, 250, 200, 400)
+    assert ImageChops.difference(image.crop(band), blank.crop(band)).getbbox() is not None
+
+
+def test_draw_driveway_no_op_without_a_garage_room():
+    image, draw = _yard_canvas()
+    fp = (150.0, 150.0, 250.0, 250.0)
+    rects = [{"name": "Living Room", "x": 150.0, "y": 200.0, "w": 50.0, "h": 50.0}]
+    _draw_driveway(draw, rects, fp, "south", 0, 0, 400, 400, 1.0, _YARD_FONT)
+    blank = Image.new("RGB", image.size, PAPER)
+    assert ImageChops.difference(image, blank).getbbox() is None
+
+
+def test_draw_driveway_no_op_when_garage_not_adjacent_to_the_facing_edge():
+    # The garage sits fully in the interior of the footprint, touching no
+    # exterior edge at all - Phase D4's job to fix placement, not this
+    # renderer's; drawing a disconnected apron would be more misleading
+    # than drawing nothing.
+    image, draw = _yard_canvas()
+    fp = (150.0, 150.0, 250.0, 250.0)
+    rects = [{"name": "Garage", "x": 180.0, "y": 180.0, "w": 40.0, "h": 40.0}]
+    _draw_driveway(draw, rects, fp, "south", 0, 0, 400, 400, 1.0, _YARD_FONT)
+    blank = Image.new("RGB", image.size, PAPER)
+    assert ImageChops.difference(image, blank).getbbox() is None
+
+
+def test_render_floor_blueprint_yard_only_on_ground_floor():
+    # End-to-end (render_floor_blueprint itself, not the lower-level draw
+    # functions) - a small footprint on a much larger plot must show a
+    # real yard treatment on floor 1, and none at all on an upper floor
+    # (§1.5 "RESOLVED DECISIONS" #3).
+    rects = [
+        {"name": "Living Room", "x": 40.0, "y": 40.0, "w": 10.0, "h": 10.0},
+        {"name": "Garage", "x": 50.0, "y": 40.0, "w": 10.0, "h": 10.0},
+    ]
+    dimensions = {"length": 100.0, "width": 100.0, "unit": "ft"}
+
+    floor1_bytes = render_floor_blueprint(1, rects, dimensions, 2, "south")
+    floor2_bytes = render_floor_blueprint(2, rects, dimensions, 2, "south")
+    floor1 = Image.open(BytesIO(floor1_bytes)).convert("RGB")
+    floor2 = Image.open(BytesIO(floor2_bytes)).convert("RGB")
+    assert floor1.size == floor2.size
+
+    # The REAR-GARDEN band for south facing - the strip between the plot's
+    # own top (north) edge and the house footprint's own top edge
+    # (fp_y0=40 real units) - far from the entrance/driveway (both sit on
+    # the OPPOSITE, south side of the footprint, fp_y1=50), so comparing
+    # floor1 directly against floor2 here isolates the garden hatch alone
+    # (the grid itself is identical on both floors, so this can't be a
+    # false positive from that).
+    scale = _adaptive_target_longest_side_px(rects, 100.0, 100.0) / 100.0
+    band = (
+        int(MARGIN_LEFT_PX + 5),
+        int(MARGIN_TOP_PX + 2),
+        int(MARGIN_LEFT_PX + 90 * scale),
+        int(MARGIN_TOP_PX + 35 * scale),
+    )
+    assert ImageChops.difference(floor1.crop(band), floor2.crop(band)).getbbox() is not None

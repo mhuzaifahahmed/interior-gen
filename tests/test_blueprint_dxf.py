@@ -349,3 +349,65 @@ def test_render_floor_blueprint_dxf_no_columns_for_rooms_within_the_span():
     doc = _parse(render_floor_blueprint_dxf(1, rects, dimensions))
     columns = [p for p in doc.modelspace().query("LWPOLYLINE") if p.dxf.layer == "COLUMNS"]
     assert len(columns) == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase C3 (2026-10) - auto site-planning yard boundary + driveway, mirrored
+# into the real .dxf export as line-only geometry (this module's own
+# doctrine - see module docstring), on dedicated YARD/DRIVEWAY layers.
+# ---------------------------------------------------------------------------
+
+_SMALL_FOOTPRINT_RECTS = [
+    {"name": "Living Room", "x": 40.0, "y": 40.0, "w": 10.0, "h": 10.0},
+    {"name": "Garage", "x": 50.0, "y": 40.0, "w": 10.0, "h": 10.0},
+]
+_BIG_PLOT_DIMENSIONS = {"length": 100.0, "width": 100.0, "unit": "ft"}
+
+
+def test_render_floor_blueprint_dxf_yard_and_driveway_layers_present_on_ground_floor():
+    doc = _parse(render_floor_blueprint_dxf(1, _SMALL_FOOTPRINT_RECTS, _BIG_PLOT_DIMENSIONS, "south"))
+    msp = doc.modelspace()
+    yard_entities = list(msp.query('*[layer=="YARD"]'))
+    driveway_entities = list(msp.query('*[layer=="DRIVEWAY"]'))
+    # Property-line boundary (1) + 4 front/rear/side band divider lines.
+    assert len(yard_entities) == 5
+    # The Garage in _SMALL_FOOTPRINT_RECTS touches the footprint's own south
+    # (facing) edge, so a real driveway apron should be drawn.
+    assert len(driveway_entities) == 1
+
+    audit_result = doc.audit()
+    assert len(audit_result.errors) == 0
+
+
+def test_render_floor_blueprint_dxf_no_yard_or_driveway_on_an_upper_floor():
+    doc = _parse(render_floor_blueprint_dxf(2, _SMALL_FOOTPRINT_RECTS, _BIG_PLOT_DIMENSIONS, "south"))
+    msp = doc.modelspace()
+    assert list(msp.query('*[layer=="YARD"]')) == []
+    assert list(msp.query('*[layer=="DRIVEWAY"]')) == []
+
+    audit_result = doc.audit()
+    assert len(audit_result.errors) == 0
+
+
+def test_render_floor_blueprint_dxf_no_driveway_without_a_garage_room():
+    rects = [{"name": "Living Room", "x": 40.0, "y": 40.0, "w": 20.0, "h": 10.0}]
+    doc = _parse(render_floor_blueprint_dxf(1, rects, _BIG_PLOT_DIMENSIONS, "south"))
+    msp = doc.modelspace()
+    assert list(msp.query('*[layer=="YARD"]')) != []  # still a real yard gap
+    assert list(msp.query('*[layer=="DRIVEWAY"]')) == []
+
+    audit_result = doc.audit()
+    assert len(audit_result.errors) == 0
+
+
+def test_render_floor_blueprint_dxf_no_yard_when_footprint_fills_the_plot():
+    # A right-sized plot (footprint == plot exactly) - the strict no-op
+    # case C0/C1/C3 all guarantee.
+    dimensions = {"length": 20.0, "width": 20.0, "unit": "ft"}
+    rects = [{"name": "Living Room", "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0}]
+    doc = _parse(render_floor_blueprint_dxf(1, rects, dimensions, "south"))
+    msp = doc.modelspace()
+    assert list(msp.query('*[layer=="YARD"]')) == []
+
+    audit_result = doc.audit()
+    assert len(audit_result.errors) == 0

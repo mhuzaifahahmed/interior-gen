@@ -11,8 +11,15 @@ programs."""
 import pytest
 
 from app.pipeline.floor_layout import footprint_bbox, room_parts
-from app.pipeline.floor_layout_mask import layout_floor, layout_floor_with_warnings
-from app.pipeline.room_specs import classify_room_category, min_area_for_room
+from app.pipeline.floor_layout_mask import (
+    AUTO_YARD_PLOT_THRESHOLD_M,
+    MAX_PLOT_COVERAGE,
+    MIN_FRONT_SETBACK_M,
+    _mask_footprint_dimensions,
+    layout_floor,
+    layout_floor_with_warnings,
+)
+from app.pipeline.room_specs import classify_room_category, min_area_for_room, to_plot_unit
 
 # Deliberately NOT a clean divisor of the engine's own internal grid cell
 # size (e.g. 0.1 divides evenly into a common 1.5ft cell size, which makes
@@ -361,3 +368,82 @@ def test_score_floor_layout_flags_an_artificially_introduced_coverage_gap():
     coverage_violations = [v for v in scored.violations if v.kind == "coverage_gap"]
     assert coverage_violations, "shrinking a room's area should leave an unexplained coverage gap"
     assert all(v.hard for v in coverage_violations)
+
+
+# ---------------------------------------------------------------------------
+# Phase C0 (2026-10) - auto site-planning: a plot-coverage cap + a real
+# front setback on a genuinely large plot, both strict no-ops on a small/
+# right-sized plot (or a naturally small room program). See floor_layout_
+# mask.py's own module-level constants docstring for the full rationale
+# (values DECIDED in the plan's §1.5 "RESOLVED DECISIONS").
+# ---------------------------------------------------------------------------
+
+_DENSE_BEDROOM_PROGRAM = [{"name": f"Bedroom {i}", "area": 2} for i in range(80)]
+
+
+def test_mask_footprint_dimensions_coverage_cap_binds_on_a_large_plot_with_a_dense_program():
+    unit = "ft"
+    net = to_plot_unit(AUTO_YARD_PLOT_THRESHOLD_M, unit) + 60  # comfortably over threshold
+    length, width = _mask_footprint_dimensions(_DENSE_BEDROOM_PROGRAM, net, net, unit, None)
+    coverage = (length * width) / (net * net)
+    assert coverage <= MAX_PLOT_COVERAGE + 1e-6
+
+
+def test_mask_footprint_dimensions_coverage_cap_is_a_no_op_below_the_threshold():
+    # The IDENTICAL dense room program that gets capped above - on a plot
+    # just under AUTO_YARD_PLOT_THRESHOLD_M, the cap must never fire at
+    # all, matching this engine's behavior before Phase C0 existed.
+    unit = "ft"
+    net = to_plot_unit(AUTO_YARD_PLOT_THRESHOLD_M, unit) - 5
+    length, width = _mask_footprint_dimensions(_DENSE_BEDROOM_PROGRAM, net, net, unit, None)
+    assert length == pytest.approx(net)
+    assert width == pytest.approx(net)
+
+
+def test_mask_footprint_dimensions_coverage_cap_is_a_no_op_for_a_sparse_program():
+    # A naturally small room program on a large plot - the cap only ever
+    # TIGHTENS an already-larger target (min()), so a program that never
+    # needed 60% of the plot in the first place must come out unaffected
+    # (well under the cap, not pinned exactly at it).
+    unit = "ft"
+    net = to_plot_unit(AUTO_YARD_PLOT_THRESHOLD_M, unit) + 60
+    length, width = _mask_footprint_dimensions(_SIX_ROOM_PROGRAM, net, net, unit, None)
+    coverage = (length * width) / (net * net)
+    assert coverage < MAX_PLOT_COVERAGE
+
+
+_FRONT_SETBACK_PROGRAM = [
+    {"name": "Living Room", "area": 3}, {"name": "Kitchen", "area": 1}, {"name": "Dining Room", "area": 2},
+    {"name": "Entry", "area": 1}, {"name": "Master Bedroom", "area": 2}, {"name": "Master Bathroom", "area": 1},
+    {"name": "Bedroom 2", "area": 1}, {"name": "Bathroom 2", "area": 1}, {"name": "Bedroom 3", "area": 1},
+]
+
+
+def test_layout_floor_mask_reserves_a_real_front_setback_on_a_large_plot():
+    dims = {"length": 150.0, "width": 150.0, "unit": "ft"}
+    rects = layout_floor(_FRONT_SETBACK_PROGRAM, dims, garage_cars=None, facing="south")
+    fp = footprint_bbox(rects)
+    assert fp is not None
+    # South facing - the house's own facing edge is fp[3] (max_y); the real
+    # gap back to the plot's own facing edge (150.0) should be a
+    # substantial fraction of MIN_FRONT_SETBACK_M, not flush (0 - the
+    # pre-C0 behavior).
+    setback_ft = dims["width"] - fp[3]
+    min_setback_ft = to_plot_unit(MIN_FRONT_SETBACK_M, "ft") * 0.5  # generous tolerance
+    assert setback_ft >= min_setback_ft, f"front setback {setback_ft:.1f}ft looks too small (house sits flush)"
+
+
+def test_layout_floor_mask_front_setback_is_a_no_op_on_a_small_plot():
+    dims = {"length": 30.0, "width": 40.0, "unit": "ft"}
+    rooms = [
+        {"name": "Living Room", "area": 2}, {"name": "Kitchen", "area": 1}, {"name": "Dining Room", "area": 1},
+        {"name": "Entry", "area": 1}, {"name": "Bedroom 1", "area": 1.5}, {"name": "Bathroom 1", "area": 1},
+        {"name": "Bedroom 2", "area": 1.5},
+    ]
+    rects = layout_floor(rooms, dims, garage_cars=None, facing="south")
+    fp = footprint_bbox(rects)
+    assert fp is not None
+    setback_ft = dims["width"] - fp[3]
+    # A right-sized plot leaves only the pre-existing exterior-wall-
+    # thickness gap (well under 2ft) - nowhere near a real driveway setback.
+    assert setback_ft < 2.0, f"front setback {setback_ft:.1f}ft - expected a near-zero no-op on a small plot"
