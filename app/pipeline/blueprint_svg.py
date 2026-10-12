@@ -263,17 +263,19 @@ def render_floor_blueprint(
     # around an oversized plot renders as open ground, not a solid black
     # wall block.
     _draw_wall_base(draw, house_x0, house_y0, house_x1, house_y1)
-    # Parts-aware (2026-10, grid-mask engine): carve EVERY part of every
-    # room, not just a room's own bbox - a plain-rectangle room has exactly
-    # one part (its own bbox), so this is byte-identical to before on the
-    # rect engine's output; for an L/U room, the notch between two of its
-    # own parts is correctly left uncarved here (solid wall) unless/until
-    # some OTHER room's or the Hallway's own part claims it in this same
-    # loop - the whole grid is a strict partition, so nothing is ever
-    # double-carved or left as an unexplained solid block.
-    for rect in rects:
-        for part in room_parts(rect):
-            _carve_room(draw, _room_bbox(part, plot_x0, plot_y0, scale))
+    # Parts-aware (2026-10, grid-mask engine), carved via _carve_rooms() -
+    # see that function's own docstring for the real "phantom blank box"
+    # bug (Phase F, 2026-10-12) this two-pass technique fixes: two parts of
+    # the SAME room that genuinely tile together (confirmed by the engine's
+    # own exact-tiling invariant) used to each get a uniform wall-thickness
+    # inset on EVERY side, including the side shared with their own
+    # sibling - leaving a real, unexplained wall (and therefore an
+    # unlabeled, door-less, furniture-less blank box) between two parts of
+    # one room. A genuine L/U notch (the concave area NONE of a room's own
+    # parts occupies) is unaffected either way - it's still correctly left
+    # as solid wall unless/until some OTHER room's or the Hallway's own
+    # part claims it, exactly as before.
+    _carve_rooms(draw, rects, plot_x0, plot_y0, scale)
 
     # Real door openings (post-suppression), computed BEFORE furniture is
     # drawn - not because drawing order matters for the doors themselves,
@@ -644,15 +646,126 @@ def _draw_columns(
         draw.rectangle([cx - half, cy - half, cx + half, cy + half], fill=WALL_COLOR)
 
 
-def _carve_room(draw: ImageDraw.ImageDraw, bbox: tuple[float, float, float, float]) -> None:
-    """Carves one room's interior back out of the solid wall base, inset by
-    WALL_HALF_THICKNESS_PX on every side - whatever black remains between
-    this and neighboring rooms' own carve-outs is the poché wall."""
-    x0, y0, x1, y1 = bbox
+_PART_TOUCH_TOL = 1e-4  # real plot-unit coordinate tolerance, same style as _EDGE_TOL below
+
+
+def _free_intervals(
+    full_lo: float, full_hi: float, covered: list[tuple[float, float]], tol: float = _PART_TOUCH_TOL
+) -> list[tuple[float, float]]:
+    """Given one axis interval [full_lo, full_hi] (one part's own edge) and
+    a list of (lo, hi) sub-intervals already covered by SIBLING parts of
+    the SAME room along that edge, returns the remaining FREE sub-intervals
+    - the portions of this part's own edge that do NOT border a sibling,
+    and therefore still need a real wall-thickness strip redrawn there (see
+    _carve_rooms()). Segment-based, not whole-side-based, specifically
+    because two parts from the grid-mask engine's decomposition can share
+    only PART of an edge, with the rest of that same edge bordering a
+    different room/the exterior/a genuine notch - treating the whole side
+    as one unit would have wrongly erased the wall on that other portion
+    too."""
+    if full_hi - full_lo <= tol:
+        return []
+    covered = sorted(iv for iv in covered if iv[1] - iv[0] > tol)
+    free: list[tuple[float, float]] = []
+    cursor = full_lo
+    for lo, hi in covered:
+        lo, hi = max(lo, full_lo), min(hi, full_hi)
+        if lo > cursor + tol:
+            free.append((cursor, lo))
+        cursor = max(cursor, hi)
+    if full_hi > cursor + tol:
+        free.append((cursor, full_hi))
+    return free
+
+
+def _carve_rooms(
+    draw: ImageDraw.ImageDraw, rects: list[dict], plot_x0: float, plot_y0: float, scale: float
+) -> None:
+    """Carves every room's real occupied footprint back out of the solid
+    wall base, in two passes across ALL rooms (2026-10-12, Phase F bug fix -
+    see the real "phantom blank box" bug this closes in the call site's own
+    comment). A plain single-part room (still the overwhelming majority of
+    real output) renders byte-identical to the old uniform-inset
+    `_carve_room()` either way - this only changes behavior for a
+    multi-part (L/U-shaped) room.
+
+    Pass 1 fills every part of every room at its FULL real size - no inset
+    at all. Two parts of the SAME room that genuinely tile together (a
+    real, continuous floor - the engine's own "exact tiling" invariant
+    guarantees this) merge seamlessly here, since their shared boundary
+    gets filled with ROOM_FILL from both sides with nothing left between
+    them. Pass 2 then re-draws a real WALL_HALF_THICKNESS_PX-wide wall
+    strip along each part's own TRUE outer boundary - computed per
+    SUB-SEGMENT via `_free_intervals()`, not per whole side, so a part that
+    shares only PART of an edge with a sibling (the rest of that same edge
+    bordering a different room, the exterior, or a genuine L/U notch) still
+    gets a real wall on the non-shared portion. Two passes across ALL rooms
+    (not interleaved per room) is deliberate: each room's own pixel
+    territory is disjoint from every other room's, so processing order
+    between rooms can never matter, but keeping the two passes strictly
+    separated and global removes any doubt about it.
+
+    A genuine L/U notch (the concave area NONE of a room's own parts
+    occupies) is untouched by either pass for THIS room - exactly the
+    existing, correct behavior (see the call site's comment): it's still
+    solid wall unless/until some OTHER room's or the Hallway's own part
+    legitimately claims it, in which case THAT room's own pass 1/2 handles
+    it correctly."""
     inset = WALL_HALF_THICKNESS_PX
-    if x1 - x0 <= 2 * inset or y1 - y0 <= 2 * inset:
-        return  # room too small to carve a real interior - leave it solid wall rather than invert
-    draw.rectangle([x0 + inset, y0 + inset, x1 - inset, y1 - inset], fill=ROOM_FILL)
+
+    # Pass 1: full-size fill, every part, every room.
+    for rect in rects:
+        for part in room_parts(rect):
+            x0, y0, x1, y1 = _room_bbox(part, plot_x0, plot_y0, scale)
+            if x1 - x0 <= 0 or y1 - y0 <= 0:
+                continue
+            draw.rectangle([x0, y0, x1, y1], fill=ROOM_FILL)
+
+    # Pass 2: re-stroke each part's own true outer boundary.
+    for rect in rects:
+        parts = room_parts(rect)
+        for part in parts:
+            px0, py0 = part["x"], part["y"]
+            px1, py1 = px0 + part["w"], py0 + part["h"]
+            siblings = [p for p in parts if p is not part]
+            bx0, by0, bx1, by1 = _room_bbox(part, plot_x0, plot_y0, scale)
+            if bx1 - bx0 <= 2 * inset or by1 - by0 <= 2 * inset:
+                # Too small to carve a real interior even with zero inset on
+                # every side - leave it solid wall rather than invert, same
+                # defensive floor the old uniform-inset carve already had.
+                continue
+
+            left_covered = [
+                (max(py0, s["y"]), min(py1, s["y"] + s["h"]))
+                for s in siblings if abs(s["x"] + s["w"] - px0) < _PART_TOUCH_TOL
+            ]
+            for lo, hi in _free_intervals(py0, py1, left_covered):
+                sy0, sy1 = plot_y0 + lo * scale, plot_y0 + hi * scale
+                draw.rectangle([bx0, sy0, bx0 + inset, sy1], fill=WALL_COLOR)
+
+            right_covered = [
+                (max(py0, s["y"]), min(py1, s["y"] + s["h"]))
+                for s in siblings if abs(s["x"] - px1) < _PART_TOUCH_TOL
+            ]
+            for lo, hi in _free_intervals(py0, py1, right_covered):
+                sy0, sy1 = plot_y0 + lo * scale, plot_y0 + hi * scale
+                draw.rectangle([bx1 - inset, sy0, bx1, sy1], fill=WALL_COLOR)
+
+            top_covered = [
+                (max(px0, s["x"]), min(px1, s["x"] + s["w"]))
+                for s in siblings if abs(s["y"] + s["h"] - py0) < _PART_TOUCH_TOL
+            ]
+            for lo, hi in _free_intervals(px0, px1, top_covered):
+                sx0, sx1 = plot_x0 + lo * scale, plot_x0 + hi * scale
+                draw.rectangle([sx0, by0, sx1, by0 + inset], fill=WALL_COLOR)
+
+            bottom_covered = [
+                (max(px0, s["x"]), min(px1, s["x"] + s["w"]))
+                for s in siblings if abs(s["y"] - py1) < _PART_TOUCH_TOL
+            ]
+            for lo, hi in _free_intervals(px0, px1, bottom_covered):
+                sx0, sx1 = plot_x0 + lo * scale, plot_x0 + hi * scale
+                draw.rectangle([sx0, by1 - inset, sx1, by1], fill=WALL_COLOR)
 
 
 # ---- Doors ----

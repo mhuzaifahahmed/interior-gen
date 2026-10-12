@@ -7,11 +7,14 @@ from app.pipeline.blueprint_svg import (
     MARGIN_TOP_PX,
     MAX_TARGET_PLOT_LONGEST_SIDE_PX,
     PAPER,
+    ROOM_FILL,
     TARGET_PLOT_LONGEST_SIDE_PX,
+    WALL_COLOR,
     WINDOW_COLOR,
     WINDOW_MAX_LENGTH_LIVING_M,
     WINDOW_MAX_LENGTH_M,
     _adaptive_target_longest_side_px,
+    _carve_rooms,
     _draw_columns,
     _draw_driveway,
     _draw_furniture,
@@ -89,6 +92,49 @@ def test_draw_windows_gives_the_living_room_a_larger_picture_window_cap():
     assert living_px > bedroom_px
     assert living_px <= to_plot_unit(WINDOW_MAX_LENGTH_LIVING_M, "ft") * scale + 2
     assert bedroom_px <= to_plot_unit(WINDOW_MAX_LENGTH_M, "ft") * scale + 2
+
+
+def test_carve_rooms_merges_adjacent_parts_of_the_same_room_but_not_different_rooms():
+    # Phase F (2026-10-12), real bug found by actually rendering and
+    # visually inspecting the full verification matrix, not caught by any
+    # existing test: _carve_rooms() used to inset EVERY side of EVERY part
+    # uniformly, including the side shared with a SIBLING part of the SAME
+    # room - producing an unlabeled, door-less, furniture-less blank box
+    # wherever two parts of one room (a real, continuous floor, confirmed
+    # by the engine's own exact-tiling invariant) happened to be adjacent.
+    # A synthetic 2-part room ("Room A": two 20x10 parts sharing a full
+    # vertical edge at x=20) next to a genuinely separate "Room B" directly
+    # tests the actual fix: the A<->A boundary must merge (no wall), the
+    # A<->B boundary must still show a real wall. Each part is well above
+    # _carve_rooms()'s own "too small to carve a real interior" floor
+    # (2 * WALL_HALF_THICKNESS_PX = 10px) - a part sized exactly AT that
+    # floor gets no wall redrawn on ANY of its sides at all (a real,
+    # pre-existing degenerate-size behavior, unchanged by this fix, and not
+    # what this test is about), so the rooms here are sized well clear of it.
+    scale = 1.0  # 1px per real unit, so pixel coords are directly real coords
+    image = Image.new("RGB", (60, 20), WALL_COLOR)  # simulates _draw_wall_base's own solid fill
+    draw = ImageDraw.Draw(image)
+    rects = [
+        {
+            "name": "Room A", "x": 0, "y": 0, "w": 40, "h": 20,
+            "parts": [{"x": 0, "y": 0, "w": 20, "h": 20}, {"x": 20, "y": 0, "w": 20, "h": 20}],
+        },
+        {"name": "Room B", "x": 40, "y": 0, "w": 20, "h": 20},
+    ]
+
+    _carve_rooms(draw, rects, 0.0, 0.0, scale)
+
+    # Deep inside each part - sanity check the carve actually ran.
+    assert image.getpixel((10, 10)) == ROOM_FILL
+    assert image.getpixel((30, 10)) == ROOM_FILL
+    assert image.getpixel((50, 10)) == ROOM_FILL
+    # The A<->A shared boundary (x=20, both parts belong to "Room A") must
+    # be open floor, not a phantom wall - this is the actual bug fix.
+    assert image.getpixel((20, 10)) == ROOM_FILL
+    # The A<->B boundary (x=40, genuinely different rooms) must still be a
+    # real wall - the fix must not accidentally erase walls between
+    # different rooms too.
+    assert image.getpixel((40, 10)) == WALL_COLOR
 
 
 def test_render_floor_blueprint_returns_decodable_png():
