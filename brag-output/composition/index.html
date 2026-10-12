@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1920, height=1080" />
+<title>Interior-Gen — Brag</title>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+<script src="assets/music/audio-data.js"></script>
+<style>
+  @font-face {
+    font-family: "EB Garamond";
+    font-weight: 400;
+    font-style: normal;
+    src: url("assets/fonts/EBGaramond-400.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "EB Garamond";
+    font-weight: 700;
+    font-style: normal;
+    src: url("assets/fonts/EBGaramond-700.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Inter";
+    font-weight: 400;
+    font-style: normal;
+    src: url("assets/fonts/Inter-400.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Inter";
+    font-weight: 700;
+    font-style: normal;
+    src: url("assets/fonts/Inter-700.woff2") format("woff2");
+  }
+
+  :root {
+    --bg: #faf6ee;
+    --surface: #ffffff;
+    --on-bg: #33362e;
+    --stone-dark: #44403c;
+    --stone: #78716c;
+    --gold: #6e3f0f;
+    --gold-soft: #7a4712;
+    --gold-light: #c08a4e;
+    --line: #e6dfd3;
+    --night: #1c1815;
+    --sage: #8faf9e;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--on-bg);
+    font-family: "Inter", system-ui, sans-serif;
+  }
+
+  #root {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  .clip {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .eyebrow {
+    font-family: "Inter", sans-serif;
+    font-weight: 700;
+    font-size: 20px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+
+  .display {
+    font-family: "EB Garamond", Georgia, serif;
+    font-weight: 700;
+    color: var(--stone-dark);
+    line-height: 1.12;
+  }
+
+  .display-italic {
+    font-style: italic;
+    color: var(--gold-soft);
+  }
+
+  .body-copy {
+    font-family: "Inter", sans-serif;
+    font-weight: 400;
+    color: var(--stone);
+  }
+
+  .hairline { border: 1px solid var(--line); }
+
+  /* ============ Scene 1 — Hook ============ */
+  #s1-bg-wrap { position: absolute; inset: 0; overflow: hidden; }
+  #s1-bg {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  #s1-scrim {
+    position: absolute; inset: 0;
+    background: linear-gradient(to top, rgba(28,24,21,0.55) 0%, rgba(28,24,21,0.08) 46%, rgba(28,24,21,0) 62%);
+  }
+  #s1-card {
+    position: absolute;
+    left: 50%;
+    margin-left: -590px;
+    bottom: 118px;
+    width: 1180px;
+    padding: 56px 72px;
+    background: rgba(250, 246, 238, 0.92);
+    border-radius: 22px;
+    text-align: center;
+    box-shadow: 0 22px 70px rgba(28,24,21,0.28);
+  }
+  #s1-headline {
+    font-size: 76px;
+    margin: 0;
+  }
+  #s1-sub {
+    margin: 22px 0 0;
+    font-size: 27px;
+    max-width: 880px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* ============ Scene 2 — Reveal ============ */
+  #s2 { background: var(--bg); }
+  #s2-inner {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 34px;
+    padding: 90px 0;
+  }
+  #s2-eyebrow { text-align: center; }
+  #s2-dropzone {
+    position: relative;
+    width: 980px;
+    height: 560px;
+    background: #f3ece0;
+    border: 2px dashed var(--line);
+    border-radius: 18px;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  #s2-empty {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px;
+  }
+  #s2-icon-ring {
+    width: 118px; height: 118px; border-radius: 999px;
+    border: 2px solid rgba(122,71,18,0.35);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #s2-icon-dot { width: 44px; height: 44px; border-radius: 999px; background: var(--gold-soft); }
+  #s2-empty-title { font-family: "EB Garamond", serif; font-size: 34px; color: var(--stone-dark); margin: 0; }
+  #s2-empty-sub { font-size: 20px; color: var(--stone); margin: 0; }
+  #s2-preview {
+    position: absolute; inset: 0;
+    opacity: 0;
+  }
+  #s2-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #s2-drag-photo {
+    position: absolute;
+    width: 220px; height: 165px;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 18px 40px rgba(28,24,21,0.35);
+    left: 1680px;
+    top: 60px;
+    opacity: 0;
+  }
+  #s2-drag-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* ============ Scene 3 — Transformation ============ */
+  #s3 { background: var(--bg); }
+  #s3-inner {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 44px;
+  }
+  #s3-eyebrow { text-align: center; }
+  #s3-grid {
+    display: flex;
+    gap: 32px;
+  }
+  .s3-card {
+    width: 396px;
+    display: flex; flex-direction: column; gap: 14px;
+    opacity: 0;
+  }
+  .s3-card figure {
+    margin: 0;
+    width: 396px; height: 396px;
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .s3-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .s3-label {
+    text-align: center;
+    font-family: "Inter", sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--stone-dark);
+  }
+  #s3-caption {
+    font-family: "EB Garamond", serif;
+    font-style: italic;
+    font-size: 26px;
+    color: var(--stone);
+    text-align: center;
+    opacity: 0;
+    margin: 0;
+  }
+
+  /* ============ Scene 4 — Pricing + second product ============ */
+  #s4 { background: var(--bg); }
+  #s4-inner {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .s4-phase {
+    position: absolute;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 26px;
+    width: 100%;
+    opacity: 0;
+  }
+  #s4-price-headline {
+    font-family: "EB Garamond", serif;
+    font-weight: 700;
+    font-size: 58px;
+    color: var(--stone-dark);
+    text-align: center;
+    max-width: 1260px;
+    margin: 0;
+  }
+  #s4-tags {
+    display: flex; gap: 18px;
+    opacity: 0;
+  }
+  .s4-tag {
+    padding: 14px 26px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-family: "Inter", sans-serif;
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: 0.04em;
+    color: var(--gold);
+  }
+  #s4-house-row {
+    display: flex; align-items: center; gap: 64px;
+  }
+  #s4-blueprint {
+    width: 320px; height: 320px;
+    background: #1c1815;
+    border-radius: 14px;
+    position: relative;
+    overflow: hidden;
+  }
+  #s4-blueprint .wall { position: absolute; background: #f3ece0; }
+  #s4-house-copy { display: flex; flex-direction: column; gap: 20px; align-items: flex-start; }
+  #s4-dims {
+    font-family: "Inter", sans-serif;
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: 0.14em;
+    color: var(--stone);
+  }
+  #s4-cad-badge {
+    padding: 16px 30px;
+    background: var(--gold-soft);
+    color: #fff;
+    border-radius: 999px;
+    font-family: "Inter", sans-serif;
+    font-weight: 700;
+    font-size: 19px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  /* ============ Scene 5 — Outro ============ */
+  #s5 { background: var(--bg); }
+  #s5-inner {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 26px;
+  }
+  #s5-logo-wrap {
+    display: flex; align-items: center; gap: 22px;
+    opacity: 0;
+    position: relative;
+  }
+  #s5-glow {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 520px; height: 520px;
+    transform: translate(-50%, -50%);
+    border-radius: 999px;
+    background: radial-gradient(circle, rgba(192,138,78,0.32) 0%, rgba(192,138,78,0) 68%);
+    pointer-events: none;
+  }
+  #s5-logo-img { width: 78px; height: 78px; object-fit: contain; position: relative; }
+  #s5-wordmark {
+    font-family: "EB Garamond", serif;
+    font-weight: 700;
+    font-size: 92px;
+    color: var(--stone-dark);
+    position: relative;
+  }
+  #s5-tagline {
+    font-family: "EB Garamond", serif;
+    font-style: italic;
+    font-size: 30px;
+    color: var(--gold-soft);
+    opacity: 0;
+    margin: 0;
+  }
+</style>
+</head>
+<body>
+  <div
+    id="root"
+    data-composition-id="interior-gen-brag"
+    data-start="0"
+    data-width="1920"
+    data-height="1080"
+    data-duration="21"
+  >
+
+    <!-- ================= Scene 1 — Hook — [0.00, 3.90) ================= -->
+    <section id="s1" class="clip" data-start="0" data-duration="3.90" data-track-index="1">
+      <div id="s1-bg-wrap">
+        <img id="s1-bg" src="assets/images/premium.webp" alt="" data-layout-allow-overflow="true" />
+        <div id="s1-scrim"></div>
+      </div>
+      <div id="s1-card">
+        <p class="display" id="s1-headline">Picture it <span class="display-italic">before you build it.</span></p>
+        <p class="body-copy" id="s1-sub">Upload a room photo or a bare plot — watch it become three real redesigns, or a full concept build.</p>
+      </div>
+    </section>
+
+    <!-- ================= Scene 2 — Reveal — [3.30, 7.20) ================= -->
+    <section id="s2" class="clip" data-start="3.30" data-duration="3.90" data-track-index="1">
+      <div id="s2-inner">
+        <div id="s2-eyebrow" class="eyebrow">Room Redesign</div>
+        <div id="s2-dropzone" class="hairline">
+          <div id="s2-empty">
+            <div id="s2-icon-ring"><div id="s2-icon-dot"></div></div>
+            <p id="s2-empty-title">Drop a room photo here</p>
+            <p id="s2-empty-sub">or click to browse · JPG, PNG, WEBP</p>
+          </div>
+          <div id="s2-preview"><img src="assets/images/original.webp" alt="" /></div>
+        </div>
+        <div id="s2-drag-photo"><img src="assets/images/original.webp" alt="" /></div>
+      </div>
+    </section>
+
+    <!-- ================= Scene 3 — Transformation — [6.60, 13.75) ================= -->
+    <section id="s3" class="clip" data-start="6.60" data-duration="7.15" data-track-index="1">
+      <div id="s3-inner">
+        <div id="s3-eyebrow" class="eyebrow">Three Tiers, One Photo</div>
+        <div id="s3-grid">
+          <div class="s3-card" id="s3-card-1">
+            <figure><img src="assets/images/original.webp" alt="" /></figure>
+            <p class="s3-label">Original</p>
+          </div>
+          <div class="s3-card" id="s3-card-2">
+            <figure><img src="assets/images/economical.webp" alt="" /></figure>
+            <p class="s3-label">Economical</p>
+          </div>
+          <div class="s3-card" id="s3-card-3">
+            <figure><img src="assets/images/mid.webp" alt="" /></figure>
+            <p class="s3-label">Mid-Range</p>
+          </div>
+          <div class="s3-card" id="s3-card-4">
+            <figure><img src="assets/images/premium.webp" alt="" /></figure>
+            <p class="s3-label">Premium</p>
+          </div>
+        </div>
+        <p id="s3-caption">Same walls. Same windows. Same layout.</p>
+      </div>
+    </section>
+
+    <!-- ================= Scene 4 — Pricing + second product — [13.15, 18.10) ================= -->
+    <section id="s4" class="clip" data-start="13.15" data-duration="4.95" data-track-index="1">
+      <div id="s4-inner">
+        <div class="s4-phase" id="s4-phase-price">
+          <p id="s4-price-headline">Know what each tier actually<br />costs to build.</p>
+          <div id="s4-tags">
+            <span class="s4-tag">Paint</span>
+            <span class="s4-tag">Flooring</span>
+            <span class="s4-tag">Lighting</span>
+            <span class="s4-tag">Ceiling</span>
+            <span class="s4-tag">Feature Wall</span>
+            <span class="s4-tag">Decor</span>
+          </div>
+        </div>
+        <div class="s4-phase" id="s4-phase-house">
+          <div id="s4-house-row">
+            <div id="s4-blueprint">
+              <div class="wall" style="left:16px; top:16px; width:288px; height:6px;"></div>
+              <div class="wall" style="left:16px; top:16px; width:6px; height:288px;"></div>
+              <div class="wall" style="left:298px; top:16px; width:6px; height:288px;"></div>
+              <div class="wall" style="left:16px; top:298px; width:288px; height:6px;"></div>
+              <div class="wall" style="left:150px; top:16px; width:6px; height:150px;"></div>
+              <div class="wall" style="left:16px; top:170px; width:290px; height:6px;"></div>
+            </div>
+            <div id="s4-house-copy">
+              <span id="s4-dims">40 × 60 FT PLOT</span>
+              <span id="s4-cad-badge">Real AutoCAD Export</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= Scene 5 — Outro — [17.50, 21.00) ================= -->
+    <section id="s5" class="clip" data-start="17.50" data-duration="3.50" data-track-index="1">
+      <div id="s5-inner">
+        <div id="s5-logo-wrap">
+          <div id="s5-glow" data-layout-allow-overflow="true"></div>
+          <img id="s5-logo-img" src="assets/images/logo.png" alt="" />
+          <span id="s5-wordmark">Interior&#8209;Gen</span>
+        </div>
+        <p id="s5-tagline">Picture it before you build it.</p>
+      </div>
+    </section>
+
+    <!-- ================= Audio ================= -->
+    <audio
+      id="music"
+      src="assets/music/happy-beats-business-moves-vol-12-by-ende-dot-app.mp3"
+      data-start="0"
+      data-duration="21"
+      data-track-index="10"
+      data-volume="0.3"
+      data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":0},{"t":1.2,"v":0.30},{"t":17.5,"v":0.30},{"t":19.0,"v":0.38},{"t":20.3,"v":0.38},{"t":21.0,"v":0}]}]}'
+    ></audio>
+
+    <audio id="sfx-drop-photo" src="assets/sfx/interface/drop_001.ogg" data-start="5.10" data-track-index="20" data-volume="0.55"></audio>
+    <audio id="sfx-drop-tier1" src="assets/sfx/interface/drop_001.ogg" data-start="7.09" data-track-index="21" data-volume="0.5"></audio>
+    <audio id="sfx-drop-tier4" src="assets/sfx/interface/drop_002.ogg" data-start="9.50" data-track-index="22" data-volume="0.55"></audio>
+    <audio id="sfx-bong-pricing" src="assets/sfx/interface/bong_001.ogg" data-start="13.35" data-track-index="23" data-volume="0.5"></audio>
+    <audio id="sfx-bell-logo" src="assets/sfx/impact/impactBell_heavy_003.ogg" data-start="18.20" data-track-index="24" data-volume="0.6"></audio>
+
+  </div>
+
+  <script>
+    var tl = gsap.timeline({ paused: true });
+
+    /* ---------- Scene 1 — Hook ---------- */
+    // Slow Ken Burns zoom across the whole hook (transform-only, deterministic).
+    gsap.set("#s1-bg", { transformOrigin: "center center" });
+    tl.fromTo("#s1-bg", { scale: 1.0 }, { scale: 1.055, duration: 3.9, ease: "none" }, 0);
+
+    tl.fromTo("#s1-card", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.7, ease: "power3.out" }, 0.35);
+
+    /* ---------- Transition 1: Scene 1 -> Scene 2 (blur crossfade, beat-locked: 3.30s / cue 3.27s) ---------- */
+    var T1 = 3.30;
+    tl.to("#s1", { filter: "blur(10px)", scale: 1.03, opacity: 0, duration: 0.5, ease: "power2.inOut" }, T1);
+    gsap.set("#s2", { filter: "blur(10px)", scale: 0.97, opacity: 0 });
+    tl.to("#s2", { filter: "blur(0px)", scale: 1, opacity: 1, duration: 0.5, ease: "power2.inOut" }, T1 + 0.1);
+
+    /* ---------- Scene 2 — Reveal ---------- */
+    gsap.set("#s2-eyebrow", { y: 12, opacity: 0 });
+    tl.to("#s2-eyebrow", { y: 0, opacity: 1, duration: 0.5, ease: "power3.out" }, T1 + 0.15);
+
+    gsap.set("#s2-dropzone", { y: 20, opacity: 0 });
+    tl.to("#s2-dropzone", { y: 0, opacity: 1, duration: 0.6, ease: "power3.out" }, T1 + 0.25);
+
+    // Cursor drags the real room photo from the corner into the dropzone, then it "lands".
+    // Base CSS position (left:1680, top:60) -> dropzone center (~850, ~457): delta = (-830, 398).
+    tl.fromTo(
+      "#s2-drag-photo",
+      { x: 0, y: 0, rotate: 6, opacity: 0 },
+      { x: -830, y: 398, rotate: 0, opacity: 1, duration: 0.75, ease: "power2.inOut" },
+      T1 + 1.00
+    );
+    tl.to("#s2-drag-photo", { opacity: 0, duration: 0.12, ease: "none" }, T1 + 1.80); // sfx-drop-photo lands at 5.10
+    tl.to("#s2-empty", { opacity: 0, duration: 0.25, ease: "power2.out" }, T1 + 1.78);
+    tl.to("#s2-preview", { opacity: 1, duration: 0.3, ease: "power2.out" }, T1 + 1.78);
+
+    /* ---------- Transition 2: Scene 2 -> Scene 3 (blur crossfade, beat-locked: 6.60s / cue 6.56s) ---------- */
+    var T2 = 6.60;
+    tl.to("#s2", { filter: "blur(10px)", scale: 1.03, opacity: 0, duration: 0.5, ease: "power2.inOut" }, T2);
+    gsap.set("#s3", { filter: "blur(10px)", scale: 0.97, opacity: 0 });
+    tl.to("#s3", { filter: "blur(0px)", scale: 1, opacity: 1, duration: 0.5, ease: "power2.inOut" }, T2 + 0.1);
+
+    /* ---------- Scene 3 — Transformation ---------- */
+    gsap.set("#s3-eyebrow", { y: 12, opacity: 0 });
+    tl.to("#s3-eyebrow", { y: 0, opacity: 1, duration: 0.5, ease: "power3.out" }, T2 + 0.15);
+
+    var s3Cards = ["#s3-card-1", "#s3-card-2", "#s3-card-3", "#s3-card-4"];
+    var s3Starts = [7.09, 7.90, 8.74, 9.50]; // beat-grid: card 1 @ 7.09, card 3 @ 8.74 (nearest beats); 2 & 4 natural
+    for (var i = 0; i < s3Cards.length; i++) {
+      gsap.set(s3Cards[i], { y: 22, opacity: 0 });
+      tl.to(s3Cards[i], { y: 0, opacity: 1, duration: 0.55, ease: "power3.out" }, s3Starts[i]);
+    }
+
+    gsap.set("#s3-caption", { y: 10, opacity: 0 });
+    tl.to("#s3-caption", { y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }, 10.40);
+
+    /* ---------- Transition 3: Scene 3 -> Scene 4 (blur crossfade, beat-locked: 13.15s / cue 13.11s) ---------- */
+    var T3 = 13.15;
+    tl.to("#s3", { filter: "blur(10px)", scale: 1.03, opacity: 0, duration: 0.5, ease: "power2.inOut" }, T3);
+    gsap.set("#s4", { filter: "blur(10px)", scale: 0.97, opacity: 0 });
+    tl.to("#s4", { filter: "blur(0px)", scale: 1, opacity: 1, duration: 0.5, ease: "power2.inOut" }, T3 + 0.1);
+
+    /* ---------- Scene 4 — Pricing, then internal crossfade to the second product ---------- */
+    gsap.set("#s4-phase-price", { y: 14, opacity: 0 });
+    tl.to("#s4-phase-price", { y: 0, opacity: 1, duration: 0.5, ease: "power3.out" }, T3 + 0.20);
+
+    gsap.set("#s4-tags", { y: 10, opacity: 0 });
+    tl.to("#s4-tags", { y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }, T3 + 0.80);
+
+    // Internal (non-scene) crossfade: pricing phase -> second-product phase.
+    var T3b = 15.35;
+    tl.to("#s4-phase-price", { filter: "blur(8px)", opacity: 0, duration: 0.4, ease: "power2.inOut" }, T3b);
+    gsap.set("#s4-phase-house", { filter: "blur(8px)", opacity: 0, scale: 0.98 });
+    tl.to("#s4-phase-house", { filter: "blur(0px)", opacity: 1, scale: 1, duration: 0.45, ease: "power2.inOut" }, T3b + 0.1);
+
+    /* ---------- Transition 4: Scene 4 -> Scene 5 (blur crossfade, beat-locked: 17.50s / cue 17.47s) ---------- */
+    var T4 = 17.50;
+    tl.to("#s4", { filter: "blur(10px)", scale: 1.03, opacity: 0, duration: 0.5, ease: "power2.inOut" }, T4);
+    gsap.set("#s5", { filter: "blur(10px)", scale: 0.97, opacity: 0 });
+    tl.to("#s5", { filter: "blur(0px)", scale: 1, opacity: 1, duration: 0.5, ease: "power2.inOut" }, T4 + 0.1);
+
+    /* ---------- Scene 5 — Outro ---------- */
+    gsap.set("#s5-logo-wrap", { y: 14, opacity: 0, scale: 0.98 });
+    tl.to("#s5-logo-wrap", { y: 0, opacity: 1, scale: 1, duration: 0.6, ease: "power3.out" }, T4 + 0.70); // logo lands ~18.20, matches sfx-bell-logo
+
+    gsap.set("#s5-tagline", { opacity: 0 });
+    tl.to("#s5-tagline", { opacity: 1, duration: 0.5, ease: "power2.out" }, T4 + 1.40);
+
+    /* ---------- Subtle audio-reactive glow (bass band -> soft breathing) ----------
+       Per-frame sampling across the full render, as required for determinism.
+       Only affects the hook card's shadow warmth and the outro's soft glow —
+       both already-present visual elements, no waveform/equalizer graphics. */
+    if (typeof AUDIO_DATA !== "undefined") {
+      for (var f = 0; f < AUDIO_DATA.totalFrames; f++) {
+        (function (frame, t) {
+          tl.call(
+            function () {
+              var bass = frame.bands && frame.bands.length ? frame.bands[0] : 0;
+              var card = document.getElementById("s1-card");
+              if (card) {
+                var shadowAlpha = 0.22 + bass * 0.06;
+                card.style.boxShadow = "0 22px 70px rgba(28,24,21," + shadowAlpha.toFixed(3) + ")";
+              }
+              var glow = document.getElementById("s5-glow");
+              if (glow) {
+                var glowScale = 1 + bass * 0.05;
+                glow.style.transform = "translate(-50%, -50%) scale(" + glowScale.toFixed(3) + ")";
+              }
+            },
+            [],
+            t
+          );
+        })(AUDIO_DATA.frames[f], f / AUDIO_DATA.fps);
+      }
+    }
+
+    window.__timelines["interior-gen-brag"] = tl;
+  </script>
+</body>
+</html>
