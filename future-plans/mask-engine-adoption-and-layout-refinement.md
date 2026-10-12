@@ -520,11 +520,45 @@ unchanged (yard code is a strict no-op when footprint == plot); DXF audits clean
 
 ---
 
-## PHASE D — Targeted `mask`-engine gaps (adjacency, garage shape/access, master corner)
+## PHASE D — Targeted `mask`-engine gaps (public-room shape, adjacency, garage shape/access, master corner)
 
 These are the things `mask` does NOT yet guarantee. Re-scope against the Phase A findings — skip any
 sub-task Phase A proved already-good. **All geometry work here is in
 `app/pipeline/floor_layout_mask.py`.**
+
+**D0. Public-room (Living/Dining/Hallway) bowling-alley shape — inserted 2026-10-11, per Phase A's
+own explicit recommendation (`future-plans/mask-adoption-phase-a-findings.md`: "the single most
+visually damaging unaddressed problem" after the two now-fixed new bugs; the doc says this should be
+raised before Phase D starts, not silently folded into D1/D5).** Confirmed by Phase A's renders:
+Living Room and Dining Room came out as 5-6 ft wide, 20-40+ ft long slivers (aspect ratios up to 6.7)
+in **every single case tested**, not just an edge case. This is distinct from D1 (which is about
+Kitchen/Dining touching each other, already mostly working) and D5 (hallway/circulation) — this is
+about the public rooms' own SHAPE.
+
+- **Likely root cause to investigate (don't assume, confirm via instrumentation/tracing like Phase
+  A2 did):** `_seed_rooms()`'s public-room seeding spreads rooms only along a SINGLE row (the front
+  edge, `row=0`, by proportional column spacing) — unlike the private-egress fix already shipped
+  (bedrooms spread across 3 walls via `_exterior_boundary_path()`), public rooms have no depth-wise
+  seed variation at all. Once a public room's row-neighbors claim the adjacent columns, whole-strip
+  growth (`_grow_rooms()`) can only extend in ONE direction (depth, since width is boxed in by
+  neighbors on the same row) to reach its target area — which mechanically produces exactly the
+  reported long-thin-strip shape. Confirm this by tracing a real reproducing case (the Phase A/A2
+  50×60 room list is already known to produce this) before writing a fix.
+- **Plausible fix directions, to be confirmed by tracing, not assumed:** seed public rooms with some
+  depth variation instead of a single row (e.g. a shallow 2-row front band, mirroring the private
+  zone's own banded-packing precedent in the `rect` engine — though re-derive for `mask`'s grid
+  model, don't port rect code); or bias `_grow_rooms()`'s direction choice more aggressively toward
+  squarer aspect ratios specifically for public-zone rooms; or seed public rooms with more initial
+  row-spread (reserve columns proportional to each room's own target width, not just an even
+  proportional split of the front edge). **If the real fix looks like it needs a materially different
+  approach than these (e.g. a new seeding/growth strategy altogether), that's fine — investigate and
+  implement the right fix, don't force-fit one of these three if tracing shows something else is
+  really going on; just document what you found and why, same as every other root-cause writeup in
+  this plan.**
+- **Verify by render**: Living Room and Dining Room aspect ratios should land near
+  `PROPORTION_TARGET_RATIO` (2.0, `layout_quality.py`) rather than the reported 4-7, across the same
+  cases Phase A used (150×150, 50×60, 30×40, 90×40, all 4 facings on at least one case). This is the
+  single highest-value visual fix in Phase D — treat it as the first sub-task, not an afterthought.
 
 **D1. Kitchen ↔ Dining adjacency (problem #7a).** `mask` seeds public rooms spread along the front
 row in `_sort_key` order (`_seed_rooms`); `_PUBLIC_ORDER_RANKS` (in `floor_layout.py`, reused) already
@@ -568,14 +602,17 @@ reads as too much corridor on some case, consider capping spine width or droppin
 smaller programs (knobs already exist: `_CANDIDATE_SPINE_WIDTH_DELTAS`, `_CANDIDATE_CROSS_LINK`,
 `_MIN_ROOMS_FOR_CROSS_LINK`). Verify by render. Skip if Phase A showed circulation is already fine.
 
-**Tests:** add `tests/test_floor_layout_mask.py` cases for each implemented sub-task (kitchen-dining
-adjacency by shared-edge; laundry adjacent to kitchen; master on a non-front exterior corner with its
-ensuite adjacent; garage touches the facing edge with ≥ its real min width). These assert on real
-geometry (coordinates/shared edges), not just presence. **Render + inspect each.**
+**Tests:** add `tests/test_floor_layout_mask.py` cases for each implemented sub-task (D0: Living Room/
+Dining Room aspect ratio stays within a sane bound, e.g. ≤ `SLIVER_ASPECT_RATIO` or tighter, across
+multiple room programs/facings; kitchen-dining adjacency by shared-edge; laundry adjacent to kitchen;
+master on a non-front exterior corner with its ensuite adjacent; garage touches the facing edge with
+≥ its real min width). These assert on real geometry (coordinates/shared edges/aspect ratios), not
+just presence. **Render + inspect each.**
 
 **Acceptance:** each implemented sub-task verified by render AND test; the 150×150 case now shows
-kitchen↔dining adjacent, utility by the kitchen, master on a back corner with ensuite, garage on the
-road edge with a driveway; full suite green.
+Living/Dining as reasonably-proportioned rooms (not slivers), kitchen↔dining adjacent, utility by the
+kitchen, master on a back corner with ensuite, garage on the road edge with a driveway; full suite
+green.
 
 ---
 
