@@ -298,24 +298,47 @@ class Settings(BaseSettings):
     # Which deterministic room-layout ALGORITHM run_house_pipeline()/
     # feasibility.py's geometry probe/kaggle_autocad.py's conditioning image
     # use (app/pipeline/layout_engine.py is the single dispatcher all three
-    # now import from, routing by this value) - "rect" is the original
-    # rectangle slice-and-dice engine (app/pipeline/floor_layout.py), "mask"
-    # is the new grid-mask region-growing engine (floor_layout_mask.py) that
-    # produces real L/U-shaped rooms, a real circulation loop, and
-    # guaranteed window walls for every bedroom/living room (see
-    # future-plans or the plan file for the full "grid-mask" rationale -
-    # built in response to real structural limits of the rectangle engine:
-    # a dense floor's "Band 2" private rooms have no exterior wall at all,
-    # so some bedroom was always going to end up window-less no matter how
-    # the scorer's soft egress penalty was tuned). Default "rect" - this is
-    # a feature flag, not a replacement: the live site keeps producing
-    # today's proven rectangular output until the mask engine is visually
-    # verified across the full test matrix and this default is deliberately
-    # flipped in its own commit. Deliberately NOT added to .env.example
-    # (same precedent as house_render_enabled/autocad_generation_enabled
-    # above) - set HOUSE_LAYOUT_ENGINE=mask only in a local, gitignored .env
-    # while developing/testing the new engine.
-    house_layout_engine: str = "rect"
+    # import from, routing by this value) - "rect" is the original rectangle
+    # slice-and-dice engine (app/pipeline/floor_layout.py), "mask" is the
+    # grid-mask region-growing engine (floor_layout_mask.py).
+    #
+    # DEFAULT FLIPPED TO "mask" 2026-10-12 (Phase E of
+    # future-plans/mask-engine-adoption-and-layout-refinement.md), after
+    # Phases A/A2/B/C/D0-D5 fixed the real, Phase-A-confirmed structural
+    # problems "rect" has no way to fix without a non-rectangular room
+    # representation: bowling-alley-shaped public rooms (Living/Dining came
+    # out as 3.5-17x aspect-ratio slivers under rect - mask grows them
+    # wide-and-shallow in a dedicated front public band, D0), a dense
+    # floor's private-zone rooms with no exterior wall at all (egress is now
+    # guaranteed by construction - a bedroom's seed cell starts ON the
+    # boundary and connected-growth can never lose it), a full-depth tunnel
+    # hallway (now a compact, centered circulation spine), a master bedroom
+    # stranded near the entrance (now seeded at the farthest exterior
+    # boundary-path slot from the entrance, D3), a garage too narrow for its
+    # real car count (now pre-claims its real garage_dimensions() width
+    # before general growth, D4), utility/laundry disconnected from the
+    # kitchen (now seeded directly behind it, D2), and a house that sprawls
+    # edge-to-edge on a large plot with no yard (mask now caps footprint
+    # coverage + reserves a real front setback above a size threshold, with
+    # a rendered driveway/garden/side-yard - Phase C). See that plan file
+    # and `future-plans/mask-adoption-phase-a-findings.md` (incl. its "Phase
+    # A2 addendum") for the full root-cause writeups and before/after
+    # evidence - every fix was independently re-verified (code review,
+    # re-run tests, re-rendered and visually inspected), not just taken on
+    # an implementing agent's word.
+    #
+    # ROLLBACK is a documented one-liner: set HOUSE_LAYOUT_ENGINE=rect (env
+    # var or .env) to revert to the original, still-fully-functional
+    # rectangle engine - no code change needed, nothing was deleted.
+    # tests/conftest.py's autouse `_default_house_layout_engine` fixture
+    # pins every existing test to "rect" regardless of this default (so the
+    # committed default alone can never silently change what the suite
+    # asserts) - a test that specifically wants to exercise "mask" opts in
+    # explicitly within its own body. Deliberately NOT added to
+    # .env.example (same precedent as house_render_enabled/
+    # autocad_generation_enabled above) - set HOUSE_LAYOUT_ENGINE=rect only
+    # in a local, gitignored .env if you need the old engine temporarily.
+    house_layout_engine: str = "mask"
 
     # Set ONLY when the frontend is hosted on a different domain from this
     # backend (e.g. static/ deployed to Vercel, this FastAPI app deployed to

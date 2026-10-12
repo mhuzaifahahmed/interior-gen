@@ -2957,6 +2957,103 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     guarantee); the foyer-without-garage `full_height_only` carve-out can still render deeper than ideal on
     a very tall box (a known, separate, lower-priority limitation - same class of "area guaranteed, shape
     isn't perfect" honesty this module states elsewhere, not hidden); cross-floor vertical alignment (#17).
+- **v29 (2026-10-12): the grid-mask layout engine ("mask") replaces "rect" as the default, after a direct
+  user critique of a real 150x140ft render showing a 10.8x48.6ft Living Room sliver and a 2,478 sq ft
+  Dining Room** - v27/v28 above had already hardened `rect`'s area math and caps considerably, but a
+  slice-and-dice rectangle engine structurally cannot give a room more than one axis-aligned rectangle, so
+  some rooms were always going to end up as bowling-alley slivers or lose their only exterior wall no
+  matter how the scorer/candidate search was tuned (`app/pipeline/floor_layout_mask.py`'s own module
+  docstring states this limitation plainly). `app/pipeline/layout_engine.py` (a thin dispatcher
+  `generate_house.py`/`feasibility.py`'s geometry probe/`kaggle_autocad.py`'s conditioning image all
+  already imported from, so this was always a one-flag swap, not a call-site rewrite) had been routing to
+  "rect" by default since the mask engine was first scaffolded; this entry is that flip, done only after
+  the full plan below was executed and independently re-verified end to end, in `future-plans/
+  mask-engine-adoption-and-layout-refinement.md` (the detailed execution plan, written for smaller models
+  to implement one phase at a time) and `future-plans/mask-adoption-phase-a-findings.md` (the baseline
+  findings + a dated "Phase A2 addendum" with the full root-cause writeups) - read those two files for the
+  complete evidence trail; this entry is a summary, not the full record.
+  - **Phase A (baseline render)**: rendered the mask engine as-is across a real matrix (the exact reported
+    150x150/2-floor case, medium/small/large plots, all 4 facings) BEFORE changing any code - confirmed
+    bedrooms were mostly already fixed (compact, near-square) in the common south-facing orientation, but
+    Living/Dining/Hallway were bowling-alley slivers in every single case, the yard problem was WORSE than
+    `rect` (mask shrinks the footprint more aggressively), and two new, more severe bugs were found that
+    weren't among the original complaints.
+  - **Phase A2**: those two new bugs, both root-caused via direct instrumentation (not guessed) and fixed.
+    (1) A literal unlabeled solid-black "hole" rendered inside the house on several cases - `_fill_leftovers()`'s
+    neighbor scan only recognized real rooms as valid neighbors, so a leftover pocket walled off entirely
+    by the circulation spine (a valid but different kind of occupant) had no recognized neighbor at all and
+    was silently skipped forever; fixed by absorbing a spine-bordered orphan region into the spine itself.
+    (2) Rooms that geometrically collapsed to near-zero width (a Master Bedroom under east/west facing, an
+    upper-floor bedroom) from a dynamic race during round-robin growth, not a static seeding defect as
+    first hypothesized; fixed with a new last-resort "steal a slack cell from an already-claimed neighbor"
+    fallback, bounded so a donor is never pushed below its own real minimum. Also closed the detection gap
+    the first bug exposed - `layout_quality.py` gained a parts-aware coverage check (every room's real area
+    must sum to the floor's own area) so a future regression of this exact failure mode is now a hard
+    violation, not something only a human eyeballing a PNG would catch.
+  - **Phase B**: made the test suite assert correctly against either engine regardless of the committed
+    default - `tests/conftest.py`'s autouse `_default_house_layout_engine` fixture pins every existing test
+    to "rect" (the engine it was written against) unless it explicitly opts into "mask", and
+    `feasibility.room_count_requirements_table()`'s `lru_cache` (keyed on `(total_floors, unit)` with no
+    engine component, despite its result depending on which engine is active) now gets cleared at fixture
+    setup/teardown to close a real, if previously-latent, staleness risk.
+  - **Phase C - auto site-planning, the direct answer to "above X by X, automatically add a driveway and
+    yards" (explicit user request)**: `floor_layout_mask.py`'s footprint sizer now caps the footprint to
+    at most 60% of the plot's area whenever the plot's shorter side exceeds ~40ft (12m), and reserves a
+    real ~18ft (5.5m) front setback so a driveway actually has somewhere to go - both are strict no-ops on
+    a small/already-right-sized plot. `blueprint_svg.py`/`blueprint_dxf.py` then render the resulting gap
+    as labeled front/rear/side yard zones (hatched, not filled - reads as ground, not a room) plus a real
+    paved driveway apron connecting the road edge straight to the garage, ground-floor only. The AI
+    "Concept Layout" vendor (Kaggle SDXL+ControlNet) was explicitly deprioritized for this whole plan per
+    the user's own stated priority ("our model" first) - it still traces whatever geometry `mask` now
+    produces automatically, it just doesn't render the yard/driveway (a disclosed, accepted cosmetic gap,
+    not a regression - that card is already labeled "not a precise blueprint").
+  - **Phase G**: fixed a real, separately-reported gap in "kitchen/dining/utility on every floor" style
+    requests - typed with no digit ("every floor"/"each floor", vs. the already-working "floor 2"), these
+    were silently falling through to ground-floor-only guarantees. `house_requirements.
+    parse_extra_rooms_by_floor()` now also matches the no-digit phrasing (a sentinel floor number,
+    expanded to every real floor once `generate_house.py` knows the real floor count) - utility/laundry
+    rides the same path for free, so "utility on every floor" is now genuinely honored on every floor
+    instead of only the ground floor's existing `mentions_utility()` injection.
+  - **Phase D0 - the single highest-value fix, inserted after Phase A's own explicit recommendation**:
+    public rooms (Living/Dining/Kitchen/Entry/Garage) are now confined to a front "public band" (depth
+    sized so every public room's own preferred area fits across the full footprint width, capped at 50% of
+    the floor), with the circulation spine starting below it - mirroring `rect`'s own front-to-back zoning
+    concept, re-derived for the grid-mask model rather than ported. Root cause (confirmed via owner-grid
+    tracing, diverging from the plan's own simpler seeding-only hypothesis - the real mechanism was
+    unbounded public-room DEPTH growth, not seed position): the full-depth circulation spine split the
+    house into two tall, narrow half-columns, and a large public room's growth had no depth bound, so it
+    grew the entire depth of its half-column wrapping around the back-seeded bedrooms. Living/Dining bbox
+    aspect ratios dropped from the reported 3.5-17x down to 1.0-2.1x across the full baseline matrix,
+    independently re-rendered and visually confirmed, not just taken on the implementing agent's report. A
+    disclosed, explicitly out-of-D0's-scope trade-off: the footprint's pre-existing sizing-overhead excess
+    (it existed before this fix too) can now land on a private-zone room instead of Living Room (e.g. an
+    oversized Master Bathroom) - D3/D5/footprint-sizing territory, not a D0 regression.
+  - **Phase D1-D5**: D1 (kitchen<->dining adjacency) was already working post-D0, verified, no code
+    change. D2 seeds utility/laundry/pantry directly behind that floor's own kitchen (a mask-engine-local
+    seeding bias, NOT a re-zoning into the public-zone keyword list the `rect` engine also reads from -
+    that list was deliberately left untouched). D3 permutes the master bedroom into whichever already-proven
+    exterior boundary-path seed slot is farthest from the entrance (a first attempt that forced an exact
+    corner cell collapsed other bedrooms on a dense case and was reverted - permuting the EXISTING proven
+    slots instead of inventing a new position was the fix that actually held up). D4 pre-claims the
+    garage's real `garage_dimensions(cars)` width/depth block before general growth, so a requested 2-car
+    garage is now genuinely 2 cars wide instead of out-competed down to one-car width by neighboring public
+    rooms; car count stays exactly as the user typed it (no auto-upsizing). D5 (circulation compactness)
+    was investigated and left alone - D0 had already resolved the original full-depth-tunnel complaint, and
+    directly measuring the existing cross-link candidate knob showed disabling it introduces a NEW hard
+    violation for no real size win, so forcing a change there would have made things worse, not better.
+  - **Phase E (this entry)**: `house_layout_engine` default flipped from `"rect"` to `"mask"` here, in its
+    own commit, only after every phase above was independently re-verified (full diff review, the suite
+    re-run directly - not just trusted from an implementing agent's own report - and, for every
+    geometry-touching phase, a fresh render actually read with the Read tool, not just "zero hard
+    violations printed") and the full suite confirmed green under BOTH the old and new committed default.
+  - **Still honestly NOT solved** (same as `rect` never solved them either, not a mask-specific gap):
+    cross-floor pixel-exact vertical alignment of the staircase/hallway/plumbing between floors (#17); a
+    true double-loaded corridor / full adjacency-graph solver (the cross-link spine is a deliberate,
+    stated approximation); the footprint sizing-overhead excess occasionally landing on one private room
+    (a known, disclosed D0-adjacent trade-off, not yet a dedicated fix).
+  - **Rollback is one line**: set `HOUSE_LAYOUT_ENGINE=rect` (env var or `.env`) to revert to the original
+    rectangle engine - nothing was deleted, `floor_layout.py` itself was never touched by any phase of this
+    plan (Golden Rule 1 in the plan file, verified via `git diff --stat` at every single phase).
 
 ## Subscription plans, quotas, admin panel, and payments
 
