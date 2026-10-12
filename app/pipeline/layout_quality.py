@@ -129,9 +129,11 @@ class LayoutScore:
 # Daylight rule (mask planner quality gate, Phase 0): a habitable room needs a
 # window-capable stretch of the FOOTPRINT's outer boundary. HARD categories
 # must have it, SOFT categories should.
-DAYLIGHT_HARD_CATEGORIES = ("bedroom", "living", "kitchen")
-DAYLIGHT_SOFT_CATEGORIES = ("dining", "study", "family")
-DAYLIGHT_MIN_EDGE_M = 0.9
+from app.pipeline.planning_rules import (  # noqa: E402  (single source of truth)
+    DAYLIGHT_HARD_CATEGORIES,
+    DAYLIGHT_MIN_EDGE_M,
+    DAYLIGHT_SOFT_CATEGORIES,
+)
 
 
 def footprint_edge_length(part: dict, footprint: dict, tol: float = 1e-3) -> float:

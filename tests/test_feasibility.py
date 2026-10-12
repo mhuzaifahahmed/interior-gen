@@ -304,3 +304,16 @@ def test_room_count_requirements_table_cache_is_engine_aware_when_cleared(monkey
     # inherits this test's mask-flavored (1, "ft") entry - mirrors what the
     # conftest fixture's own teardown already does, belt-and-suspenders.
     room_count_requirements_table.cache_clear()
+
+
+def test_single_floor_never_counts_a_staircase_room():
+    from app.pipeline.feasibility import check_feasibility
+
+    dims = {"length": 40, "width": 40, "unit": "ft"}
+    base = [{"name": "Living Room", "area": 2}, {"name": "Bedroom", "area": 1}]
+    with_stair = base + [{"name": "Staircase", "area": 1}]
+    a = check_feasibility(base, dims, 1)
+    b = check_feasibility(with_stair, dims, 1)
+    assert a["required_area"] == b["required_area"]
+    # ...but a 2-floor house does pay for it.
+    assert check_feasibility(base, dims, 2)["required_area"] > a["required_area"]

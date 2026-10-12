@@ -166,8 +166,8 @@ ROOM_SIZE_SPECS_M: dict[str, dict[str, float]] = {
 PREFERRED_AREA_SQM: dict[str, float] = {
     "bathroom": 5.02, "powder": 2.32, "bedroom": 11.15, "kitchen": 11.15,
     "dirty_kitchen": 6.5, "pantry": 2.79, "dining": 13.01, "living": 22.3,
-    "family": 16.72, "study": 9.29, "prayer": 3.72, "laundry": 4.65,
-    "closet": 2.32, "storage": 3.72, "mechanical": 2.32, "foyer": 3.72,
+    "family": 16.72, "study": 9.29, "prayer": 3.72, "laundry": 4.5,
+    "closet": 2.0, "storage": 3.72, "mechanical": 1.9, "foyer": 3.57,
     "porch": 7.43, "courtyard": 18.58, "default": 6.5,
 }
 
@@ -413,7 +413,25 @@ def preferred_area_for_room(room_name: str, unit: str, cars: int | None = None) 
     category = classify_room_category(room_name)
     if category not in PREFERRED_AREA_SQM:
         return min_area_for_room(room_name, unit, cars)
+    if _is_master_bedroom(room_name):
+        # Master's min carries MASTER_BEDROOM_MIN_MULTIPLIER; preferred must
+        # never sit below it.
+        return max(
+            _area_to_plot_unit(PREFERRED_AREA_SQM[category], unit) * MASTER_BEDROOM_MIN_MULTIPLIER,
+            min_area_for_room(room_name, unit, cars),
+        )
     return _area_to_plot_unit(PREFERRED_AREA_SQM[category], unit)
+
+
+def target_area_for_room(room_name: str, unit: str, cars: int | None = None) -> float:
+    """The planner's TARGET area (plot unit, squared): halfway between
+    preferred and max, so min <= preferred <= target <= max always holds.
+    See planning_rules.target_from_bounds."""
+    from app.pipeline import planning_rules  # lazy: planning_rules imports this module
+
+    preferred = preferred_area_for_room(room_name, unit, cars)
+    maximum = max(max_area_for_room(room_name, unit, cars), preferred)
+    return planning_rules.target_from_bounds(preferred, maximum)
 
 
 def min_area_for_room(room_name: str, unit: str, cars: int | None = None) -> float:

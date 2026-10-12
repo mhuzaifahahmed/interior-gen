@@ -110,6 +110,11 @@ def check_feasibility(
     exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
     available_area = max(length - 2 * exterior, 0.0) * max(width - 2 * exterior, 0.0)
 
+    if total_floors == 1:
+        # A single-storey house has no staircase - never count one even if
+        # a caller left one in the list.
+        rooms = [r for r in (rooms or []) if classify_room_category(str(r.get("name") or "")) != "staircase"]
+
     if not rooms or available_area <= 0:
         return {
             "verdict": "feasible",

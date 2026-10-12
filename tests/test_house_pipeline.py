@@ -2336,3 +2336,68 @@ def test_run_house_pipeline_downgrades_feasibility_on_hard_quality_violations(mo
         feasibility = json.loads(house_project.feasibility_json)
         assert feasibility["verdict"] == "tight"
         assert "Bedroom" in feasibility["explanation"]
+
+
+class StaircaseEverywhereProvider(FakeProvider):
+    """Returns a "Staircase" on every floor, whatever the floor count."""
+
+    def __init__(self, floors):
+        super().__init__()
+        self._floors = floors
+
+    def generate_room_layout(
+        self,
+        dimensions,
+        prompt,
+        plot_description=None,
+        floor_count=None,
+        floor_bedrooms=None,
+        floor_bathrooms=None,
+        extra_rooms=None,
+    ):
+        self.room_layout_calls.append((dimensions, prompt, plot_description, floor_count))
+        return {
+            "floors": [
+                {
+                    "floor_number": n,
+                    "rooms": [
+                        {"name": "Living Room", "area": 3},
+                        {"name": "Bedroom", "area": 2},
+                        {"name": "Staircase", "area": 1},
+                    ],
+                }
+                for n in range(1, self._floors + 1)
+            ]
+        }
+
+
+def _run_staircase_case(monkeypatch, project_id, floors):
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+    storage = FakeStorage()
+    storage.objects[f"{project_id}/plot.png"] = b"plot-bytes"
+    with Session(engine) as session:
+        session.add(HouseProject(id=project_id, status="queued", plot_image_key=f"{project_id}/plot.png"))
+        session.commit()
+    run_house_pipeline(
+        project_id, StaircaseEverywhereProvider(floors), storage,
+        {"length": 60, "width": 40, "unit": "ft"}, prompt=f"{floors} floors" if floors > 1 else "1 floor",
+        floor_count=floors,
+    )
+    with Session(engine) as session:
+        hp = session.get(HouseProject, project_id)
+        assert hp.status == "done"
+        return json.loads(hp.room_layout_json)
+
+
+def test_single_floor_project_strips_a_gemini_staircase(monkeypatch):
+    layout = _run_staircase_case(monkeypatch, "hstair1", 1)
+    names = [r["name"] for f in layout["floors"] for r in f["rooms"]]
+    assert not any("stair" in n.lower() for n in names)
+
+
+def test_two_floor_project_still_gets_a_staircase_per_floor(monkeypatch):
+    layout = _run_staircase_case(monkeypatch, "hstair2", 2)
+    assert len(layout["floors"]) == 2
+    for f in layout["floors"]:
+        assert any("stair" in r["name"].lower() for r in f["rooms"])

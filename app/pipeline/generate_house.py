@@ -789,6 +789,17 @@ def run_house_pipeline(
                             if classify_room_category(str(r.get("name") or "")) != "laundry"
                         ]
 
+                # [R2] A single-storey house has no staircase. Gemini may still
+                # name one; strip it from every floor before layout and
+                # feasibility ever see it. (Multi-floor injection is below.)
+                if total_floors == 1:
+                    for floor in room_layout["floors"]:
+                        floor["rooms"] = [
+                            r
+                            for r in floor.get("rooms") or []
+                            if classify_room_category(str(r.get("name") or "")) != "staircase"
+                        ]
+
                 unit = dimensions.get("unit") or "ft"
                 front_yard_depth = parse_front_yard_depth(requirements_text, unit)
 
