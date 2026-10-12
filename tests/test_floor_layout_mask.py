@@ -709,3 +709,100 @@ def test_layout_floor_mask_garage_has_car_fitting_width(cars, dims):
     assert abs(garage_bottom - fp[3]) < 1.5 * cell, (
         f"garage not on the facing edge (bottom={garage_bottom:.1f}, fp_y1={fp[3]:.1f})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase F (2026-10-12): regression lock across the final verification matrix.
+# Phase A2's Bug A (unclaimed cells -> solid black "hole") and Bug B (a room
+# collapsing to near-zero area) were each regression-tested on their own
+# reproducing program only; Phases C/D0/D2/D4 then added new code paths the
+# A2 tests never exercise (front-setback offset, front public band, wet-
+# cluster seeding, garage pre-claim, upper floors with no public rooms). This
+# re-asserts the same two guarantees with exact arithmetic (not the sampling
+# helper above) across every program in scripts/phase_f_render.py's matrix.
+# ---------------------------------------------------------------------------
+
+_F_150_GROUND = [
+    {"name": "Living Room", "area": 3}, {"name": "Kitchen", "area": 1},
+    {"name": "Dining Room", "area": 2}, {"name": "Garage", "area": 1},
+    {"name": "Entry", "area": 1}, {"name": "Master Bedroom", "area": 2},
+    {"name": "Master Bathroom", "area": 1}, {"name": "Bedroom 2", "area": 1},
+    {"name": "Bathroom 2", "area": 1}, {"name": "Bedroom 3", "area": 1},
+    {"name": "Staircase", "area": 1},
+]
+_F_150_UPPER = [
+    {"name": "Bedroom 4", "area": 1}, {"name": "Bathroom 3", "area": 1},
+    {"name": "Bedroom 5", "area": 1}, {"name": "Bathroom 4", "area": 1},
+    {"name": "Staircase", "area": 1}, {"name": "Sitting Area", "area": 2},
+]
+_F_6080_GROUND = [
+    {"name": "Living Room", "area": 3}, {"name": "Kitchen", "area": 1},
+    {"name": "Dining Room", "area": 2}, {"name": "Entry", "area": 1},
+    {"name": "Bedroom 1", "area": 1}, {"name": "Bathroom 1", "area": 1},
+    {"name": "Bedroom 2", "area": 1}, {"name": "Bathroom 2", "area": 1},
+    {"name": "Staircase", "area": 1},
+]
+_F_6080_UPPER = [
+    {"name": "Sitting Area", "area": 2},
+    {"name": "Bedroom 3", "area": 1}, {"name": "Bathroom 3", "area": 1},
+    {"name": "Bedroom 4", "area": 1}, {"name": "Bathroom 4", "area": 1},
+    {"name": "Staircase", "area": 1},
+]
+_F_SPARSE = [
+    {"name": "Bedroom 1", "area": 1}, {"name": "Bedroom 2", "area": 1},
+    {"name": "Bedroom 3", "area": 1},
+]
+_F_D150 = {"length": 150.0, "width": 150.0, "unit": "ft"}
+_F_D6080 = {"length": 60.0, "width": 80.0, "unit": "ft"}
+
+_F_MATRIX = [
+    (_F_150_GROUND, _F_D150, 1, "south"),
+    (_F_150_UPPER, _F_D150, None, "south"),
+    (_D0_CASE_50x60, {"length": 50.0, "width": 60.0, "unit": "ft"}, None, "south"),
+    (_D0_CASE_30x40, {"length": 30.0, "width": 40.0, "unit": "ft"}, None, "south"),
+    (_D0_CASE_90x40, {"length": 90.0, "width": 40.0, "unit": "ft"}, None, "south"),
+    (_F_SPARSE, _F_D150, None, "south"),
+] + [
+    (program, _F_D6080, None, facing)
+    for facing in ("north", "east", "west")
+    for program in (_F_6080_GROUND, _F_6080_UPPER)
+]
+
+
+@pytest.mark.parametrize("rooms,dims,garage_cars,facing", _F_MATRIX)
+def test_layout_floor_mask_phase_f_matrix_exact_tiling_and_no_collapsed_room(
+    rooms, dims, garage_cars, facing
+):
+    rects = layout_floor(rooms, dims, garage_cars=garage_cars, facing=facing)
+    fp = footprint_bbox(rects)
+    assert fp is not None
+    fp_area = (fp[2] - fp[0]) * (fp[3] - fp[1])
+    parts = [p for r in rects for p in room_parts(r)]
+
+    # Bug A guard: the parts sum to exactly the footprint (no unclaimed hole)...
+    covered = sum(p["w"] * p["h"] for p in parts)
+    assert abs(fp_area - covered) < 0.01 * fp_area, (
+        f"coverage gap {fp_area - covered:.2f} sq ft (facing={facing}, "
+        f"{dims['length']}x{dims['width']}, {len(rooms)} rooms)"
+    )
+    # ...and no two parts overlap (so the sum can't hide a hole behind one).
+    overlap = 0.0
+    for i, a in enumerate(parts):
+        for b in parts[i + 1:]:
+            ox = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
+            oy = min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"])
+            if ox > 0 and oy > 0:
+                overlap += ox * oy
+    assert overlap < 0.01, f"parts overlap by {overlap:.3f} sq ft (facing={facing})"
+
+    # Bug B guard: every requested room exists and keeps (nearly) its real
+    # minimum area - none collapses toward zero.
+    for room in rooms:
+        rect = next((r for r in rects if r["name"] == room["name"]), None)
+        assert rect is not None, f"{room['name']} missing (facing={facing})"
+        area = sum(p["w"] * p["h"] for p in room_parts(rect))
+        minimum = min_area_for_room(room["name"], dims["unit"], garage_cars)
+        assert area >= 0.9 * minimum, (
+            f"{room['name']} area {area:.1f} < 90% of its real minimum "
+            f"{minimum:.1f} (facing={facing}, {dims['length']}x{dims['width']})"
+        )

@@ -80,3 +80,15 @@ def test_layout_engine_unrecognized_value_falls_back_to_rect(monkeypatch):
     dispatched = layout_engine.layout_floor(_ROOMS, _DIMS)
     direct = floor_layout.layout_floor(_ROOMS, _DIMS)
     assert dispatched == direct
+
+
+def test_committed_product_default_is_mask():
+    """Phase E (2026-10) flipped the SHIPPING default to "mask". The autouse
+    conftest fixture pins tests to "rect" regardless (so the suite asserts
+    against the engine each test was written for), which means nothing else
+    in the suite would notice if the committed default were silently flipped
+    back - this reads the class-level field default directly, independent of
+    the fixture and of any local .env."""
+    from app.config import Settings
+
+    assert Settings.model_fields["house_layout_engine"].default == "mask"
