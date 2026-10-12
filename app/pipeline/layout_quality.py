@@ -160,6 +160,31 @@ def score_floor_layout(
             continue
 
         area = sum(p["w"] * p["h"] for p in valid_parts)
+        # Parts-aware "which part actually governs usability" (2026-10,
+        # real bug found via the capacity-table feasibility probe: with
+        # governing_width taken as the MINIMUM across every part, a room
+        # with a perfectly usable, real-sized PRIMARY chunk still failed
+        # this check - a hard violation - purely because the mask engine's
+        # own documented steal/fill-leftover fallback mechanisms (see
+        # floor_layout_mask.py's module docstring, "a known, honestly-
+        # stated M1 limitation") had attached one small, thin SECONDARY
+        # part to it. That one hard violation, multiplied across nearly
+        # every room on nearly every program, made
+        # feasibility._geometrically_placeable_area() unable to find a
+        # single zero-hard-violation candidate at ANY margin (even 3.5x the
+        # real required area) for even the smallest room count - the real
+        # root cause behind "the Bedrooms/floor dropdown only ever offers
+        # 1" on a real, very large plot. Since 2026-10's _carve_rooms() fix,
+        # a thin secondary part already renders seamlessly merged into its
+        # room (no visible defect) - so it no longer deserves to be judged
+        # as harshly as a room whose ENTIRE shape is a sliver. The room's
+        # LARGEST part (the same "primary chunk" already used by the foyer
+        # check just below, and by blueprint_svg.py's furniture/label
+        # placement) is now what the HARD check judges; a thin SECONDARY
+        # part is downgraded to a soft "sliver_part" violation instead of
+        # silently losing the signal entirely.
+        largest_part = max(valid_parts, key=lambda p: p["w"] * p["h"])
+        primary_width = min(largest_part["w"], largest_part["h"])
         governing_width = min(min(p["w"], p["h"]) for p in valid_parts)
 
         # HARD: too small in area for this room type at all.
@@ -169,14 +194,27 @@ def score_floor_layout(
                 Violation(name, "small_area", True, f"{area:.1f} < min area {min_area:.1f}")
             )
 
-        # HARD: narrower than this room type's real minimum usable width -
-        # catches a sliver that happens to clear the area floor only because
-        # it's very long (e.g. a very thin, very deep room).
+        # HARD: the room's own LARGEST (primary) part is narrower than this
+        # room type's real minimum usable width - catches a room whose
+        # ENTIRE shape is a sliver (e.g. a very thin, very deep room), which
+        # is what this check was always meant to catch.
         if category not in ("garage", "staircase", "hallway"):
             min_w = min_width_for_room(name, unit)
-            if governing_width < min_w * _AREA_TOLERANCE:
+            if primary_width < min_w * _AREA_TOLERANCE:
                 violations.append(
-                    Violation(name, "narrow", True, f"{governing_width:.1f} < min width {min_w:.1f}")
+                    Violation(name, "narrow", True, f"{primary_width:.1f} < min width {min_w:.1f} (largest part)")
+                )
+            elif len(valid_parts) > 1 and governing_width < min_w * _AREA_TOLERANCE:
+                # A genuinely usable primary chunk exists; a smaller
+                # SECONDARY part (the engine's own accepted steal/fill-
+                # leftover fallback) is thinner than real-world min width -
+                # soft, not hard, since it renders invisibly merged into
+                # the room and was never what this check was meant to block.
+                violations.append(
+                    Violation(
+                        name, "sliver_part", False,
+                        f"a secondary part is {governing_width:.1f} < min width {min_w:.1f}",
+                    )
                 )
 
         # HARD: the foyer/entry specifically must meet its real minimum

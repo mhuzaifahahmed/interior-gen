@@ -40,6 +40,44 @@ def test_shallow_foyer_is_a_hard_violation():
     assert any(v.kind == "foyer_shallow" for v in scored.hard_violations)
 
 
+def test_a_thin_secondary_part_is_soft_not_hard_when_the_primary_part_is_usable():
+    # Real bug found 2026-10-12 via feasibility.py's own capacity-table
+    # probe: governing_width used to be the MINIMUM across every part of a
+    # room, so a room with a perfectly usable, real-sized PRIMARY chunk
+    # still failed as a HARD "narrow" violation purely because the mask
+    # engine's own documented steal/fill-leftover fallback mechanisms (see
+    # floor_layout_mask.py's module docstring - "a known, honestly-stated
+    # M1 limitation") had attached one small, thin SECONDARY part to it.
+    # Since the 2026-10 _carve_rooms() fix, that thin part already renders
+    # seamlessly merged into the room (no visible defect) - this is the
+    # scoring-side half of that fix: a room with a genuinely usable LARGEST
+    # part (here 20x12ft - comfortably clears Living Room's real min_width)
+    # plus one thin attached sliver (0.5x12ft) must NOT be a hard "narrow"
+    # violation, only a soft "sliver_part" one.
+    rects = [
+        {
+            "name": "Living Room", "x": 0, "y": 0, "w": 20.5, "h": 12,
+            "parts": [
+                {"x": 0, "y": 0, "w": 20, "h": 12},
+                {"x": 20, "y": 0, "w": 0.5, "h": 12},
+            ],
+        },
+    ]
+    scored = score_floor_layout(rects, _dims(length=25, width=15))
+    assert not any(v.kind == "narrow" and v.hard for v in scored.violations)
+    assert any(v.kind == "sliver_part" and not v.hard for v in scored.violations)
+
+
+def test_a_room_whose_entire_shape_is_a_sliver_is_still_a_hard_violation():
+    # The flip side of the test above - the largest-part-aware check must
+    # NOT become a loophole that lets a room whose ENTIRE shape is a sliver
+    # (no genuinely usable chunk at all) escape as merely soft. This is the
+    # exact case the "narrow" check was always meant to catch.
+    rects = [{"name": "Bedroom 2", "x": 0, "y": 0, "w": 3, "h": 30}]
+    scored = score_floor_layout(rects, _dims(length=10, width=35))
+    assert any(v.kind == "narrow" and v.hard for v in scored.violations)
+
+
 def test_narrow_sliver_room_is_a_hard_violation_even_if_area_is_sufficient():
     # Large enough AREA, but far too narrow a width to be usable - a direct
     # regression for "area guaranteed, shape wasn't" bugs this scorer exists

@@ -16,6 +16,8 @@ from app.pipeline.floor_layout_mask import (
     MAX_PLOT_COVERAGE,
     MIN_FRONT_SETBACK_M,
     _mask_footprint_dimensions,
+    _public_band_rows,
+    _room_targets,
     layout_floor,
     layout_floor_with_warnings,
 )
@@ -24,6 +26,7 @@ from app.pipeline.room_specs import (
     classify_room_category,
     garage_dimensions,
     min_area_for_room,
+    min_width_for_room,
     to_plot_unit,
 )
 
@@ -806,3 +809,49 @@ def test_layout_floor_mask_phase_f_matrix_exact_tiling_and_no_collapsed_room(
             f"{room['name']} area {area:.1f} < 90% of its real minimum "
             f"{minimum:.1f} (facing={facing}, {dims['length']}x{dims['width']})"
         )
+
+
+def test_public_band_rows_is_at_least_the_largest_public_room_min_width():
+    # Real bug found 2026-10-12 via feasibility.py's own capacity-table
+    # probe (a small, sparse public room program - exactly the shape that
+    # triggers this): the band depth used to be sized from AREA alone (sum
+    # of preferred areas / cols), with no floor tied to any public room's
+    # own real min_width. On a sparse program with little total public
+    # area, that could size the band THINNER than Living Room's own real
+    # min_width (the largest of any public category) - and since
+    # _grow_rooms()'s band gate CONFINES every public room's growth to
+    # rows [0, band), no amount of plot size could ever let that room clear
+    # its own min-width bar: the band itself structurally prevented it.
+    # Asserts the band (converted back to real units via cell_h) is always
+    # >= the largest public room's own min_width_for_room(), for a sparse
+    # LKD+Entry program where the pre-fix band genuinely fell short.
+    rooms = [
+        {"name": "Living Room"}, {"name": "Kitchen"},
+        {"name": "Dining Room"}, {"name": "Entry"},
+        {"name": "Staircase"}, {"name": "Bedroom 1"}, {"name": "Bathroom 1"},
+    ]
+    ordered = [{"name": r["name"], "suite": None} for r in rooms]
+    targets = _room_targets(ordered, "ft", None)
+    public_idx = [i for i, t in enumerate(targets) if t["category"] in ("living", "kitchen", "dining", "foyer")]
+    cols = rows = 40
+    cell_area = (34.2 / cols) * (34.2 / rows)
+    cell_h = 34.2 / rows
+
+    band = _public_band_rows(targets, public_idx, cols, rows, cell_area, cell_h, "ft")
+
+    max_public_min_width = max(min_width_for_room(targets[i]["name"], "ft") for i in public_idx)
+    assert band * cell_h >= max_public_min_width - 0.01, (
+        f"band depth {band * cell_h:.1f}ft < largest public room's own min_width "
+        f"{max_public_min_width:.1f}ft - that room can never clear its own bar"
+    )
+
+
+def test_public_band_rows_is_a_no_op_with_no_public_rooms():
+    # band=0 (no-op) must still be returned when there are no public rooms
+    # at all (e.g. a typical upper floor) - the new min_width floor must
+    # never apply to an empty public_idx.
+    rooms = [{"name": "Bedroom 1"}, {"name": "Staircase"}]
+    ordered = [{"name": r["name"], "suite": None} for r in rooms]
+    targets = _room_targets(ordered, "ft", None)
+    band = _public_band_rows(targets, [], 40, 40, 1.0, 1.0, "ft")
+    assert band == 0

@@ -117,6 +117,7 @@ from app.pipeline.room_specs import (
     garage_dimensions,
     max_area_for_room,
     min_area_for_room,
+    min_width_for_room,
     preferred_area_for_room,
     to_plot_unit,
 )
@@ -182,6 +183,29 @@ _CANDIDATE_CROSS_LINK = (True, False)
 # simplifications" for why this engine uses a fixed multiplier instead of
 # the rect engine's geometry-verification probe.
 FOOTPRINT_EXTRA_MARGIN = 1.3
+
+# ATTEMPTED 2026-10, REVERTED THE SAME DAY - kept at 1.0 (a true no-op) as
+# an honest record, not deleted outright. The investigation that led here
+# (a sparse room program produced a tiny house regardless of plot size, and
+# feasibility.py's capacity table reported 0 bedrooms/0 bathrooms fit on
+# ANY plot size) correctly found _mask_footprint_dimensions()'s own
+# max_absorbable cap (below) had ZERO slack - but giving it even a modest
+# 1.3x slack reintroduced the EXACT "a room balloons to several times its
+# own real maximum area" bug max_absorbable was originally built to prevent
+# (confirmed live: Master Bedroom reached 1,009.8 sq ft against its own
+# 323.9 sq ft absolute cap, a 3x overshoot, on a regression test that used
+# to pass cleanly). _fill_leftovers()'s own excess-redistribution fallback
+# is "deliberately UNBOUNDED by max_cells" (see that function's own
+# docstring - capping it was tried twice before and reverted both times for
+# making sparse programs worse) - so ANY extra footprint slack beyond the
+# bare max_absorbable sum has nowhere bounded to go once every room's own
+# max_cells is reached. The real fix for "capacity table reports too few
+# rooms fit" turned out to live elsewhere (see
+# layout_quality.py's largest-part-aware narrow check and
+# _public_band_rows()'s min-width floor, both kept) - NOT in loosening this
+# specific cap. Left at 1.0 so a future attempt doesn't have to
+# rediscover this the hard way.
+FOOTPRINT_ABSORBABLE_SLACK = 1.0
 
 # ---- Phase C0: auto site-planning (2026-10) ----
 # "This is going to be used for HOUSES" (explicit user directive) - a large
@@ -308,7 +332,7 @@ def _mask_footprint_dimensions(
         max_area_for_room(str(r.get("name") or ""), unit, garage_cars) for r in rooms
     )
     if max_absorbable > 0:
-        target_area = min(target_area, max_absorbable)
+        target_area = min(target_area, max_absorbable * FOOTPRINT_ABSORBABLE_SLACK)
 
     # Phase C0 auto site-planning: a genuinely large plot always keeps real
     # yard, even when the room program is big enough to otherwise want more
@@ -405,7 +429,7 @@ def _grow_floor(
     private_idx = [i for i, t in enumerate(targets) if _zone_key(t["name"]) == 2]
 
     has_spine = len(private_idx) >= _MIN_ROOMS_FOR_SPINE
-    band = _public_band_rows(targets, public_idx, cols, rows, cell_area)
+    band = _public_band_rows(targets, public_idx, cols, rows, cell_area, cell_h, unit)
     zones = [_zone_key(t["name"]) for t in targets]
     spine_cells: set[tuple[int, int]] = set()
     if has_spine:
@@ -548,7 +572,8 @@ def _reserve_spine(
 
 
 def _public_band_rows(
-    targets: list[dict], public_idx: list[int], cols: int, rows: int, cell_area: float
+    targets: list[dict], public_idx: list[int], cols: int, rows: int, cell_area: float,
+    cell_h: float = 1.0, unit: str = "ft",
 ) -> int:
     """Depth (in rows) of the front public band - enough rows for every
     public room's own PREFERRED area to fit across the full footprint width
@@ -557,11 +582,44 @@ def _public_band_rows(
     the private zone + spine always keep real depth behind it. Returns 0
     when there are no public rooms (no band, whole floor is private/
     circulation - the growth row-bounds then degrade to the full [0, rows)
-    range, i.e. a strict no-op)."""
+    range, i.e. a strict no-op).
+
+    Real bug fixed 2026-10 (found via feasibility.py's capacity-table
+    probe, which uses a SMALL, sparse room program on a square test plot -
+    the exact shape that triggered this): the band depth used to be sized
+    from AREA alone (sum of preferred areas / cols), with no floor tied to
+    any public room's own real MIN WIDTH. On a sparse public program (e.g.
+    just Living/Kitchen/Dining/Entry, no suite/garage padding out the area
+    sum), that area-only math could size the band THINNER than Living
+    Room's own real min_width_for_room() (the largest of any public
+    category) - and because _grow_rooms()'s band gate then CONFINES every
+    public room's growth to rows [0, band), no amount of extra plot size
+    could ever let that room clear its own min-width bar: the band itself
+    structurally prevented it, regardless of how much margin the capacity
+    probe's search tried. This is what made
+    feasibility.room_count_requirements_table() report 0 bedrooms/0
+    bathrooms fit on every plot size, including a genuinely huge one - the
+    band was never the bottleneck a bigger plot could fix. Fixed by
+    flooring the band depth (in rows) at the largest public room's own real
+    min_width, converted via `cell_h` - the band is now always AT LEAST
+    deep enough to let the room that needs the most depth have a real
+    chance to clear its own bar (still only a chance, not a guarantee -
+    horizontal space/competition from other rooms can still produce a
+    narrower shape - but the band itself is no longer the hard ceiling)."""
     if not public_idx or cols <= 0 or cell_area <= 0:
         return 0
     total = sum(max(1, round(targets[i]["preferred_area"] / cell_area)) for i in public_idx)
     band = max(1, -(-total // cols))  # ceil(total / cols)
+    if cell_h > 0:
+        max_min_width = max(
+            (min_width_for_room(targets[i]["name"], unit) for i in public_idx), default=0.0
+        )
+        # int(-(-a // b)) is the standard ceiling-division trick; cast to
+        # int explicitly since max_min_width/cell_h are floats and `band`
+        # must stay a real int (it's used as a range()/grid-index bound
+        # elsewhere) - band = max(int, float) would silently return a float.
+        min_width_rows = max(1, int(-(-max_min_width // cell_h))) if max_min_width > 0 else 1
+        band = max(band, min_width_rows)
     return _clamp(band, 1, max(1, int(rows * _MAX_PUBLIC_BAND_FRACTION)))
 
 
