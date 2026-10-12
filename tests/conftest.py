@@ -142,3 +142,13 @@ def _default_house_layout_engine(monkeypatch):
     monkeypatch.setattr(settings, "house_layout_engine", "rect")
     yield
     room_count_requirements_table.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _default_house_planner_enabled(monkeypatch):
+    """Same shape/purpose as _default_house_layout_engine above, for
+    settings.house_planner_enabled (mask planner, Phase 2). Pinned False for
+    every test regardless of a developer's local .env, so the suite's
+    outcomes never depend on it; tests that exercise the planner set it True
+    within their own body (last write wins)."""
+    monkeypatch.setattr(settings, "house_planner_enabled", False)

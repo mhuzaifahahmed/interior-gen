@@ -110,7 +110,8 @@ from app.pipeline.floor_layout import (
     _sort_key,
     _zone_key,
 )
-from app.pipeline.layout_quality import score_floor_layout
+from app.config import settings
+from app.pipeline.layout_quality import Violation, score_floor_layout
 from app.pipeline.room_specs import (
     EXTERIOR_WALL_THICKNESS_M,
     classify_room_category,
@@ -119,6 +120,7 @@ from app.pipeline.room_specs import (
     min_area_for_room,
     min_width_for_room,
     preferred_area_for_room,
+    target_area_for_room,
     to_plot_unit,
 )
 
@@ -236,16 +238,18 @@ MIN_FRONT_SETBACK_M = 5.5
 
 
 def layout_floor(
-    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None
+    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None,
+    plan=None,
 ) -> list[dict]:
     """Same contract as floor_layout.layout_floor() - plain rects/parts
     list, no warnings."""
-    rects, _warnings = layout_floor_with_warnings(rooms, dimensions, garage_cars, facing)
+    rects, _warnings = layout_floor_with_warnings(rooms, dimensions, garage_cars, facing, plan)
     return rects
 
 
 def layout_floor_with_warnings(
-    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None
+    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None,
+    plan=None,
 ) -> tuple[list[dict], list]:
     """Same contract as floor_layout.layout_floor_with_warnings() - see
     that function's docstring for the parameter/return shape, identical on
@@ -261,6 +265,12 @@ def layout_floor_with_warnings(
     facing = (facing or "north").strip().lower()
     if facing not in _VALID_FACINGS:
         facing = "north"
+
+    # Phase 2 planner path (flag-gated). `plan` is a house_planner.FloorPlan;
+    # with the flag OFF it is ignored entirely and everything below runs
+    # exactly as before (byte-identical).
+    if settings.house_planner_enabled:
+        return _layout_with_plan(rooms, dimensions, garage_cars, facing, plan)
 
     real_length = float(dimensions.get("length") or 1)
     real_width = float(dimensions.get("width") or 1)
@@ -300,6 +310,215 @@ def layout_floor_with_warnings(
         exterior, real_length, real_width, unit,
     )
     return rooms_out, best_warnings
+
+
+# ---- Phase 2: planner path (Settings.house_planner_enabled) ----
+
+
+def _layout_with_plan(
+    rooms: list[dict], dimensions: dict, garage_cars: int | None, facing: str, plan
+) -> tuple[list[dict], list]:
+    """Planner path: footprint + yards + per-room targets come from a
+    house_planner.FloorPlan; this engine only shapes rooms inside it. When
+    `plan` is None (feasibility probe, kaggle conditioning image) a single-
+    floor plan is built here. Rooms the plan ADDED (bonus rooms, Terrace) are
+    appended if the caller did not already include them."""
+    from app.pipeline.house_planner import plan_building
+
+    unit = dimensions.get("unit") or "ft"
+    if plan is None:
+        already_planned = any(r.get("planner_added") for r in rooms)
+        if not already_planned:
+            _plan, results = layout_building([rooms], dimensions, facing, garage_cars, 1)
+            _rooms, rects, warnings = results[0]
+            return rects, warnings
+        plan = plan_building([rooms], dimensions, facing, garage_cars, 1, add_bonus=False).floors[0]
+    names = {str(r.get("name") or "") for r in rooms}
+    rooms = list(rooms) + [dict(a) for a in plan.added_rooms if a["name"] not in names]
+
+    fp_length, fp_width = plan.footprint_length, plan.footprint_width
+    if facing in ("east", "west"):
+        core_dimensions = {"length": fp_width, "width": fp_length, "unit": unit}
+    else:
+        core_dimensions = {"length": fp_length, "width": fp_width, "unit": unit}
+
+    def run(room_list: list[dict]) -> tuple[list[dict], list]:
+        targets = _room_targets(_order_rooms(room_list), unit, garage_cars)
+        for t in targets:
+            mx = plan.room_max.get(t["name"]) or t["max_area"]
+            t["max_area"] = max(mx, t["min_area"])
+            tgt = plan.room_targets.get(t["name"])
+            if tgt is None:
+                tgt = target_area_for_room(t["name"], unit, garage_cars)
+            t["target_area"] = min(max(tgt, t["min_area"]), t["max_area"])
+        room_targets = {t["name"]: t["target_area"] for t in targets}
+        room_max = {t["name"]: t["max_area"] for t in targets}
+        daylight_fp = {"x0": 0.0, "y0": 0.0, "x1": core_dimensions["length"], "y1": core_dimensions["width"]}
+
+        best_rooms: list[dict] | None = None
+        best_score: float | None = None
+        best_warnings: list = []
+        best_stats: dict = {}
+        for width_delta in _CANDIDATE_SPINE_WIDTH_DELTAS:
+            for cross_link in _CANDIDATE_CROSS_LINK:
+                stats: dict = {}
+                candidate = _grow_floor(
+                    targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats
+                )
+                scored = score_floor_layout(
+                    candidate, core_dimensions, garage_cars, daylight_footprint=daylight_fp,
+                    planner_checks=True, room_targets=room_targets, room_max=room_max,
+                )
+                if best_score is None or scored.score > best_score:
+                    best_score = scored.score
+                    best_rooms = candidate
+                    best_warnings = list(scored.violations)
+                    best_stats = stats
+        if best_stats.get("overflow_cells") or best_stats.get("hallway_unaligned_cells"):
+            best_warnings.append(
+                Violation(
+                    "__floor__", "fill_overflow", False,
+                    f"bounded fill: {best_stats.get('overflow_cells', 0)} cells had no neighbour with headroom "
+                    f"({', '.join(best_stats.get('overflow_rooms', []))}); "
+                    f"{best_stats.get('over_max_after_rebalance', 0)} cells still over a max after rebalancing; "
+                    f"{best_stats.get('hallway_unaligned_cells', 0)} cells absorbed into a non-aligned hallway pocket",
+                )
+            )
+        return best_rooms or [], best_warnings
+
+    def hard_count(warnings: list) -> int:
+        return sum(1 for v in warnings if v.hard)
+
+    rects, warnings = run(rooms)
+    # Bonus rooms are added only where they actually fit: lowest priority
+    # first, a planner-added SPARE-AREA room is dropped when it carries a hard
+    # violation itself, or the floor lays out with fewer hard violations
+    # without it - but never when dropping it would push its area into an
+    # oversized room instead. (The Terrace - the
+    # upper-floor remainder - is never dropped.)
+    from app.pipeline.house_planner import ADDED_REASON_SPARE
+
+    bonus = [r["name"] for r in rooms if r.get("planner_added") and r.get("added_reason") == ADDED_REASON_SPARE]
+    def oversized_count(warnings: list) -> int:
+        return sum(1 for v in warnings if v.kind == "oversized")
+
+    def involves(warnings: list, name: str) -> bool:
+        return any(v.hard and name in v.room.split("<->") for v in warnings)
+
+    for name in reversed(bonus):
+        current = hard_count(warnings)
+        if current == 0:
+            break
+        trial_rooms = [r for r in rooms if str(r.get("name") or "") != name]
+        t_rects, t_warnings = run(trial_rooms)
+        # Dropped when the bonus room itself did not fit (it carries a hard
+        # violation) and removing it does not make the floor worse, or when
+        # the floor is strictly better without it.
+        t_hard = hard_count(t_warnings)
+        no_new_oversize = oversized_count(t_warnings) <= oversized_count(warnings)
+        if no_new_oversize and (t_hard < current or (involves(warnings, name) and t_hard <= current)):
+            rooms, rects, warnings = trial_rooms, t_rects, t_warnings
+            warnings.append(Violation(name, "planner_room_dropped", False, "bonus room did not fit cleanly"))
+
+    rooms_out = _apply_plan_transform(rects, facing, fp_length, fp_width, plan.yards)
+    return rooms_out, warnings
+
+
+def layout_building(
+    floors_rooms: list[list[dict]],
+    dimensions: dict,
+    facing: str | None,
+    garage_cars: int | None,
+    total_floors: int | None = None,
+    min_front_setback: float | None = None,
+    max_replans: int = 2,
+):
+    """Planner path for a whole building: plan ONE BuildingPlan, lay out every
+    floor inside it, and - when the engine dropped a bonus room it could not
+    fit cleanly - re-plan WITHOUT that room (so the footprint shrinks rather
+    than the spare area overflowing another room) and lay out again, at most
+    `max_replans` times. Returns (plan, [(rooms_used, rects, warnings), ...])
+    in floor order; rooms_used includes the planner-added rooms that were
+    actually drawn (each carries planner_added / added_reason)."""
+    from app.pipeline.house_planner import plan_building
+
+    total_floors = total_floors or len(floors_rooms)
+    exclude: dict[int, set] = {}
+    plan = None
+    results: list = []
+    for _attempt in range(max_replans + 1):
+        plan = plan_building(
+            floors_rooms, dimensions, facing, garage_cars, total_floors,
+            min_front_setback=min_front_setback, exclude_bonus=exclude or None,
+        )
+        results = []
+        dropped_any = False
+        for index, rooms in enumerate(floors_rooms):
+            fplan = plan.floors[index]
+            names = {str(r.get("name") or "") for r in rooms}
+            used = list(rooms) + [dict(a) for a in fplan.added_rooms if a["name"] not in names]
+            rects, warnings = layout_floor_with_warnings(used, dimensions, garage_cars, facing, plan=fplan)
+            drawn = {str(r.get("name") or "") for r in rects}
+            dropped = {a["name"] for a in fplan.added_rooms if a["name"] not in drawn}
+            if dropped:
+                exclude.setdefault(index + 1, set()).update(dropped)
+                dropped_any = True
+            used = [r for r in used if not r.get("planner_added") or r["name"] in drawn]
+            results.append((used, rects, warnings))
+        if not dropped_any:
+            break
+    for index, (used, _rects, _w) in enumerate(results):
+        kept = {str(r.get("name") or "") for r in used}
+        plan.floors[index].added_rooms = [a for a in plan.floors[index].added_rooms if a["name"] in kept]
+    return plan, results
+
+
+def _apply_plan_transform(rooms: list[dict], facing: str, fp_length: float, fp_width: float, yards: dict) -> list[dict]:
+    """Core (front at low-y) -> plot coordinates for the planner path:
+    transpose for east/west, mirror inside the footprint for south/east,
+    then translate by the plan's own left/top yard (gross distance from the
+    plot edge - it already includes the exterior wall band)."""
+    if facing in ("east", "west"):
+        rooms = [_map_room(r, lambda p: {**p, "x": p["y"], "y": p["x"], "w": p["h"], "h": p["w"]}) for r in rooms]
+    if facing == "south":
+        rooms = [_map_room(r, lambda p: {**p, "y": fp_width - p["y"] - p["h"]}) for r in rooms]
+    elif facing == "east":
+        rooms = [_map_room(r, lambda p: {**p, "x": fp_length - p["x"] - p["w"]}) for r in rooms]
+    dx, dy = float(yards.get("left", 0.0)), float(yards.get("top", 0.0))
+    return [_map_room(r, lambda p: {**p, "x": p["x"] + dx, "y": p["y"] + dy}) for r in rooms]
+
+
+def _fit_cells(idx: list[int], min_c: list[int], tgt_c: list[int], max_c: list[int], available: int) -> None:
+    """Rescales tgt_c[i] for i in idx (in place) so they sum to `available`
+    cells, staying within [min_c, max_c]: raised toward max (proportional to
+    headroom) when there is spare room, lowered toward min (proportional to
+    slack above min) when there is not. Deterministic integer rounding."""
+    if not idx or available <= 0:
+        return
+    current = sum(tgt_c[i] for i in idx)
+    if current == available:
+        return
+    if current < available:
+        room = {i: max(max_c[i] - tgt_c[i], 0) for i in idx}
+        sign = 1
+    else:
+        room = {i: max(tgt_c[i] - min_c[i], 0) for i in idx}
+        sign = -1
+    total_room = sum(room.values())
+    if total_room <= 0:
+        return
+    need = min(abs(available - current), total_room)
+    shares = {i: need * room[i] / total_room for i in idx}
+    given = {i: min(int(shares[i]), room[i]) for i in idx}
+    left = need - sum(given.values())
+    for i in sorted(idx, key=lambda j: (-(shares[j] - int(shares[j])), j)):
+        if left <= 0:
+            break
+        if given[i] < room[i]:
+            given[i] += 1
+            left -= 1
+    for i in idx:
+        tgt_c[i] += sign * given[i]
 
 
 def _mask_footprint_dimensions(
@@ -404,7 +623,7 @@ def _room_targets(ordered_rooms: list[dict], unit: str, garage_cars: int | None)
 
 def _grow_floor(
     targets: list[dict], dimensions: dict, spine_width_delta: int, cross_link: bool,
-    garage_cars: int | None = None,
+    garage_cars: int | None = None, planner: bool = False, stats: dict | None = None,
 ) -> list[dict]:
     """One candidate: grid + spine + seed + grow + fill + decompose.
     Returns room dicts in CORE coordinates (front always at low-y - see
@@ -429,21 +648,53 @@ def _grow_floor(
     private_idx = [i for i, t in enumerate(targets) if _zone_key(t["name"]) == 2]
 
     has_spine = len(private_idx) >= _MIN_ROOMS_FOR_SPINE
-    band = _public_band_rows(targets, public_idx, cols, rows, cell_area, cell_h, unit)
+    area_key = "target_area" if planner else "preferred_area"
+    band = _public_band_rows(targets, public_idx, cols, rows, cell_area, cell_h, unit, area_key)
     zones = [_zone_key(t["name"]) for t in targets]
+
+    target_cells = [max(1, round(t[area_key] / cell_area)) for t in targets]
+    min_cells = [max(1, round(t["min_area"] / cell_area)) for t in targets]
+    max_cells = [max(min_cells[i], round(targets[i]["max_area"] / cell_area)) for i in range(len(targets))]
+    if planner and band > 0:
+        band = _planner_band_cap(band, public_idx, max_cells, targets, cols, cell_h, unit)
+
     spine_cells: set[tuple[int, int]] = set()
-    if has_spine:
+    if has_spine and not planner:
         spine_cells = _reserve_spine(
             cols, rows, cell_w, cell_h, unit, spine_width_delta, cross_link, len(targets), band
         )
+    elif has_spine:
+        # Planner path: a real 1.2 m corridor, widened (up to the 3 m cap)
+        # only as far as needed so the back zone never has more cells than
+        # its rooms' combined max - excess area becomes circulation, never an
+        # oversized room.
+        public_set = set(public_idx) if band > 0 else set()
+        back_max = sum(max_cells[i] for i in range(len(targets)) if i not in public_set)
+        base = _planner_hallway_width_cells(0, cell_w, unit, spine_width_delta)
+        cap = max(base, round(to_plot_unit(_HALLWAY_MAX_WIDTH_M, unit) / max(cell_w, 1e-6)) + spine_width_delta)
+        for w in range(base, cap + 1):
+            spine_cells = _reserve_spine(
+                cols, rows, cell_w, cell_h, unit, spine_width_delta, cross_link, len(targets), band,
+                planner=True, width_override=w,
+            )
+            if (rows - band) * cols - len(spine_cells) <= back_max:
+                break
 
     owner = [[-1 for _ in range(cols)] for _ in range(rows)]
     for (c, r) in spine_cells:
         owner[r][c] = -2
 
-    target_cells = [max(1, round(t["preferred_area"] / cell_area)) for t in targets]
-    min_cells = [max(1, round(t["min_area"] / cell_area)) for t in targets]
-    max_cells = [max(min_cells[i], round(targets[i]["max_area"] / cell_area)) for i in range(len(targets))]
+    if planner:
+        # Phase 2: the plan's targets are relative intent; rescale them so each
+        # zone's targets sum to the cells that zone actually has (front band /
+        # back zone minus the spine), within [min, max] - so growth fills the
+        # footprint and the bounded fill only has rounding residue left.
+        back = [i for i in range(len(targets)) if i not in public_idx]
+        if band > 0:
+            _fit_cells(public_idx, min_cells, target_cells, max_cells, band * cols)
+            _fit_cells(back, min_cells, target_cells, max_cells, (rows - band) * cols - len(spine_cells))
+        else:
+            _fit_cells(list(range(len(targets))), min_cells, target_cells, max_cells, rows * cols - len(spine_cells))
 
     # Phase D4 (2026-10-12): the garage needs a real WIDTH along the facing
     # edge (room for `garage_cars` cars side by side), not just the right
@@ -480,8 +731,28 @@ def _grow_floor(
         _preclaim_garage(owner, cells_by_room, garage_i, seeds[garage_i], garage_w_cells, garage_d_cells, cols, rows)
 
     _grow_rooms(owner, cells_by_room, seeds, cols, rows, target_cells, min_cells, max_cells, zones, band)
-    _fill_leftovers(owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells, zones, band)
+    if planner:
+        _fill_leftovers_bounded(
+            owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells, zones, band,
+            stats if stats is not None else {},
+        )
+        _rebalance_over_max(
+            owner, cells_by_room, target_cells, max_cells, cols, rows, zones, band,
+            {garage_i} if garage_i is not None else set(), stats if stats is not None else {},
+            [
+                0.0 if t["category"] in ("garage", "staircase", "hallway") else min_width_for_room(t["name"], unit)
+                for t in targets
+            ],
+            cell_w, cell_h,
+        )
+    else:
+        _fill_leftovers(owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells, zones, band)
     _ensure_minimum_presence(cells_by_room, min_cells, owner)
+    if planner and stats is not None:
+        stats["overflow_rooms"] = [targets[int(i)]["name"] for i in stats.get("overflow_rooms", [])]
+        stats["over_max_rooms"] = [
+            targets[i]["name"] for i in range(len(targets)) if len(cells_by_room[i]) > max_cells[i]
+        ]
 
     rooms_out = []
     for t, cells in zip(targets, cells_by_room):
@@ -536,9 +807,26 @@ def _hallway_width_cells(long_cells: int, cell_span: float, unit: str, width_del
     return max(1, _clamp(frac_cells, min_cells_w, max_cells_w) + width_delta)
 
 
+def _planner_band_cap(
+    band: int, public_idx: list[int], max_cells: list[int], targets: list[dict], cols: int, cell_h: float, unit: str
+) -> int:
+    """Planner path: never make the front band hold more cells than every
+    public room's combined max (that surplus could only be dumped into a
+    public room past its max) - except where the largest public room's real
+    min width needs the depth."""
+    cap_rows = sum(max_cells[i] for i in public_idx) // max(cols, 1)
+    max_min_width = max((min_width_for_room(targets[i]["name"], unit) for i in public_idx), default=0.0)
+    min_rows = max(1, int(-(-max_min_width // cell_h))) if cell_h > 0 and max_min_width > 0 else 1
+    return max(1, min(band, max(cap_rows, min_rows)))
+
+
+def _planner_hallway_width_cells(_long_cells: int, cell_span: float, unit: str, width_delta: int) -> int:
+    return max(1, round(to_plot_unit(_HALLWAY_MIN_WIDTH_M, unit) / max(cell_span, 1e-6)) + width_delta)
+
+
 def _reserve_spine(
     cols: int, rows: int, cell_w: float, cell_h: float, unit: str, width_delta: int, cross_link: bool,
-    room_count: int, band_start: int = 0
+    room_count: int, band_start: int = 0, planner: bool = False, width_override: int | None = None,
 ) -> set[tuple[int, int]]:
     """Reserves circulation cells BEFORE any room is seeded - a vertical
     spine running from the back of the public band (`band_start`, the first
@@ -557,12 +845,18 @@ def _reserve_spine(
     past that, it's dropped for this candidate (the vertical spine alone is
     kept) so there's always real room left to grow rooms into."""
     band_start = _clamp(band_start, 0, max(0, rows - 1))
-    hw = min(_hallway_width_cells(min(cols, rows), cell_w, unit, width_delta), max(1, cols - 2))
+    # Planner path (Phase 2): a real corridor width (1.2 m clear) instead of
+    # 14% of the short side - the 14% rule turned ~25% of an upper floor into
+    # hallway, which the planner's area allocation never budgeted for.
+    width_fn = _planner_hallway_width_cells if planner else _hallway_width_cells
+    hw_cells = width_override if width_override is not None else width_fn(min(cols, rows), cell_w, unit, width_delta)
+    hw = min(hw_cells, max(1, cols - 2))
     cx0 = max(0, (cols - hw) // 2)
     spine = {(c, r) for r in range(band_start, rows) for c in range(cx0, min(cols, cx0 + hw))}
 
     if cross_link and room_count >= _MIN_ROOMS_FOR_CROSS_LINK:
-        hh = min(_hallway_width_cells(min(cols, rows), cell_h, unit, width_delta), max(1, rows - 2))
+        hh_cells = width_override if width_override is not None else width_fn(min(cols, rows), cell_h, unit, width_delta)
+        hh = min(hh_cells, max(1, rows - 2))
         ry0 = _clamp(round(rows * 0.62) - hh // 2, band_start, max(band_start, rows - hh))
         candidate = spine | {(c, r) for r in range(ry0, min(rows, ry0 + hh)) for c in range(cols)}
         if len(candidate) <= cols * rows * 0.6:
@@ -573,7 +867,7 @@ def _reserve_spine(
 
 def _public_band_rows(
     targets: list[dict], public_idx: list[int], cols: int, rows: int, cell_area: float,
-    cell_h: float = 1.0, unit: str = "ft",
+    cell_h: float = 1.0, unit: str = "ft", area_key: str = "preferred_area",
 ) -> int:
     """Depth (in rows) of the front public band - enough rows for every
     public room's own PREFERRED area to fit across the full footprint width
@@ -608,7 +902,7 @@ def _public_band_rows(
     narrower shape - but the band itself is no longer the hard ceiling)."""
     if not public_idx or cols <= 0 or cell_area <= 0:
         return 0
-    total = sum(max(1, round(targets[i]["preferred_area"] / cell_area)) for i in public_idx)
+    total = sum(max(1, round(targets[i][area_key] / cell_area)) for i in public_idx)
     band = max(1, -(-total // cols))  # ceil(total / cols)
     if cell_h > 0:
         max_min_width = max(
@@ -1180,6 +1474,38 @@ def _grow_rooms(
         )
 
 
+def _top_up_to_target(
+    owner: list[list[int]],
+    cells_by_room: list[set[tuple[int, int]]],
+    cols: int,
+    rows: int,
+    target_cells: list[int],
+    max_cells: list[int],
+    zones: list[int] | None,
+    band: int,
+) -> None:
+    """Planner path (Phase 2): after rectangle growth stalls, every room
+    still under its TARGET claims the nearest free cells it can reach (one
+    bounded BFS arm, never past target or max, never outside its zone band) -
+    largest relative shortfall first. Without this, a room boxed in short of
+    its target leaves free cells that only an already-full neighbour touches,
+    and the bounded fill then has to overflow that neighbour."""
+    n = len(cells_by_room)
+    if zones is not None and band > 0:
+        lo = [0 if zones[i] == 0 else band for i in range(n)]
+        hi = [band - 1 if zones[i] == 0 else rows - 1 for i in range(n)]
+    else:
+        lo, hi = [0] * n, [rows - 1] * n
+    order = sorted(
+        (i for i in range(n) if cells_by_room[i] and len(cells_by_room[i]) < target_cells[i]),
+        key=lambda i: (len(cells_by_room[i]) / max(target_cells[i], 1), i),
+    )
+    for i in order:
+        need = min(target_cells[i], max_cells[i]) - len(cells_by_room[i])
+        if need > 0:
+            _grow_arm(owner, cells_by_room[i], i, cols, rows, need, max_cells[i], lo[i], hi[i])
+
+
 def _steal_arm(
     owner: list[list[int]],
     cells_by_room: list[set[tuple[int, int]]],
@@ -1517,28 +1843,453 @@ def _fill_leftovers(
                 under_cap = [i for i in candidate_rooms if len(cells_by_room[i]) < max_cells[i]]
                 pool = under_cap or candidate_rooms
                 best = min(pool, key=lambda i: len(cells_by_room[i]) - target_cells[i])
-                # Real bug fixed during development (found by rendering a
-                # genuinely minimal 4-room program and seeing a bedroom
-                # balloon to 983 cells against a 180-cell real maximum):
-                # the WHOLE connected region used to be dumped on `best`
-                # regardless of size, even when `best` only had a little
-                # real capacity left - because a region with few/no private
-                # rooms competing for it (no spine reserved at all below
-                # _MIN_ROOMS_FOR_SPINE) can be the size of most of the
-                # remaining plot. When `best` is genuinely under its cap,
-                # only claim up to its REMAINING capacity from this region -
-                # leftover cells stay unclaimed for this same outer loop's
-                # next pass, which re-discovers them as a (now smaller)
-                # region and offers them to a different candidate. Only
-                # skip this cap when `best` was picked as a last resort
-                # (already at/over its own max, no under-cap candidate
-                # existed at all) - the whole-region dump is the correct,
-                # already-accepted behavior there (see this function's own
-                # docstring), not a fresh case to also bound.
+                # NOTE (corrected 2026-10, Phase 2): this flag-OFF path dumps the
+                # WHOLE connected region on `best`, with NO cap at its
+                # max_cells - `under_cap` above is only a soft ordering hint. A
+                # previous comment here claimed the region was capped at best's
+                # remaining capacity; it never was. That unbounded dump is a
+                # root cause of oversized rooms (whole leftover regions landing
+                # in one room). The bounded version is
+                # _fill_leftovers_bounded(), used on the planner path
+                # (Settings.house_planner_enabled); this path is left as-is so
+                # flag-off output stays byte-identical.
                 for (c, r) in region:
                     owner[r][c] = best
                     cells_by_room[best].add((c, r))
                 assigned = True
+
+
+def _leftover_region(
+    owner: list[list[int]], cols: int, rows: int, zones: list[int] | None, band: int
+) -> tuple[list[tuple[int, int]], set[int], bool] | None:
+    """The first (row-major scan) connected pocket of unclaimed cells, split
+    at the public-band boundary exactly like _fill_leftovers() - returns
+    (cells, adjacent_room_ids, touches_spine), or None when the grid is full."""
+    for r0 in range(rows):
+        for c0 in range(cols):
+            if owner[r0][c0] != -1:
+                continue
+            region = [(c0, r0)]
+            seen = {(c0, r0)}
+            stack = [(c0, r0)]
+            adjacent: set[int] = set()
+            touches_spine = False
+            while stack:
+                c, r = stack.pop()
+                for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                    nc, nr = c + dc, r + dr
+                    if not (0 <= nc < cols and 0 <= nr < rows):
+                        continue
+                    v = owner[nr][nc]
+                    if v == -1:
+                        crosses_band = zones is not None and band > 0 and (r < band) != (nr < band)
+                        if (nc, nr) not in seen and not crosses_band:
+                            seen.add((nc, nr))
+                            region.append((nc, nr))
+                            stack.append((nc, nr))
+                    elif v >= 0:
+                        adjacent.add(v)
+                    elif v == -2:
+                        touches_spine = True
+            return region, adjacent, touches_spine
+    return None
+
+
+def _spine_strips(spine_cells: set[tuple[int, int]], cols: int, rows: int, band: int) -> tuple[set[int], set[int]]:
+    """(vertical_strip_cols, cross_link_rows) of the reserved spine."""
+    if not spine_cells:
+        return set(), set()
+    lo = _clamp(band, 0, max(0, rows - 1))
+    vertical = {c for c in range(cols) if all((c, r) in spine_cells for r in range(lo, rows))}
+    cross = {r for r in range(rows) if all((c, r) in spine_cells for c in range(cols))}
+    return vertical, cross
+
+
+def _aligned_with_spine(region: list[tuple[int, int]], vertical: set[int], cross: set[int]) -> bool:
+    """True when a pocket simply extends a spine strip at its FULL width -
+    every row of the pocket spans exactly the vertical strip's columns, or
+    every column spans exactly the cross-link's rows."""
+    if vertical:
+        by_row: dict[int, set[int]] = {}
+        for c, r in region:
+            by_row.setdefault(r, set()).add(c)
+        if all(cs == vertical for cs in by_row.values()):
+            return True
+    if cross:
+        by_col: dict[int, set[int]] = {}
+        for c, r in region:
+            by_col.setdefault(c, set()).add(r)
+        if all(rs == cross for rs in by_col.values()):
+            return True
+    return False
+
+
+_DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))
+
+
+def _layered_order(start: list[tuple[int, int]], allowed: set[tuple[int, int]], toward: set[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Cells of `allowed` reachable from `start`, ordered in straight LAYERS
+    parallel to the contact with `toward` (0-1 BFS: a step along the contact
+    wall costs 0, a step away from it costs 1). Peeling layer by layer keeps
+    both sides rectilinear - a plain BFS peels diamond-shaped fronts, which
+    is what produced the stair-stepped diagonal walls."""
+    horiz = sum(1 for (c, r) in start if (c - 1, r) in toward or (c + 1, r) in toward)
+    vert = sum(1 for (c, r) in start if (c, r - 1) in toward or (c, r + 1) in toward)
+    perp_is_x = horiz >= vert
+    dist: dict[tuple[int, int], int] = {}
+    dq: deque = deque()
+    for cell in sorted(start, key=lambda cr: (cr[1], cr[0])):
+        if cell not in dist:
+            dist[cell] = 0
+            dq.append(cell)
+    order: list[tuple[int, int]] = []
+    done: set[tuple[int, int]] = set()
+    while dq:
+        cell = dq.popleft()
+        if cell in done:
+            continue
+        done.add(cell)
+        order.append(cell)
+        for dc, dr in _DIRS:
+            n = (cell[0] + dc, cell[1] + dr)
+            if n not in allowed or n in done:
+                continue
+            cost = (1 if dc else 0) if perp_is_x else (1 if dr else 0)
+            nd = dist[cell] + cost
+            if nd < dist.get(n, 1 << 30):
+                dist[n] = nd
+                if cost == 0:
+                    dq.appendleft(n)
+                else:
+                    dq.append(n)
+    order.sort(key=lambda cr: (dist[cr], cr[1], cr[0]))
+    return order
+
+
+def _claim_nearest(
+    owner: list[list[int]], cells_by_room: list[set[tuple[int, int]]], room: int,
+    region: list[tuple[int, int]], k: int,
+) -> None:
+    """`room` claims the `k` region cells nearest its own territory (BFS
+    within the region from the cells touching it; deterministic order)."""
+    region_set = set(region)
+    mine = cells_by_room[room]
+    start = [cell for cell in region if any((cell[0] + dc, cell[1] + dr) in mine for dc, dr in _DIRS)]
+    for c, r in _layered_order(start, region_set, mine)[:k]:
+        owner[r][c] = room
+        mine.add((c, r))
+
+
+def _claim_round_robin(
+    owner: list[list[int]], cells_by_room: list[set[tuple[int, int]]], rooms: list[int],
+    region: list[tuple[int, int]],
+) -> dict[int, int]:
+    """Multi-source BFS: every cell of `region` goes to whichever of `rooms`
+    reaches it first (ties -> lower room order). Spreads an unavoidable
+    overflow across all neighbours so no single room absorbs it. Returns
+    {room: cells_claimed}."""
+    region_set = set(region)
+    queue: deque = deque()
+    taken: dict[tuple[int, int], int] = {}
+    for room in rooms:
+        for cell in sorted(region, key=lambda cr: (cr[1], cr[0])):
+            if cell in taken:
+                continue
+            if any((cell[0] + dc, cell[1] + dr) in cells_by_room[room] for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0))):
+                taken[cell] = room
+                queue.append(cell)
+    while queue:
+        c, r = queue.popleft()
+        room = taken[(c, r)]
+        for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            n = (c + dc, r + dr)
+            if n in region_set and n not in taken:
+                taken[n] = room
+                queue.append(n)
+    counts: dict[int, int] = {}
+    for (c, r), room in taken.items():
+        owner[r][c] = room
+        cells_by_room[room].add((c, r))
+        counts[room] = counts.get(room, 0) + 1
+    return counts
+
+
+def _fill_leftovers_bounded(
+    owner: list[list[int]],
+    cells_by_room: list[set[tuple[int, int]]],
+    target_cells: list[int],
+    max_cells: list[int],
+    cols: int,
+    rows: int,
+    spine_cells: set[tuple[int, int]],
+    zones: list[int] | None,
+    band: int,
+    stats: dict,
+) -> None:
+    """Planner-path leftover fill (Phase 2) - BOUNDED by every room's
+    max_cells, unlike _fill_leftovers() (whose whole-region dump is a root
+    cause of oversized rooms). Each pass takes the next leftover pocket and:
+
+      1. hands it to the zone-compatible adjacent room furthest under its
+         target that still has headroom - but ONLY up to that headroom (the
+         nearest cells first); the rest stays for the next pass, which offers
+         it to another neighbour;
+      2. if no neighbour has headroom: extends the Hallway only when the
+         pocket lines up with a spine strip at its full width;
+      3. otherwise (absolute last resort) spreads the pocket across ALL its
+         neighbours (multi-source BFS) so the overflow past max is as small as
+         possible per room - and COUNTS it (stats["overflow_cells"],
+         stats["overflow_rooms"]) so the scorecard shows it.
+
+    A pocket with no room neighbour at all keeps the Bug-A rule (absorbed
+    into the spine, so no black hole) - counted in
+    stats["hallway_unaligned_cells"] when it does not line up with a strip.
+    Since the planner sizes the footprint so targets roughly sum to the
+    usable area, leftovers here are normally just rounding residue."""
+    stats.setdefault("overflow_cells", 0)
+    stats.setdefault("overflow_rooms", [])
+    stats.setdefault("hallway_aligned_cells", 0)
+    stats.setdefault("hallway_unaligned_cells", 0)
+    vertical, cross = _spine_strips(spine_cells, cols, rows, band)
+    guard = cols * rows + 10
+    while guard > 0:
+        guard -= 1
+        found = _leftover_region(owner, cols, rows, zones, band)
+        if found is None:
+            return
+        region, adjacent, touches_spine = found
+        candidates = adjacent
+        if adjacent and zones is not None and band > 0:
+            rmax = max(r for _, r in region)
+            rmin = min(r for _, r in region)
+            if rmax < band:
+                zone_ok = {i for i in adjacent if zones[i] == 0}
+            elif rmin >= band:
+                zone_ok = {i for i in adjacent if zones[i] != 0}
+            else:
+                zone_ok = adjacent
+            candidates = zone_ok or adjacent
+
+        if candidates:
+            headroom = [i for i in candidates if len(cells_by_room[i]) < max_cells[i]]
+            if headroom:
+                best = min(
+                    headroom,
+                    key=lambda i: (len(cells_by_room[i]) - target_cells[i], -(max_cells[i] - len(cells_by_room[i])), i),
+                )
+                k = min(max_cells[best] - len(cells_by_room[best]), len(region))
+                _claim_nearest(owner, cells_by_room, best, region, k)
+                continue
+            if touches_spine and _aligned_with_spine(region, vertical, cross):
+                for (c, r) in region:
+                    owner[r][c] = -2
+                    spine_cells.add((c, r))
+                stats["hallway_aligned_cells"] += len(region)
+                continue
+            # Last resort: the whole pocket goes to ONE neighbour (a block,
+            # not a Voronoi split - splitting across several neighbours drew
+            # diagonal stair-step walls); _rebalance_over_max() then pushes
+            # the excess along adjacent rooms to wherever headroom remains.
+            best = min(candidates, key=lambda i: (len(cells_by_room[i]) - max_cells[i], i))
+            for (c, r) in region:
+                owner[r][c] = best
+                cells_by_room[best].add((c, r))
+            stats["overflow_cells"] += len(region)
+            stats["overflow_rooms"] = sorted(set(stats["overflow_rooms"]) | {str(best)})
+            continue
+
+        if touches_spine:
+            aligned = _aligned_with_spine(region, vertical, cross)
+            for (c, r) in region:
+                owner[r][c] = -2
+                spine_cells.add((c, r))
+            stats["hallway_aligned_cells" if aligned else "hallway_unaligned_cells"] += len(region)
+            continue
+
+        fallback = [j for j, cs in enumerate(cells_by_room) if cs]
+        if not fallback:
+            return
+        best = min(fallback, key=lambda i: len(cells_by_room[i]) - target_cells[i])
+        for (c, r) in region:
+            owner[r][c] = best
+            cells_by_room[best].add((c, r))
+        stats["overflow_cells"] += len(region)
+        stats["overflow_rooms"] = sorted(set(stats["overflow_rooms"]) | {str(best)})
+
+
+_MIN_SHARED_WALL_CELLS = 3
+
+
+def _room_adjacency(owner: list[list[int]], cols: int, rows: int, n: int) -> list[set[int]]:
+    """Room adjacency, counting only shared walls at least
+    _MIN_SHARED_WALL_CELLS long - a transfer across a 1-2 cell contact would
+    push a thin tongue deep into the donor."""
+    shared: dict[tuple[int, int], int] = {}
+    for r in range(rows):
+        for c in range(cols):
+            a = owner[r][c]
+            if a < 0:
+                continue
+            for b in ((owner[r][c + 1] if c + 1 < cols else -1), (owner[r + 1][c] if r + 1 < rows else -1)):
+                if b >= 0 and b != a:
+                    key = (min(a, b), max(a, b))
+                    shared[key] = shared.get(key, 0) + 1
+    adj: list[set[int]] = [set() for _ in range(n)]
+    for (a, b), length in shared.items():
+        if length >= _MIN_SHARED_WALL_CELLS:
+            adj[a].add(b)
+            adj[b].add(a)
+    return adj
+
+
+def _stays_connected(cells: set[tuple[int, int]], removed: tuple[int, int]) -> bool:
+    """True when `cells` minus `removed` is still one 4-connected piece."""
+    rest = len(cells) - 1
+    if rest <= 1:
+        return rest >= 0
+    start = next(
+        ((removed[0] + dc, removed[1] + dr) for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0))
+         if (removed[0] + dc, removed[1] + dr) in cells),
+        None,
+    )
+    if start is None:
+        return False
+    seen = {start, removed}
+    stack = [start]
+    count = 1
+    while stack:
+        c, r = stack.pop()
+        for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            n = (c + dc, r + dr)
+            if n in cells and n not in seen:
+                seen.add(n)
+                stack.append(n)
+                count += 1
+    return count == rest
+
+
+def _transfer(
+    owner: list[list[int]], cells_by_room: list[set[tuple[int, int]]], donor: int, receiver: int, k: int
+) -> int:
+    """Moves up to `k` of `donor`'s cells to `receiver`, starting at their
+    shared boundary and working inward (BFS), never disconnecting the donor.
+    Returns the number moved."""
+    d_cells = cells_by_room[donor]
+    r_cells = cells_by_room[receiver]
+    frontier = [cell for cell in d_cells if any((cell[0] + dc, cell[1] + dr) in r_cells for dc, dr in _DIRS)]
+    moved = 0
+    for cell in _layered_order(frontier, set(d_cells), r_cells):
+        if moved >= k or len(d_cells) <= 1:
+            break
+        if not any((cell[0] + dc, cell[1] + dr) in r_cells for dc, dr in _DIRS):
+            continue
+        if not _stays_connected(d_cells, cell):
+            continue
+        d_cells.discard(cell)
+        r_cells.add(cell)
+        owner[cell[1]][cell[0]] = receiver
+        moved += 1
+    return moved
+
+
+def _usable_width(cells: set, min_widths: list[float] | None, i: int, cell_w: float, cell_h: float) -> bool:
+    """True when the room's largest decomposed part is at least its real
+    minimum width (the scorer's HARD "narrow" rule)."""
+    if not min_widths or not cells:
+        return True
+    parts = _decompose(cells)
+    _c, _r, pw, ph = max(parts, key=lambda p: p[2] * p[3])
+    return min(pw * cell_w, ph * cell_h) >= min_widths[i] * 0.98
+
+
+def _rebalance_over_max(
+    owner: list[list[int]],
+    cells_by_room: list[set[tuple[int, int]]],
+    target_cells: list[int],
+    max_cells: list[int],
+    cols: int,
+    rows: int,
+    zones: list[int] | None,
+    band: int,
+    pinned: set[int],
+    stats: dict,
+    min_widths: list[float] | None = None,
+    cell_w: float = 1.0,
+    cell_h: float = 1.0,
+) -> None:
+    """Planner path (Phase 2): an area-flow relaxation after the bounded fill.
+    A room left over its max (the fill's last-resort overflow) pushes its
+    excess along the shortest chain of adjacent rooms (same zone: front band
+    or back) to the nearest room that still has headroom - each room on the
+    chain hands cells across its shared wall to the next, so intermediate
+    rooms keep their size and only the end of the chain grows. Never moves
+    garage/pinned cells, never crosses the band, never disconnects a donor.
+    Anything that still cannot move stays counted in stats."""
+    n = len(cells_by_room)
+    if zones is not None and band > 0:
+        group = [0 if zones[i] == 0 else 1 for i in range(n)]
+    else:
+        group = [1] * n
+    for _ in range(4 * n + 4):
+        over = sorted(
+            (i for i in range(n) if len(cells_by_room[i]) > max_cells[i] and i not in pinned),
+            key=lambda i: (-(len(cells_by_room[i]) - max_cells[i]), i),
+        )
+        if not over:
+            break
+        adj = _room_adjacency(owner, cols, rows, n)
+        progressed = False
+        for a in over:
+            excess = len(cells_by_room[a]) - max_cells[a]
+            if excess <= 0:
+                continue
+            prev = {a: None}
+            queue = deque([a])
+            end = None
+            while queue and end is None:
+                cur = queue.popleft()
+                for nb in sorted(adj[cur], key=lambda j: (len(cells_by_room[j]) - target_cells[j], j)):
+                    if nb in prev or group[nb] != group[a] or nb in pinned:
+                        continue
+                    prev[nb] = cur
+                    if len(cells_by_room[nb]) < max_cells[nb]:
+                        end = nb
+                        break
+                    queue.append(nb)
+            if end is None:
+                continue
+            path = [end]
+            while prev[path[-1]] is not None:
+                path.append(prev[path[-1]])
+            path.reverse()  # a ... end
+            k = min(excess, max_cells[end] - len(cells_by_room[end]))
+            snapshot = {i: set(cells_by_room[i]) for i in path}
+            ok_before = {i: _usable_width(cells_by_room[i], min_widths, i, cell_w, cell_h) for i in path}
+            for step in range(len(path) - 1, 0, -1):
+                k = _transfer(owner, cells_by_room, path[step - 1], path[step], k)
+                if k <= 0:
+                    break
+            # Never trade an oversized room for a too-narrow one: undo the
+            # whole chain if it left any room on it narrower than its real
+            # minimum width when it was not before.
+            if any(
+                ok_before[i] and not _usable_width(cells_by_room[i], min_widths, i, cell_w, cell_h)
+                for i in path
+            ):
+                for i, cells in snapshot.items():
+                    cells_by_room[i] = cells
+                    for (c, r) in cells:
+                        owner[r][c] = i
+                adj[a] = set()  # don't retry this donor this round
+                continue
+            if k > 0:
+                progressed = True
+                adj = _room_adjacency(owner, cols, rows, n)
+        if not progressed:
+            break
+    stats["over_max_after_rebalance"] = sum(
+        max(len(cells_by_room[i]) - max_cells[i], 0) for i in range(n) if i not in pinned
+    )
 
 
 def _ensure_minimum_presence(

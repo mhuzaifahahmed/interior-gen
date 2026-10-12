@@ -9,7 +9,8 @@ import os
 
 import pytest
 
-from app.pipeline.floor_layout_mask import layout_floor_with_warnings
+from app.config import settings
+from app.pipeline.floor_layout_mask import layout_building, layout_floor_with_warnings
 from app.pipeline.layout_metrics import measure_floor
 from app.pipeline.planning_rules import plot_band
 from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, to_plot_unit
@@ -18,6 +19,11 @@ from tests.mask_quality_matrix import iter_floors
 _BASELINE_PATH = os.path.join(os.path.dirname(__file__), "data", "mask_quality_baseline.json")
 with open(_BASELINE_PATH, encoding="utf-8") as _f:
     _BASELINE = json.load(_f)
+# Planner-on (Settings.house_planner_enabled) ratchet, Phase 2. Update only via
+#   python scripts/mask_quality_report.py --planner on --update-baseline
+_PLANNER_BASELINE_PATH = os.path.join(os.path.dirname(__file__), "data", "mask_quality_baseline_planner.json")
+with open(_PLANNER_BASELINE_PATH, encoding="utf-8") as _f:
+    _PLANNER_BASELINE = json.load(_f)
 
 _ITEMS = list(iter_floors())
 _COVERAGE_TOLERANCE_PCT = 0.5
@@ -53,7 +59,6 @@ def test_mask_quality_does_not_regress(case, floor_n, rooms, key):
         f"{key} missing from baseline - run "
         "`python scripts/mask_quality_report.py --update-baseline`"
     )
-    base = _BASELINE[key]
     rects, _ = layout_floor_with_warnings(
         rooms, case["plot"], garage_cars=case["garage_cars"], facing=case["facing"]
     )
@@ -61,6 +66,47 @@ def test_mask_quality_does_not_regress(case, floor_n, rooms, key):
         rects, case["plot"], total_floors=len(case["floors"]), floor_number=floor_n,
         garage_cars=case["garage_cars"],
     )
+    _assert_no_regression(case, cur, _BASELINE[key])
+
+
+def _planner_layout(case, floor_n, rooms):
+    plan, results = layout_building(
+        case["floors"], case["plot"], case["facing"], case["garage_cars"], len(case["floors"])
+    )
+    _used, rects, _w = results[floor_n - 1]
+    return measure_floor(
+        rects, case["plot"], total_floors=len(case["floors"]), floor_number=floor_n,
+        garage_cars=case["garage_cars"], max_overrides=dict(plan.for_floor(floor_n).room_max) or None,
+    )
+
+
+@pytest.mark.parametrize("case,floor_n,rooms,key", [pytest.param(*i, id=i[3]) for i in _ITEMS])
+def test_mask_quality_planner_does_not_regress(monkeypatch, case, floor_n, rooms, key):
+    monkeypatch.setattr(settings, "house_planner_enabled", True)
+    assert key in _PLANNER_BASELINE, (
+        f"{key} missing from planner baseline - run "
+        "`python scripts/mask_quality_report.py --planner on --update-baseline`"
+    )
+    _assert_no_regression(case, _planner_layout(case, floor_n, rooms), _PLANNER_BASELINE[key])
+
+
+# The two Phase-1 regressions Phase 2 was meant to clear, judged with the
+# planner ON against the flag-OFF baseline numbers. Phase 2 does NOT clear
+# them yet (planner-on: 60x80 dense 9 hard vs 5; 150x150 dense floor1 has
+# more hard violations, though Kitchen is no longer oversized) - strict
+# xfail so this flips to a failure the moment a later phase clears them.
+@pytest.mark.xfail(strict=True, reason="Phase 2 planner does not yet clear the Phase-1 regressions (see report)")
+@pytest.mark.parametrize("key", sorted(_PHASE1_KNOWN_REGRESSIONS))
+def test_planner_clears_phase1_regressions(monkeypatch, key):
+    monkeypatch.setattr(settings, "house_planner_enabled", True)
+    case, floor_n, rooms, _k = next(i for i in _ITEMS if i[3] == key)
+    cur = _planner_layout(case, floor_n, rooms)
+    base = _BASELINE[key]
+    assert cur["hard_count"] <= base["hard_count"], (cur["hard_kinds"], base["hard_kinds"])
+    assert len(cur["oversized"]) <= len(base["oversized"]), cur["oversized"]
+
+
+def _assert_no_regression(case, cur, base):
 
     # Absolute.
     assert cur["coverage_gap_fraction"] <= 0.01, cur["coverage_gap_fraction"]

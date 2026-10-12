@@ -117,6 +117,15 @@ BONUS_ROOM_PRIORITY: tuple[dict, ...] = (
 )
 UPPER_FLOOR_EXCESS_FALLBACK = "Terrace"
 
+# Phase 2 finding (scorecard, 2026-10): on the mask engine's ~40-cell grid, a
+# bonus room whose TARGET is under ~6.5 sq m (~70 sq ft) - walk-in closet,
+# pantry, laundry, powder room, storage - came out as a 1-cell sliver with no
+# room for a door in most matrix cases (hard violations roughly doubled with
+# them on). Until shape discipline (Phase 3) lands, the planner only adds
+# bonus rooms at least this big. Entries stay in BONUS_ROOM_PRIORITY so
+# lowering this re-enables them.
+BONUS_ROOM_MIN_TARGET_SQM = 6.5
+
 
 def target_from_bounds(preferred: float, maximum: float) -> float:
     """TARGET sits halfway between preferred and max (equal to both when they

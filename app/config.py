@@ -340,6 +340,17 @@ class Settings(BaseSettings):
     # in a local, gitignored .env if you need the old engine temporarily.
     house_layout_engine: str = "mask"
 
+    # Rules-driven house planner for the MASK engine (future-plans/mask-
+    # planner-rules-and-quality.md, Phase 2): app/pipeline/house_planner.py
+    # sizes ONE footprint per building from the plot band + room program,
+    # sets balanced yards, gives every room a target area (adding bonus
+    # rooms / an upper-floor Terrace for spare area), and the mask engine
+    # only shapes rooms inside that plan, with a max-bounded leftover fill.
+    # False (default) = the pre-planner mask path, byte-identical. Flipped
+    # to True only in Phase 6, once the planner-on quality gate is clean.
+    # tests/conftest.py pins it False for every test unless a test opts in.
+    house_planner_enabled: bool = False
+
     # Set ONLY when the frontend is hosted on a different domain from this
     # backend (e.g. static/ deployed to Vercel, this FastAPI app deployed to
     # Render) - blank (the default) means same-origin, which is how local dev

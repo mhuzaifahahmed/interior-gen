@@ -10,6 +10,8 @@ from app.models import HouseProject
 from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
 from app.pipeline.blueprint_svg import render_floor_blueprint
 from app.pipeline.feasibility import check_feasibility
+from app.pipeline.floor_layout_mask import layout_building
+from app.pipeline.house_planner import plan_to_dict
 from app.pipeline.layout_engine import layout_floor_with_warnings
 from app.pipeline.house_prompts import (
     build_house_elevation_prompt,
@@ -936,15 +938,37 @@ def run_house_pipeline(
                     # downgraded below, instead of silently shipping a
                     # cramped plan as if nothing were wrong.
                     hard_quality_issues: list[str] = []
-                    for floor in room_layout["floors"]:
-                        rects, quality_warnings = layout_floor_with_warnings(
-                            floor["rooms"], building_dimensions, garage_cars, facing
+                    # Mask planner (Phase 2, flag-gated): ONE BuildingPlan for
+                    # the whole house - footprint, yards, per-room targets,
+                    # planner-added rooms. It works on the FULL plot and takes
+                    # a requested front yard as a minimum front setback, so
+                    # the old front-yard trim of building_dimensions is not
+                    # applied twice (layout + render use the full plot).
+                    layout_dims = building_dimensions
+                    building_plan = None
+                    planned_floors = None
+                    if settings.house_planner_enabled and settings.house_layout_engine == "mask":
+                        layout_dims = dimensions
+                        building_plan, planned_floors = layout_building(
+                            [f.get("rooms") or [] for f in room_layout["floors"]],
+                            dimensions, facing, garage_cars, total_floors,
+                            min_front_setback=front_yard_depth or None,
                         )
+                    for index, floor in enumerate(room_layout["floors"]):
+                        if planned_floors is not None:
+                            # Rooms actually drawn, incl. planner-added ones
+                            # (planner_added / added_reason persisted).
+                            floor["rooms"], rects, quality_warnings = planned_floors[index]
+                            building_plan.floors[index].floor_number = floor["floor_number"]
+                        else:
+                            rects, quality_warnings = layout_floor_with_warnings(
+                                floor["rooms"], layout_dims, garage_cars, facing
+                            )
                         for v in quality_warnings:
                             if v.hard:
                                 hard_quality_issues.append(f"Floor {floor['floor_number']}: {v.room} ({v.detail})")
                         png_bytes = render_floor_blueprint(
-                            floor["floor_number"], rects, building_dimensions, total_floors, facing
+                            floor["floor_number"], rects, layout_dims, total_floors, facing
                         )
                         key = f"{key_prefix}/{house_project_id}/blueprint_floor{floor['floor_number']}.png"
                         storage.put(key, png_bytes, content_type="image/png")
@@ -956,7 +980,7 @@ def run_house_pipeline(
                         # blueprint (which the render step below depends on).
                         try:
                             dxf_bytes = render_floor_blueprint_dxf(
-                                floor["floor_number"], rects, building_dimensions, facing
+                                floor["floor_number"], rects, layout_dims, facing
                             )
                             dxf_key = f"{key_prefix}/{house_project_id}/blueprint_floor{floor['floor_number']}.dxf"
                             storage.put(dxf_key, dxf_bytes, content_type="application/dxf")
@@ -967,6 +991,9 @@ def run_house_pipeline(
                                 house_project_id,
                                 floor["floor_number"],
                             )
+                    if building_plan is not None:
+                        room_layout["planner"] = plan_to_dict(building_plan)
+                        building_dimensions = layout_dims
                     house_project.blueprint_status = "done"
 
                     # Downgrade the existing feasibility verdict (reusing

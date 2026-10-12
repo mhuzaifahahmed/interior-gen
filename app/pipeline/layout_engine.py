@@ -31,19 +31,25 @@ from app.pipeline import floor_layout, floor_layout_mask
 
 
 def layout_floor_with_warnings(
-    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None
+    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None,
+    plan=None,
 ) -> tuple[list[dict], list]:
     """Routes to the configured engine's own layout_floor_with_warnings() -
     see floor_layout.layout_floor_with_warnings()'s docstring for the full
-    parameter/return contract, identical on both engines."""
-    engine = floor_layout_mask if settings.house_layout_engine == "mask" else floor_layout
-    return engine.layout_floor_with_warnings(rooms, dimensions, garage_cars, facing)
+    parameter/return contract, identical on both engines. `plan` (a
+    house_planner.FloorPlan, mask planner Phase 2) is passed to the MASK
+    engine only - the rect engine never sees it - and the mask engine itself
+    ignores it unless settings.house_planner_enabled is on."""
+    if settings.house_layout_engine == "mask":
+        return floor_layout_mask.layout_floor_with_warnings(rooms, dimensions, garage_cars, facing, plan)
+    return floor_layout.layout_floor_with_warnings(rooms, dimensions, garage_cars, facing)
 
 
 def layout_floor(
-    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None
+    rooms: list[dict], dimensions: dict, garage_cars: int | None = None, facing: str | None = None,
+    plan=None,
 ) -> list[dict]:
     """Routes to the configured engine's own layout_floor() - plain rects/
     parts list, no warnings (see layout_floor_with_warnings() above)."""
-    rects, _warnings = layout_floor_with_warnings(rooms, dimensions, garage_cars, facing)
+    rects, _warnings = layout_floor_with_warnings(rooms, dimensions, garage_cars, facing, plan)
     return rects

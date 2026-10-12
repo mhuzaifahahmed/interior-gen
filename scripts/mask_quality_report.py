@@ -1,10 +1,23 @@
-"""Mask-engine quality report (Phase 0 gate tooling).
+"""Mask-engine quality report (Phase 0 gate tooling, Phase 2 scorecard).
 
 Runs every case in tests/mask_quality_matrix.py through the mask engine
 directly, prints a metrics table + summary, renders PNGs and a contact sheet
 into scripts/output/quality/ (gitignored).
 
-Run:  python scripts/mask_quality_report.py [--update-baseline] [--no-render]
+  --planner off|on|both   which engine mode(s) to run (default off). "on"
+                          sets settings.house_planner_enabled for the run and
+                          builds one BuildingPlan per case (like
+                          generate_house.py does, via
+                          floor_layout_mask.layout_building). PNGs for "on" go to
+                          scripts/output/quality/planner_on/.
+  --scorecard             also print the honest absolute-target scorecard
+                          (app/pipeline/mask_scorecard.py) and write it to
+                          scripts/output/quality/scorecard_<mode>.txt.
+  --update-baseline       write tests/data/mask_quality_baseline.json (off)
+                          or tests/data/mask_quality_baseline_planner.json
+                          (on). Needs a single --planner mode.
+
+Run:  python scripts/mask_quality_report.py [--planner on] [--scorecard] [--no-render]
 """
 import argparse
 import json
@@ -14,42 +27,63 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from app.pipeline.floor_layout_mask import layout_floor_with_warnings  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.pipeline.floor_layout_mask import layout_building, layout_floor_with_warnings  # noqa: E402
 from app.pipeline.layout_metrics import measure_floor  # noqa: E402
 from tests.mask_quality_matrix import CASES, iter_floors  # noqa: E402
 
 OUT_DIR = os.path.join(ROOT, "scripts", "output", "quality")
-BASELINE_PATH = os.path.join(ROOT, "tests", "data", "mask_quality_baseline.json")
+BASELINE_PATHS = {
+    "off": os.path.join(ROOT, "tests", "data", "mask_quality_baseline.json"),
+    "on": os.path.join(ROOT, "tests", "data", "mask_quality_baseline_planner.json"),
+}
 
 
-def compute_all() -> dict:
-    """{key: (case, floor_number, rects, metrics)}"""
+def compute_all(planner: bool = False) -> dict:
+    """{key: (case, floor_number, rects, metrics, max_overrides)}"""
     results = {}
-    for case, floor_n, rooms, key in iter_floors():
-        total = len(case["floors"])
-        rects, _ = layout_floor_with_warnings(
-            rooms, case["plot"], garage_cars=case["garage_cars"], facing=case["facing"]
-        )
-        metrics = measure_floor(
-            rects, case["plot"], total_floors=total, floor_number=floor_n,
-            garage_cars=case["garage_cars"],
-        )
-        results[key] = (case, floor_n, rects, metrics)
+    previous = settings.house_planner_enabled
+    settings.house_planner_enabled = planner
+    try:
+        built = {}
+        if planner:
+            for c in CASES:
+                built[c["id"]] = layout_building(
+                    c["floors"], c["plot"], c["facing"], c["garage_cars"], len(c["floors"])
+                )
+        for case, floor_n, rooms, key in iter_floors():
+            total = len(case["floors"])
+            overrides = None
+            if planner:
+                plan, floor_results = built[case["id"]]
+                _used, rects, _w = floor_results[floor_n - 1]
+                overrides = dict(plan.for_floor(floor_n).room_max) or None
+            else:
+                rects, _ = layout_floor_with_warnings(
+                    rooms, case["plot"], garage_cars=case["garage_cars"], facing=case["facing"]
+                )
+            metrics = measure_floor(
+                rects, case["plot"], total_floors=total, floor_number=floor_n,
+                garage_cars=case["garage_cars"], max_overrides=overrides,
+            )
+            results[key] = (case, floor_n, rects, metrics, overrides)
+    finally:
+        settings.house_planner_enabled = previous
     return results
 
 
-def _render(results):
+def _render(results, out_dir):
     from PIL import Image, ImageDraw
 
     from app.pipeline.blueprint_svg import render_floor_blueprint
 
-    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     thumbs = []
-    for key, (case, floor_n, rects, _m) in results.items():
+    for key, (case, floor_n, rects, _m, _o) in results.items():
         png = render_floor_blueprint(
             floor_n, rects, case["plot"], len(case["floors"]), case["facing"]
         )
-        path = os.path.join(OUT_DIR, key.replace("/", "_") + ".png")
+        path = os.path.join(out_dir, key.replace("/", "_") + ".png")
         with open(path, "wb") as f:
             f.write(png)
         thumbs.append((key, path))
@@ -63,20 +97,14 @@ def _render(results):
         x, y = (i % cols) * cell, (i // cols) * (cell + label_h)
         d.text((x + 4, y + 4), key, fill="black")
         sheet.paste(im, (x + 4, y + label_h))
-    sheet.save(os.path.join(OUT_DIR, "contact_sheet.png"))
+    sheet.save(os.path.join(out_dir, "contact_sheet.png"))
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--update-baseline", action="store_true")
-    ap.add_argument("--no-render", action="store_true")
-    args = ap.parse_args()
-
-    results = compute_all()
+def _print_table(results):
     print(f"{'case/floor':<36}{'cov%':>6} {'yards T/B/L/R':<20}{'hard':>5} {'kinds':<22}"
           f"{'dl_hard':<28}{'oversized':<26}{'inv':>4}{'parts':>6}")
     tot = {"hard": 0, "dl": 0, "over": 0, "inv": 0, "under": 0}
-    for key, (_c, _f, _r, m) in results.items():
+    for key, (_c, _f, _r, m, _o) in results.items():
         yards = "/".join(f"{m[k]:.0f}" for k in ("yard_top", "yard_bottom", "yard_left", "yard_right"))
         print(f"{key:<36}{m['coverage_pct']:>6.1f} {yards:<20}{m['hard_count']:>5} "
               f"{','.join(m['hard_kinds'])[:21]:<22}{','.join(m['daylight_fail_hard'])[:27]:<28}"
@@ -91,21 +119,67 @@ def main():
     print(f"hard violations: {tot['hard']}; daylight hard fails: {tot['dl']}; "
           f"oversized rooms: {tot['over']}; inverted hierarchies: {tot['inv']}; undersized: {tot['under']}")
     by_plot: dict[str, list[float]] = {}
-    for _k, (c, _f, _r, m) in results.items():
+    for _k, (c, _f, _r, m, _o) in results.items():
         p = c["plot"]
         by_plot.setdefault(f"{p['length']:.0f}x{p['width']:.0f}", []).append(m["coverage_pct"])
     for plot, vals in by_plot.items():
         print(f"coverage% {plot}: {', '.join(f'{v:.1f}' for v in vals)}")
 
-    if not args.no_render:
-        _render(results)
-        print(f"\nPNGs + contact sheet -> {OUT_DIR}")
-    if args.update_baseline:
-        os.makedirs(os.path.dirname(BASELINE_PATH), exist_ok=True)
-        data = {k: m for k, (_c, _f, _r, m) in results.items()}
-        with open(BASELINE_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=1, sort_keys=True)
-        print(f"baseline written -> {BASELINE_PATH}")
+
+def _scorecard(results, label, planner):
+    from app.pipeline.mask_scorecard import capacity_summary, format_scorecard, score_floor
+
+    scored = {}
+    for key, (case, floor_n, rects, _m, overrides) in results.items():
+        scored[key] = score_floor(
+            rects, case["plot"], case["facing"], case["floors"], floor_n,
+            case["garage_cars"], overrides,
+        )
+    previous = settings.house_planner_enabled
+    settings.house_planner_enabled = planner
+    try:
+        capacity = capacity_summary()
+    finally:
+        settings.house_planner_enabled = previous
+    text = format_scorecard(scored, label, capacity)
+    print(text)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    with open(os.path.join(OUT_DIR, f"scorecard_{label}.txt"), "w", encoding="utf-8") as f:
+        f.write(text + "\n")
+    return text
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--update-baseline", action="store_true")
+    ap.add_argument("--no-render", action="store_true")
+    ap.add_argument("--scorecard", action="store_true")
+    ap.add_argument("--planner", choices=("off", "on", "both"), default="off")
+    args = ap.parse_args()
+
+    modes = ("off", "on") if args.planner == "both" else (args.planner,)
+    if args.update_baseline and len(modes) != 1:
+        ap.error("--update-baseline needs a single --planner mode")
+
+    for mode in modes:
+        planner = mode == "on"
+        print(f"\n##### planner {mode.upper()} #####")
+        results = compute_all(planner)
+        _print_table(results)
+        if args.scorecard:
+            print()
+            _scorecard(results, f"planner_{mode}", planner)
+        if not args.no_render:
+            out_dir = os.path.join(OUT_DIR, "planner_on") if planner else OUT_DIR
+            _render(results, out_dir)
+            print(f"\nPNGs + contact sheet -> {out_dir}")
+        if args.update_baseline:
+            path = BASELINE_PATHS[mode]
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data = {k: m for k, (_c, _f, _r, m, _o) in results.items()}
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1, sort_keys=True)
+            print(f"baseline written -> {path}")
 
 
 if __name__ == "__main__":

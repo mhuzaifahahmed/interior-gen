@@ -95,6 +95,7 @@ from app.pipeline.blueprint_svg import (
 )
 from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box, render_conditioning_edge_map
 from app.pipeline.floor_layout import footprint_bbox
+from app.pipeline.house_planner import floor_plan_from_dict
 from app.pipeline.layout_engine import layout_floor
 from app.pipeline.room_specs import FRONT_DOOR_WIDTH_M, classify_room_category, door_width_for_wall, to_plot_unit
 from app.providers.session_errors import KaggleSessionUnavailableError, classify_kaggle_failure
@@ -141,7 +142,10 @@ def _conditioning_images_by_floor(
         floor_number = floor.get("floor_number")
         if floor_number is None:
             continue
-        by_floor[floor_number] = layout_floor(floor.get("rooms") or [], dimensions, facing=facing)
+        # Mask planner (Phase 2): reuse the blueprint step's own persisted
+        # plan so both renderings share one footprint (None = old behaviour).
+        plan = floor_plan_from_dict(room_layout.get("planner"), floor_number)
+        by_floor[floor_number] = layout_floor(floor.get("rooms") or [], dimensions, facing=facing, plan=plan)
     return by_floor
 
 

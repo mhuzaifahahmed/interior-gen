@@ -2401,3 +2401,34 @@ def test_two_floor_project_still_gets_a_staircase_per_floor(monkeypatch):
     assert len(layout["floors"]) == 2
     for f in layout["floors"]:
         assert any("stair" in r["name"].lower() for r in f["rooms"])
+
+
+def test_run_house_pipeline_with_mask_planner_persists_plan_and_added_rooms(monkeypatch):
+    """Phase 2 wiring: with house_planner_enabled (mask engine) the pipeline
+    builds ONE BuildingPlan on the full plot, persists it in room_layout
+    ["planner"], and persists any planner-added room with its metadata."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "house_layout_engine", "mask")
+    monkeypatch.setattr(settings, "house_planner_enabled", True)
+    engine = make_test_engine()
+    monkeypatch.setattr(generate_house_module, "engine", engine)
+    storage = FakeStorage()
+    with Session(engine) as session:
+        session.add(HouseProject(id="hplan", status="queued"))
+        session.commit()
+
+    run_house_pipeline("hplan", FakeProvider(), storage, {"length": 150, "width": 150, "unit": "ft"},
+                       prompt="2 floors, modern style")
+
+    with Session(engine) as session:
+        hp = session.get(HouseProject, "hplan")
+        assert hp.blueprint_status == "done"
+        layout = json.loads(hp.room_layout_json)
+    planner = layout["planner"]
+    assert planner["footprint_length"] < 150 and planner["footprint_width"] < 150
+    assert len(planner["floors"]) == len(layout["floors"])
+    for floor in layout["floors"]:
+        for room in floor["rooms"]:
+            if room.get("planner_added"):
+                assert room["added_reason"]

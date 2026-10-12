@@ -42,7 +42,11 @@ def measure_floor(
     total_floors: int = 1,
     floor_number: int = 1,
     garage_cars: int | None = None,
+    max_overrides: dict | None = None,
 ) -> dict:
+    """`max_overrides` (name -> max area) replaces room_specs' max for the
+    named rooms - used only for planner-added remainder rooms (an upper-floor
+    Terrace sized to the leftover area). None (default) = unchanged."""
     unit = plot_dims.get("unit") or "ft"
     length, width = float(plot_dims["length"]), float(plot_dims["width"])
     fp = footprint or _bbox(rects)
@@ -79,7 +83,7 @@ def measure_floor(
             max_secondary = max(max_secondary, (area - largest) / area)
         if cat in _NO_MAX_CATEGORIES:
             continue
-        mx = max_area_for_room(name, unit, garage_cars)
+        mx = (max_overrides or {}).get(name) or max_area_for_room(name, unit, garage_cars)
         mn = min_area_for_room(name, unit, garage_cars)
         ratios[name] = round(area / mx, 3) if mx else 0.0
         if area > 1.10 * mx:

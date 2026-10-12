@@ -28,10 +28,12 @@ from dataclasses import dataclass, field
 from app.pipeline.room_specs import (
     classify_room_category,
     door_width_for_wall,
+    max_area_for_room,
     min_area_for_room,
     min_depth_for_room,
     min_width_for_room,
     preferred_area_for_room,
+    target_area_for_room,
     to_plot_unit,
 )
 
@@ -176,11 +178,20 @@ def score_floor_layout(
     dimensions: dict,
     garage_cars: int | None = None,
     daylight_footprint: dict | None = None,
+    planner_checks: bool = False,
+    room_targets: dict | None = None,
+    room_max: dict | None = None,
 ) -> LayoutScore:
     """Scores one floor's already-computed rectangles (floor_layout.py's
     output shape - [{"name","x","y","w","h"}, ...]) for real-world
     practicality. Higher is better; 0.0 with no violations is a clean floor.
-    Pure function of the rects + dimensions - never mutates its input."""
+    Pure function of the rects + dimensions - never mutates its input.
+
+    `planner_checks` (opt-in, mask planner Phase 2 - off by default so rect
+    and flag-off mask scoring are unchanged) adds: HARD `oversized` (area >
+    1.10 x max), HARD `hierarchy_inverted` (largest living < largest dining),
+    SOFT `over_target` (area > 1.10 x target). `room_targets`/`room_max`
+    (name -> area) override room_specs' target/max for named rooms."""
     unit = dimensions.get("unit") or "ft"
     violations: list[Violation] = []
 
@@ -349,6 +360,8 @@ def score_floor_layout(
 
     violations.extend(_door_clearance_violations(rects, unit))
     violations.extend(_coverage_violation(rects, dimensions))
+    if planner_checks:
+        violations.extend(_planner_size_violations(rects, unit, garage_cars, room_targets, room_max))
 
     score = 0.0
     _SOFT_PENALTY_BY_KIND = {
@@ -363,6 +376,50 @@ def score_floor_layout(
 
 
 _COVERAGE_TOLERANCE_FRACTION = 0.02
+
+# Categories with no meaningful max to check (pinned / circulation).
+_NO_MAX_CATEGORIES = ("hallway", "staircase", "garage")
+_OVERSIZE_TOLERANCE = 1.10
+_PINNED_CATEGORIES = ("staircase", "garage")
+_PINNED_OVERSIZE_TOLERANCE = 1.5
+
+
+def _planner_size_violations(
+    rects: list[dict], unit: str, garage_cars: int | None, room_targets: dict | None, room_max: dict | None
+) -> list[Violation]:
+    """Opt-in planner checks (see score_floor_layout's docstring)."""
+    out: list[Violation] = []
+    living: list[float] = []
+    dining: list[float] = []
+    for rect in rects:
+        name = str(rect.get("name") or "")
+        if not name:
+            continue
+        cat = classify_room_category(name)
+        area = sum(p["w"] * p["h"] for p in _room_parts(rect) if p.get("w", 0) > 0 and p.get("h", 0) > 0)
+        if cat == "living":
+            living.append(area)
+        elif cat == "dining":
+            dining.append(area)
+        if cat == "hallway":
+            continue
+        mx = (room_max or {}).get(name) or max_area_for_room(name, unit, garage_cars)
+        if cat in _PINNED_CATEGORIES:
+            # Stair/garage are pinned at their functional size; a leftover
+            # pocket dumped into one is a real defect (a 250 sq ft "stair"),
+            # judged with extra slack for grid rounding.
+            if area > _PINNED_OVERSIZE_TOLERANCE * mx:
+                out.append(Violation(name, "oversized", True, f"{area:.1f} > {_PINNED_OVERSIZE_TOLERANCE} x pinned size {mx:.1f}"))
+            continue
+        if area > _OVERSIZE_TOLERANCE * mx:
+            out.append(Violation(name, "oversized", True, f"{area:.1f} > 1.10 x max {mx:.1f}"))
+            continue
+        tgt = (room_targets or {}).get(name) or target_area_for_room(name, unit, garage_cars)
+        if area > _OVERSIZE_TOLERANCE * tgt:
+            out.append(Violation(name, "over_target", False, f"{area:.1f} > 1.10 x target {tgt:.1f}"))
+    if living and dining and max(living) < max(dining):
+        out.append(Violation("__floor__", "hierarchy_inverted", True, f"living {max(living):.1f} < dining {max(dining):.1f}"))
+    return out
 
 
 def _coverage_violation(rects: list[dict], dimensions: dict) -> list[Violation]:
