@@ -20,7 +20,12 @@ from app.pipeline.floor_layout_mask import (
     layout_floor_with_warnings,
 )
 from app.pipeline.layout_quality import SLIVER_ASPECT_RATIO
-from app.pipeline.room_specs import classify_room_category, min_area_for_room, to_plot_unit
+from app.pipeline.room_specs import (
+    classify_room_category,
+    garage_dimensions,
+    min_area_for_room,
+    to_plot_unit,
+)
 
 # Deliberately NOT a clean divisor of the engine's own internal grid cell
 # size (e.g. 0.1 divides evenly into a common 1.5ft cell size, which makes
@@ -547,3 +552,160 @@ def test_layout_floor_mask_public_rooms_stay_in_the_front_band():
             f"{name} reaches too far into the back zone "
             f"(depth_from_front={depth_from_front:.2f})"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase D1-D4 (2026-10-12): kitchen<->dining adjacency, utility next to the
+# kitchen, master on a far quiet corner with its ensuite, garage real shape +
+# road edge. Geometry-based assertions (shared edges, distances, widths), not
+# just "no crash".
+# ---------------------------------------------------------------------------
+
+def _shared_edge_len(a: dict, b: dict) -> float:
+    """Length of the longest shared wall between any part of `a` and any part
+    of `b` (0 if they don't touch). Rooms tile exactly, so adjacent rooms
+    share an exact edge; a small tolerance absorbs float noise."""
+    tol = 0.3
+    best = 0.0
+    for pa in room_parts(a):
+        ax0, ay0, ax1, ay1 = pa["x"], pa["y"], pa["x"] + pa["w"], pa["y"] + pa["h"]
+        for pb in room_parts(b):
+            bx0, by0, bx1, by1 = pb["x"], pb["y"], pb["x"] + pb["w"], pb["y"] + pb["h"]
+            if abs(ax1 - bx0) < tol or abs(bx1 - ax0) < tol:
+                best = max(best, max(0.0, min(ay1, by1) - max(ay0, by0)))
+            if abs(ay1 - by0) < tol or abs(by1 - ay0) < tol:
+                best = max(best, max(0.0, min(ax1, bx1) - max(ax0, bx0)))
+    return best
+
+
+def _center(r: dict) -> tuple[float, float]:
+    return (r["x"] + r["w"] / 2.0, r["y"] + r["h"] / 2.0)
+
+
+def _get(rects: list[dict], name: str) -> dict | None:
+    return next((r for r in rects if r["name"].lower() == name.lower()), None)
+
+
+_D1_GROUND = [
+    {"name": "Living Room", "area": 3}, {"name": "Kitchen", "area": 1},
+    {"name": "Dining Room", "area": 2}, {"name": "Entry", "area": 1},
+    {"name": "Master Bedroom", "area": 2}, {"name": "Master Bathroom", "area": 1},
+    {"name": "Bedroom 2", "area": 1}, {"name": "Bedroom 3", "area": 1},
+    {"name": "Bathroom 2", "area": 1},
+]
+_D2_UTILITY = [
+    {"name": "Living Room", "area": 3}, {"name": "Kitchen", "area": 1},
+    {"name": "Dining Room", "area": 2}, {"name": "Laundry", "area": 1},
+    {"name": "Entry", "area": 1}, {"name": "Master Bedroom", "area": 2},
+    {"name": "Master Bathroom", "area": 1}, {"name": "Bedroom 2", "area": 1},
+    {"name": "Bathroom 2", "area": 1},
+]
+# A kitchen + laundry requested on an UPPER floor (per-floor request path):
+# the wet cluster must follow the kitchen to whatever floor it's on.
+_D2_UPPER = [
+    {"name": "Kitchen", "area": 1}, {"name": "Laundry", "area": 1},
+    {"name": "Sitting Area", "area": 2}, {"name": "Bedroom 4", "area": 1},
+    {"name": "Bedroom 5", "area": 1}, {"name": "Bathroom 4", "area": 1},
+    {"name": "Staircase", "area": 1},
+]
+
+
+@pytest.mark.parametrize(
+    "rooms,dims,garage_cars,facing",
+    [
+        (_D1_GROUND, {"length": 50.0, "width": 60.0, "unit": "ft"}, None, "south"),
+        (_D1_GROUND, {"length": 50.0, "width": 60.0, "unit": "ft"}, None, "north"),
+        (_D2_UTILITY, {"length": 60.0, "width": 80.0, "unit": "ft"}, None, "south"),
+    ],
+)
+def test_layout_floor_mask_kitchen_borders_dining(rooms, dims, garage_cars, facing):
+    """D1: the kitchen shares a real wall with the dining room (door-worthy)."""
+    rects = layout_floor(rooms, dims, garage_cars=garage_cars, facing=facing)
+    k, d = _get(rects, "Kitchen"), _get(rects, "Dining Room")
+    assert k is not None and d is not None
+    assert _shared_edge_len(k, d) >= 3.0, (
+        f"Kitchen<->Dining shared edge {_shared_edge_len(k, d):.1f}ft too short (facing={facing})"
+    )
+
+
+@pytest.mark.parametrize(
+    "rooms,dims,floor",
+    [
+        (_D2_UTILITY, {"length": 60.0, "width": 80.0, "unit": "ft"}, "ground"),
+        (_D2_UPPER, {"length": 60.0, "width": 80.0, "unit": "ft"}, "upper"),
+    ],
+)
+def test_layout_floor_mask_laundry_borders_kitchen(rooms, dims, floor):
+    """D2: the laundry (wet cluster) shares a real wall with the kitchen on
+    whatever floor the kitchen is on (ground OR upper)."""
+    rects = layout_floor(rooms, dims, garage_cars=None, facing="south")
+    laundry, kitchen = _get(rects, "Laundry"), _get(rects, "Kitchen")
+    assert laundry is not None and kitchen is not None
+    assert _shared_edge_len(laundry, kitchen) >= 3.0, (
+        f"Laundry<->Kitchen shared edge {_shared_edge_len(laundry, kitchen):.1f}ft too short ({floor})"
+    )
+
+
+@pytest.mark.parametrize("facing", ["south", "north", "east", "west"])
+def test_layout_floor_mask_master_is_the_farthest_bedroom_from_entrance(facing):
+    """D3: the master bedroom ends up farther from the entrance than every
+    other bedroom, and its ensuite stays attached."""
+    dims = {"length": 50.0, "width": 60.0, "unit": "ft"}
+    rects = layout_floor(_D1_GROUND, dims, garage_cars=None, facing=facing)
+    entry = _get(rects, "Entry")
+    master = _get(rects, "Master Bedroom")
+    master_bath = _get(rects, "Master Bathroom")
+    assert entry is not None and master is not None and master_bath is not None
+    ec = _center(entry)
+
+    def dist(r):
+        rc = _center(r)
+        return ((ec[0] - rc[0]) ** 2 + (ec[1] - rc[1]) ** 2) ** 0.5
+
+    master_dist = dist(master)
+    for r in rects:
+        if classify_room_category(r["name"]) == "bedroom" and r["name"] != "Master Bedroom":
+            assert master_dist >= dist(r) - 0.01, (
+                f"{r['name']} ({dist(r):.1f}) is farther from entry than Master "
+                f"({master_dist:.1f}) (facing={facing})"
+            )
+    assert _shared_edge_len(master, master_bath) >= 3.0, (
+        f"Master<->ensuite shared edge {_shared_edge_len(master, master_bath):.1f}ft too short (facing={facing})"
+    )
+
+
+@pytest.mark.parametrize(
+    "cars,dims",
+    [
+        (2, {"length": 60.0, "width": 80.0, "unit": "ft"}),
+        (1, {"length": 150.0, "width": 150.0, "unit": "ft"}),
+    ],
+)
+def test_layout_floor_mask_garage_has_car_fitting_width(cars, dims):
+    """D4: the garage is wide enough for its car count (>= its real
+    garage_dimensions width) and sits on the facing (road) edge so a driveway
+    can reach it."""
+    rooms = [
+        {"name": "Living Room", "area": 3}, {"name": "Kitchen", "area": 1},
+        {"name": "Dining Room", "area": 2}, {"name": "Garage", "area": 1},
+        {"name": "Entry", "area": 1}, {"name": "Master Bedroom", "area": 2},
+        {"name": "Master Bathroom", "area": 1}, {"name": "Bedroom 2", "area": 1},
+        {"name": "Bathroom 2", "area": 1},
+    ]
+    rects = layout_floor(rooms, dims, garage_cars=cars, facing="south")
+    garage = _get(rects, "Garage")
+    assert garage is not None
+    req_w, _req_d = garage_dimensions(cars, dims["unit"])
+    # South-facing: the road edge is along x (width), so the garage's own
+    # x-extent is its car-width. Allow one grid-cell of rounding slack.
+    cell = dims["length"] / 40.0
+    assert garage["w"] >= req_w - 1.5 * cell, (
+        f"{cars}-car garage x-width {garage['w']:.1f}ft < required {req_w:.1f}ft"
+    )
+    # Touches the facing (south = max-y) edge of the footprint.
+    fp = footprint_bbox(rects)
+    assert fp is not None
+    garage_bottom = max(p["y"] + p["h"] for p in room_parts(garage))
+    assert abs(garage_bottom - fp[3]) < 1.5 * cell, (
+        f"garage not on the facing edge (bottom={garage_bottom:.1f}, fp_y1={fp[3]:.1f})"
+    )

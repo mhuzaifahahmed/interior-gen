@@ -114,6 +114,7 @@ from app.pipeline.layout_quality import score_floor_layout
 from app.pipeline.room_specs import (
     EXTERIOR_WALL_THICKNESS_M,
     classify_room_category,
+    garage_dimensions,
     max_area_for_room,
     min_area_for_room,
     preferred_area_for_room,
@@ -131,6 +132,20 @@ _MIN_CELLS_PER_AXIS = 6
 _MAX_CELLS_PER_AXIS = 60
 
 _EGRESS_CATEGORIES = ("bedroom", "living")
+
+# ---- Phase D2: wet cluster (2026-10-12) ----
+# Service rooms that architecturally belong BESIDE the kitchen (a "wet wall"
+# cluster sharing plumbing/ventilation). When a kitchen exists on the SAME
+# floor, these seed directly behind that floor's kitchen (the first private
+# row at the kitchen's column), so they share the public-band boundary wall
+# with it instead of landing at the far back with the bedrooms. This is a
+# mask-engine-LOCAL seeding bias only - it does NOT re-zone these rooms into
+# floor_layout._PUBLIC_ZONE_KEYWORDS (explicitly forbidden, §1.5 decision 4,
+# since that touches the frozen rect engine). They stay private-zone rooms
+# (grow behind the band); only their SEED position is biased to the kitchen.
+# Applied per-floor automatically (the kitchen lookup is over THIS floor's
+# rooms), so a kitchen+laundry requested on an upper floor clusters there too.
+_WET_CLUSTER_CATEGORIES = ("laundry", "pantry", "dirty_kitchen")
 
 # Circulation spine width - the same real-world clamps floor_layout.py's
 # own hallway uses, duplicated (not imported) since this module computes
@@ -248,7 +263,7 @@ def layout_floor_with_warnings(
     best_warnings: list = []
     for width_delta in _CANDIDATE_SPINE_WIDTH_DELTAS:
         for cross_link in _CANDIDATE_CROSS_LINK:
-            candidate = _grow_floor(targets, core_dimensions, width_delta, cross_link)
+            candidate = _grow_floor(targets, core_dimensions, width_delta, cross_link, garage_cars)
             scored = score_floor_layout(candidate, core_dimensions, garage_cars)
             if best_score is None or scored.score > best_score:
                 best_score = scored.score
@@ -364,7 +379,8 @@ def _room_targets(ordered_rooms: list[dict], unit: str, garage_cars: int | None)
 
 
 def _grow_floor(
-    targets: list[dict], dimensions: dict, spine_width_delta: int, cross_link: bool
+    targets: list[dict], dimensions: dict, spine_width_delta: int, cross_link: bool,
+    garage_cars: int | None = None,
 ) -> list[dict]:
     """One candidate: grid + spine + seed + grow + fill + decompose.
     Returns room dicts in CORE coordinates (front always at low-y - see
@@ -405,8 +421,26 @@ def _grow_floor(
     min_cells = [max(1, round(t["min_area"] / cell_area)) for t in targets]
     max_cells = [max(min_cells[i], round(targets[i]["max_area"] / cell_area)) for i in range(len(targets))]
 
+    # Phase D4 (2026-10-12): the garage needs a real WIDTH along the facing
+    # edge (room for `garage_cars` cars side by side), not just the right
+    # total area - a 2-car garage sharing the front row evenly with 4 other
+    # public rooms came out ~7ft wide (one car) x deep. Reserve its real
+    # garage_dimensions() width in cells so _seed_rooms seeds it at the
+    # front-left corner with the other public rooms pushed past that frontage,
+    # and pre-claim its block below before general growth. depth is bounded by
+    # the public band so it can never dive into the private zone.
+    garage_i = next((i for i, t in enumerate(targets) if t["category"] == "garage"), None)
+    garage_w_cells = 0
+    garage_d_cells = 0
+    if garage_i is not None and cell_w > 0 and cell_h > 0:
+        gw, gd = garage_dimensions(garage_cars or 1, unit)
+        garage_w_cells = _clamp(max(1, round(gw / cell_w)), 1, cols)
+        depth_cap = band if band > 0 else rows
+        garage_d_cells = _clamp(max(1, round(gd / cell_h)), 1, depth_cap)
+
     seeds = _seed_rooms(
-        targets, public_idx, circulation_idx, private_idx, cols, rows, spine_cells, min_cells, band
+        targets, public_idx, circulation_idx, private_idx, cols, rows, spine_cells, min_cells, band,
+        garage_i, garage_w_cells,
     )
 
     cells_by_room: list[set[tuple[int, int]]] = [set() for _ in targets]
@@ -414,6 +448,12 @@ def _grow_floor(
         if seed is not None:
             cells_by_room[i].add(seed)
             owner[seed[1]][seed[0]] = i
+
+    # Pre-claim the garage's real width x depth rectangle at its front-corner
+    # seed (Phase D4) so it keeps a car-fitting shape instead of being
+    # out-competed for frontage by the general round-robin growth.
+    if garage_i is not None and seeds[garage_i] is not None and garage_w_cells > 0:
+        _preclaim_garage(owner, cells_by_room, garage_i, seeds[garage_i], garage_w_cells, garage_d_cells, cols, rows)
 
     _grow_rooms(owner, cells_by_room, seeds, cols, rows, target_cells, min_cells, max_cells, zones, band)
     _fill_leftovers(owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells, zones, band)
@@ -535,6 +575,8 @@ def _seed_rooms(
     spine_cells: set[tuple[int, int]],
     min_cells: list[int],
     band: int = 0,
+    garage_i: int | None = None,
+    garage_w_cells: int = 0,
 ) -> list[tuple[int, int] | None]:
     """One anchor cell per room, matching floor_layout.py's own front-to-
     back convention (front = low-y). Bedroom/living rooms seed ON the
@@ -589,15 +631,55 @@ def _seed_rooms(
     occupied: set[tuple[int, int]] = set(spine_cells)
     seeds: list[tuple[int, int] | None] = [None] * len(targets)
 
+    # Phase D2: when a wet-service room (laundry/pantry/dirty_kitchen) will be
+    # clustered behind the kitchen, the kitchen is seeded at the BACK row of
+    # the public band (row band-1) instead of the front row - so it grows
+    # forward and OWNS the band-boundary cells, letting the laundry seeded
+    # directly behind it (row band) actually share a wall with the KITCHEN
+    # rather than with whichever larger public room (e.g. Dining) would
+    # otherwise out-compete the small kitchen for that boundary row (confirmed
+    # via owner-grid tracing on the deep-band 60x80 ground-floor case). When
+    # no wet room exists, the kitchen seeds at the front like every other
+    # public room (byte-identical to pre-D2 behavior).
     # Public rooms: spread along the front row, left to right in their
     # already front-of-house-ordered sequence (floor_layout._sort_key()).
     n_public = len(public_idx)
-    for k, i in enumerate(public_idx):
-        col = _clamp(round(((k + 0.5) / n_public) * (cols - 1)), 0, cols - 1) if n_public else 0
-        cell = _first_free_near(col, 0, cols, rows, occupied)
+    kitchen_idx = next((i for i in public_idx if targets[i]["category"] == "kitchen"), None)
+    has_wet_cluster = any(targets[i]["category"] in _WET_CLUSTER_CATEGORIES for i in private_idx)
+    # Only bother back-seeding the kitchen when ANOTHER public room could
+    # out-compete it for the band-boundary row (n_public >= 2). On a single-
+    # public-room floor (e.g. a lone upper-floor Kitchen) the kitchen already
+    # owns the whole band, so front-seeding keeps it shallower/less sliver-
+    # like while the laundry behind it (row band) is still adjacent.
+    kitchen_back_seed = (
+        has_wet_cluster and kitchen_idx is not None and band > 0 and n_public >= 2
+    )
+    # Phase D4: when a garage exists, it anchors at the front-left corner and
+    # reserves `garage_w_cells` of frontage; the OTHER public rooms spread
+    # across the remaining columns [garage_w_cells, cols) so they don't eat
+    # into the garage's car-width. (_grow_floor then pre-claims the garage's
+    # full width x depth block.) With no garage this is the plain even spread.
+    has_garage_reserve = garage_i is not None and garage_i in public_idx and garage_w_cells > 0
+    spread_start = garage_w_cells if has_garage_reserve else 0
+    other_public = [i for i in public_idx if not (has_garage_reserve and i == garage_i)]
+    n_other = len(other_public)
+    span = max(1, cols - spread_start)
+    if has_garage_reserve:
+        cell = _first_free_near(0, 0, cols, rows, occupied)
+        if cell is not None:
+            seeds[garage_i] = cell
+            occupied.add(cell)
+    for k, i in enumerate(other_public):
+        col = _clamp(spread_start + round(((k + 0.5) / n_other) * (span - 1)), 0, cols - 1) if n_other else 0
+        seed_row = band - 1 if (kitchen_back_seed and i == kitchen_idx) else 0
+        cell = _first_free_near(col, seed_row, cols, rows, occupied)
         if cell is not None:
             seeds[i] = cell
             occupied.add(cell)
+
+    # The kitchen's own seed on this floor (if any), used to cluster wet-
+    # service rooms (laundry/pantry/dirty_kitchen) directly behind it.
+    kitchen_seed = seeds[kitchen_idx] if kitchen_idx is not None else None
 
     # Private egress rooms (bedroom/living) FIRST, spread proportionally
     # along a real exterior PERIMETER PATH (left wall, then the back wall,
@@ -613,10 +695,44 @@ def _seed_rooms(
     # grow from.
     private_egress = [i for i in private_idx if targets[i]["category"] in _EGRESS_CATEGORIES]
     private_other = [i for i in private_idx if i not in private_egress]
-    n_egress = len(private_egress)
     boundary_path = _exterior_boundary_path(cols, rows, band)
-    for k, i in enumerate(private_egress):
-        idx = _clamp(round(((k + 0.5) / n_egress) * (len(boundary_path) - 1)), 0, len(boundary_path) - 1) if n_egress else 0
+
+    # Phase D3 (2026-10-12): the master bedroom takes the boundary-path spread
+    # SLOT farthest from the entrance (a quiet back-wall position), instead of
+    # whatever slot its suite-order index happened to give it. Previously the
+    # master (first in suite order) got spread-slot 0 = boundary-path index 0
+    # = the left wall just behind the front band, i.e. one of the CLOSEST spots
+    # to the entrance (problem #5 "master stranded near the entrance"). This
+    # deliberately does NOT force the master onto an exact corner cell (an
+    # earlier attempt that did collapsed the master/other bedrooms to slivers
+    # on the dense 150x150 case - forcing an exact low-reachability corner
+    # fights the proven proportional spacing). Instead it PERMUTES the
+    # already-computed, already-proven spread slots so the master simply gets
+    # the farthest one - same set of seed positions, just reassigned - and its
+    # ensuite follows via the existing suite-anchor logic below.
+    n_egress = len(private_egress)
+    spread_positions = [
+        _clamp(round(((k + 0.5) / n_egress) * (len(boundary_path) - 1)), 0, len(boundary_path) - 1)
+        if n_egress else 0
+        for k in range(n_egress)
+    ]
+    master_i = next(
+        (i for i in private_egress
+         if "master" in targets[i]["name"].lower() and targets[i]["category"] == "bedroom"),
+        None,
+    )
+    ordered_egress = list(private_egress)
+    if master_i is not None and n_egress > 1:
+        entrance = _entrance_cell(public_idx, targets, seeds, cols)
+        far_slot = max(
+            range(n_egress),
+            key=lambda k: _dist2(boundary_path[spread_positions[k]], entrance),
+        )
+        others = [i for i in private_egress if i != master_i]
+        ordered_egress = others[:far_slot] + [master_i] + others[far_slot:]
+
+    for k, i in enumerate(ordered_egress):
+        idx = spread_positions[k]
         cell = _best_reachable_boundary_seed(boundary_path, idx, cols, rows, occupied, min_cells[i])
         if cell is None:
             cell = _seed_on_exterior(cols, rows, occupied, band)
@@ -638,11 +754,23 @@ def _seed_rooms(
     last_cell = seeds[private_egress[-1]] if private_egress else None
     for i in private_other:
         suite = targets[i].get("suite")
-        anchor = suite_seed.get(suite) if suite is not None else last_cell
-        if anchor is not None:
-            cell = _first_free_near(anchor[0], anchor[1], cols, rows, occupied)
+        # Phase D2: a wet-service room seeds directly behind this floor's
+        # kitchen (the first private row, rows[band], at the kitchen's own
+        # column) so it shares the public-band boundary wall with the kitchen.
+        # Falls through to the normal suite/last-cell anchor if there's no
+        # kitchen on this floor (or no public band at all).
+        if (
+            targets[i]["category"] in _WET_CLUSTER_CATEGORIES
+            and kitchen_seed is not None
+            and band > 0
+        ):
+            cell = _first_free_near(kitchen_seed[0], band, cols, rows, occupied)
         else:
-            cell = _seed_on_exterior(cols, rows, occupied, band)
+            anchor = suite_seed.get(suite) if suite is not None else last_cell
+            if anchor is not None:
+                cell = _first_free_near(anchor[0], anchor[1], cols, rows, occupied)
+            else:
+                cell = _seed_on_exterior(cols, rows, occupied, band)
         if cell is None:
             cell = _any_free_cell(cols, rows, occupied)
         if cell is not None:
@@ -756,6 +884,29 @@ def _best_reachable_boundary_seed(
                 best_count = count
                 best_cell = cell
     return best_cell
+
+
+def _entrance_cell(
+    public_idx: list[int],
+    targets: list[dict],
+    seeds: list[tuple[int, int] | None],
+    cols: int,
+) -> tuple[int, int]:
+    """Phase D3: the grid cell representing where the entrance is, used to
+    pick the boundary-path spread slot FARTHEST from it for the master suite.
+    The Entry's own seed, else the Garage's, else the front-center cell (row
+    0 = the front/low-y edge, this engine's core convention)."""
+    anchor_i = next(
+        (i for i in public_idx if targets[i]["category"] in ("foyer", "garage")),
+        None,
+    )
+    if anchor_i is not None and seeds[anchor_i] is not None:
+        return seeds[anchor_i]
+    return (cols // 2, 0)
+
+
+def _dist2(a: tuple[int, int], b: tuple[int, int]) -> int:
+    return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
 
 
 def _exterior_boundary_path(cols: int, rows: int, band: int = 0) -> list[tuple[int, int]]:
@@ -1072,6 +1223,34 @@ def _grow_arm(
             if 0 <= nc < cols and row_lo <= nr <= hi and owner[nr][nc] == -1 and (nc, nr) not in seen:
                 seen.add((nc, nr))
                 heapq.heappush(heap, (dist + 1, nr, nc))
+
+
+def _preclaim_garage(
+    owner: list[list[int]],
+    cells_by_room: list[set[tuple[int, int]]],
+    garage_i: int,
+    seed: tuple[int, int],
+    w_cells: int,
+    d_cells: int,
+    cols: int,
+    rows: int,
+) -> None:
+    """Phase D4: claim the garage's real width x depth rectangle from its
+    front-corner seed BEFORE general round-robin growth, so the garage keeps
+    a car-fitting shape (wide along the facing edge) instead of being
+    out-competed for frontage by larger public rooms. Only claims currently-
+    free cells (never a spine or another seed); the block is anchored at the
+    seed's own column/row (the front-left corner) and clamped into the grid.
+    The garage's seed row is 0 (front edge) so the block hugs the facing wall,
+    guaranteeing it touches the road edge for the Phase-C driveway."""
+    sc, sr = seed
+    c0 = _clamp(sc, 0, max(0, cols - w_cells))
+    r0 = _clamp(sr, 0, max(0, rows - d_cells))
+    for r in range(r0, min(rows, r0 + d_cells)):
+        for c in range(c0, min(cols, c0 + w_cells)):
+            if owner[r][c] == -1:
+                owner[r][c] = garage_i
+                cells_by_room[garage_i].add((c, r))
 
 
 def _fill_leftovers(
