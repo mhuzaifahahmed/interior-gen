@@ -142,6 +142,20 @@ _HALLWAY_WIDTH_FRACTION = 0.14
 _MIN_ROOMS_FOR_SPINE = 3
 _MIN_ROOMS_FOR_CROSS_LINK = 5
 
+# ---- Phase D0: front public band (2026-10-12) ----
+# Public-zone rooms (living/dining/kitchen/entry/garage) are confined to a
+# shallow FRONT BAND spanning the full footprint width, and the circulation
+# spine starts BELOW that band - so public rooms grow wide-and-shallow (near
+# square) instead of diving the full depth of a narrow spine-split half-
+# column and wrapping around the back bedrooms in bowling-alley L/U shapes
+# (the Phase A "public rooms are slivers in every case" finding - root-caused
+# via owner-grid tracing to unbounded public-room DEPTH growth, not seed
+# position: see _grow_rooms()'s own band gate). The band depth is sized so
+# every public room's own preferred area fits across the full width, clamped
+# to at most _MAX_PUBLIC_BAND_FRACTION of the floor so the private zone + the
+# spine always keep real depth behind it.
+_MAX_PUBLIC_BAND_FRACTION = 0.5
+
 # Best-of-N candidate knobs (2 x 2 = 4) - smaller than the rect engine's 10
 # since each mask-engine candidate is a full grid-growth pass, not just
 # rect arithmetic. 0 listed first so a tie favors the plainest spine.
@@ -375,9 +389,13 @@ def _grow_floor(
     private_idx = [i for i, t in enumerate(targets) if _zone_key(t["name"]) == 2]
 
     has_spine = len(private_idx) >= _MIN_ROOMS_FOR_SPINE
+    band = _public_band_rows(targets, public_idx, cols, rows, cell_area)
+    zones = [_zone_key(t["name"]) for t in targets]
     spine_cells: set[tuple[int, int]] = set()
     if has_spine:
-        spine_cells = _reserve_spine(cols, rows, cell_w, cell_h, unit, spine_width_delta, cross_link, len(targets))
+        spine_cells = _reserve_spine(
+            cols, rows, cell_w, cell_h, unit, spine_width_delta, cross_link, len(targets), band
+        )
 
     owner = [[-1 for _ in range(cols)] for _ in range(rows)]
     for (c, r) in spine_cells:
@@ -388,7 +406,7 @@ def _grow_floor(
     max_cells = [max(min_cells[i], round(targets[i]["max_area"] / cell_area)) for i in range(len(targets))]
 
     seeds = _seed_rooms(
-        targets, public_idx, circulation_idx, private_idx, cols, rows, spine_cells, min_cells
+        targets, public_idx, circulation_idx, private_idx, cols, rows, spine_cells, min_cells, band
     )
 
     cells_by_room: list[set[tuple[int, int]]] = [set() for _ in targets]
@@ -397,8 +415,8 @@ def _grow_floor(
             cells_by_room[i].add(seed)
             owner[seed[1]][seed[0]] = i
 
-    _grow_rooms(owner, cells_by_room, seeds, cols, rows, target_cells, min_cells, max_cells)
-    _fill_leftovers(owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells)
+    _grow_rooms(owner, cells_by_room, seeds, cols, rows, target_cells, min_cells, max_cells, zones, band)
+    _fill_leftovers(owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells, zones, band)
     _ensure_minimum_presence(cells_by_room, min_cells, owner)
 
     rooms_out = []
@@ -455,12 +473,17 @@ def _hallway_width_cells(long_cells: int, cell_span: float, unit: str, width_del
 
 
 def _reserve_spine(
-    cols: int, rows: int, cell_w: float, cell_h: float, unit: str, width_delta: int, cross_link: bool, room_count: int
+    cols: int, rows: int, cell_w: float, cell_h: float, unit: str, width_delta: int, cross_link: bool,
+    room_count: int, band_start: int = 0
 ) -> set[tuple[int, int]]:
-    """Reserves circulation cells BEFORE any room is seeded - a full-depth
-    vertical spine (entrance at low-y through to the back of the floor),
-    centered in x, plus (on a large enough room program) a perpendicular
-    cross-link partway through the depth. This is a deliberately simple,
+    """Reserves circulation cells BEFORE any room is seeded - a vertical
+    spine running from the back of the public band (`band_start`, the first
+    row behind the front public zone - see _public_band_rows()) through to
+    the back of the floor, centered in x, plus (on a large enough room
+    program) a perpendicular cross-link partway through the depth. The spine
+    deliberately does NOT extend into the front public band (rows <
+    band_start): that band is kept open, full-width, for the public rooms to
+    grow wide-and-shallow (Phase D0). This is a deliberately simple,
     deterministic "open pathways" approximation - a cross shape, not a
     literal pathfound ring loop - but it structurally guarantees no
     interior room is more than one quadrant away from TWO different
@@ -469,18 +492,37 @@ def _reserve_spine(
     Never reserves more than 60% of the grid - if the cross-link would push
     past that, it's dropped for this candidate (the vertical spine alone is
     kept) so there's always real room left to grow rooms into."""
+    band_start = _clamp(band_start, 0, max(0, rows - 1))
     hw = min(_hallway_width_cells(min(cols, rows), cell_w, unit, width_delta), max(1, cols - 2))
     cx0 = max(0, (cols - hw) // 2)
-    spine = {(c, r) for r in range(rows) for c in range(cx0, min(cols, cx0 + hw))}
+    spine = {(c, r) for r in range(band_start, rows) for c in range(cx0, min(cols, cx0 + hw))}
 
     if cross_link and room_count >= _MIN_ROOMS_FOR_CROSS_LINK:
         hh = min(_hallway_width_cells(min(cols, rows), cell_h, unit, width_delta), max(1, rows - 2))
-        ry0 = _clamp(round(rows * 0.62) - hh // 2, 0, max(0, rows - hh))
+        ry0 = _clamp(round(rows * 0.62) - hh // 2, band_start, max(band_start, rows - hh))
         candidate = spine | {(c, r) for r in range(ry0, min(rows, ry0 + hh)) for c in range(cols)}
         if len(candidate) <= cols * rows * 0.6:
             spine = candidate
 
     return spine
+
+
+def _public_band_rows(
+    targets: list[dict], public_idx: list[int], cols: int, rows: int, cell_area: float
+) -> int:
+    """Depth (in rows) of the front public band - enough rows for every
+    public room's own PREFERRED area to fit across the full footprint width
+    (`cols`), so public rooms grow wide-and-shallow rather than deep
+    slivers, clamped to at most _MAX_PUBLIC_BAND_FRACTION of the floor so
+    the private zone + spine always keep real depth behind it. Returns 0
+    when there are no public rooms (no band, whole floor is private/
+    circulation - the growth row-bounds then degrade to the full [0, rows)
+    range, i.e. a strict no-op)."""
+    if not public_idx or cols <= 0 or cell_area <= 0:
+        return 0
+    total = sum(max(1, round(targets[i]["preferred_area"] / cell_area)) for i in public_idx)
+    band = max(1, -(-total // cols))  # ceil(total / cols)
+    return _clamp(band, 1, max(1, int(rows * _MAX_PUBLIC_BAND_FRACTION)))
 
 
 def _seed_rooms(
@@ -492,11 +534,18 @@ def _seed_rooms(
     rows: int,
     spine_cells: set[tuple[int, int]],
     min_cells: list[int],
+    band: int = 0,
 ) -> list[tuple[int, int] | None]:
     """One anchor cell per room, matching floor_layout.py's own front-to-
     back convention (front = low-y). Bedroom/living rooms seed ON the
     floor's own exterior boundary - see module docstring for why that's
     what guarantees egress by construction, not a scored preference.
+
+    Phase D0 (2026-10-12): public rooms seed in the front band (rows
+    [0, band)) and private egress rooms seed on the exterior boundary only
+    BEHIND the band (rows [band, rows)), so the front-public/back-private
+    zoning growth enforces (see _grow_rooms()) is seeded consistently -
+    `band` is 0 (no-op, whole floor) when there are no public rooms.
 
     Real bug fixed during development (found by actually running this on a
     6-room suite program and inspecting the output, not just reasoning
@@ -565,12 +614,12 @@ def _seed_rooms(
     private_egress = [i for i in private_idx if targets[i]["category"] in _EGRESS_CATEGORIES]
     private_other = [i for i in private_idx if i not in private_egress]
     n_egress = len(private_egress)
-    boundary_path = _exterior_boundary_path(cols, rows)
+    boundary_path = _exterior_boundary_path(cols, rows, band)
     for k, i in enumerate(private_egress):
         idx = _clamp(round(((k + 0.5) / n_egress) * (len(boundary_path) - 1)), 0, len(boundary_path) - 1) if n_egress else 0
         cell = _best_reachable_boundary_seed(boundary_path, idx, cols, rows, occupied, min_cells[i])
         if cell is None:
-            cell = _seed_on_exterior(cols, rows, occupied)
+            cell = _seed_on_exterior(cols, rows, occupied, band)
         if cell is not None:
             seeds[i] = cell
             occupied.add(cell)
@@ -593,7 +642,7 @@ def _seed_rooms(
         if anchor is not None:
             cell = _first_free_near(anchor[0], anchor[1], cols, rows, occupied)
         else:
-            cell = _seed_on_exterior(cols, rows, occupied)
+            cell = _seed_on_exterior(cols, rows, occupied, band)
         if cell is None:
             cell = _any_free_cell(cols, rows, occupied)
         if cell is not None:
@@ -709,38 +758,42 @@ def _best_reachable_boundary_seed(
     return best_cell
 
 
-def _exterior_boundary_path(cols: int, rows: int) -> list[tuple[int, int]]:
+def _exterior_boundary_path(cols: int, rows: int, band: int = 0) -> list[tuple[int, int]]:
     """A continuous path of grid-boundary cells - down the left wall, across
-    the back wall, back up the right wall (skipping row 0, the front/
-    public row, on the side walls so egress seeding never collides with
-    public-room seeding on the entrance edge) - used to spread private
-    egress rooms across REAL wall frontage on more than one exterior wall
-    (see _seed_rooms()'s own docstring for the real bug this fixes)."""
+    the back wall, back up the right wall - starting at row `band` on the
+    side walls (so private egress seeding stays BEHIND the front public band
+    and never collides with public-room seeding on the entrance edge; `band`
+    is 0, the original row-1 start, when there are no public rooms). Used to
+    spread private egress rooms across REAL wall frontage on more than one
+    exterior wall (see _seed_rooms()'s own docstring for the real bug this
+    fixes)."""
+    start = max(1, band)
     path: list[tuple[int, int]] = []
-    for r in range(1, rows):
+    for r in range(start, rows):
         path.append((0, r))
     for c in range(cols):
         path.append((c, rows - 1))
-    for r in range(rows - 2, 0, -1):
+    for r in range(rows - 2, start - 1, -1):
         path.append((cols - 1, r))
     return path or [(0, max(0, rows - 1))]
 
 
-def _seed_on_exterior(cols: int, rows: int, occupied: set[tuple[int, int]]) -> tuple[int, int] | None:
-    """A free cell on the grid's own outer boundary - preferring the back
-    edge (high-y, farthest from the entrance), then the sides, then
-    (defensively) the front edge - a fixed, deterministic scan order."""
+def _seed_on_exterior(cols: int, rows: int, occupied: set[tuple[int, int]], band: int = 0) -> tuple[int, int] | None:
+    """A free cell on the grid's own outer boundary BEHIND the front public
+    band (rows >= band) - preferring the back edge (high-y, farthest from
+    the entrance), then the side walls below the band, then (defensively)
+    the band's own back row - a fixed, deterministic scan order."""
     for col in range(cols):
         cell = (col, rows - 1)
         if cell not in occupied:
             return cell
-    for row in range(rows):
+    for row in range(band, rows):
         for col in (0, cols - 1):
             cell = (col, row)
             if cell not in occupied:
                 return cell
     for col in range(cols):
-        cell = (col, 0)
+        cell = (col, band)
         if cell not in occupied:
             return cell
     return None
@@ -766,6 +819,8 @@ def _grow_rooms(
     target_cells: list[int],
     min_cells: list[int],
     max_cells: list[int],
+    zones: list[int] | None = None,
+    band: int = 0,
 ) -> None:
     """Rectangle-preserving growth, NOT cell-by-cell: round-robin across
     rooms, but each room's turn claims a WHOLE free row/column strip
@@ -806,6 +861,23 @@ def _grow_rooms(
     consume a later room's reachable space in one uninterrupted turn."""
     n = len(cells_by_room)
 
+    # Phase D0 (2026-10-12): per-room growth row bounds enforce front-public/
+    # back-private zoning. A public room (zone 0) may only grow within the
+    # front band (rows [0, band)); every other room (private/circulation)
+    # only behind it (rows [band, rows)). This is what keeps a large public
+    # room wide-and-shallow instead of diving the full floor depth and
+    # wrapping around the back bedrooms (the Phase A bowling-alley finding,
+    # root-caused to unbounded DEPTH growth - see _public_band_rows()). When
+    # `band` is 0 (no public rooms) or `zones` is None (a direct/legacy
+    # caller), the bounds degrade to the full [0, rows) range - a strict
+    # no-op, identical to the pre-D0 behavior.
+    if zones is not None and band > 0:
+        row_lo = [0 if zones[i] == 0 else band for i in range(n)]
+        row_hi = [band - 1 if zones[i] == 0 else rows - 1 for i in range(n)]
+    else:
+        row_lo = [0] * n
+        row_hi = [rows - 1] * n
+
     def current_rect(i: int) -> tuple[int, int, int, int] | None:
         cells = cells_by_room[i]
         if not cells:
@@ -826,9 +898,9 @@ def _grow_rooms(
                 continue
             x0, y0, w, h = rect
             candidates: dict[str, tuple[int, int, int, int]] = {}
-            if y0 > 0 and all(owner[y0 - 1][c] == -1 for c in range(x0, x0 + w)):
+            if y0 > row_lo[i] and all(owner[y0 - 1][c] == -1 for c in range(x0, x0 + w)):
                 candidates["up"] = (x0, y0 - 1, w, h + 1)
-            if y0 + h < rows and all(owner[y0 + h][c] == -1 for c in range(x0, x0 + w)):
+            if y0 + h <= row_hi[i] and all(owner[y0 + h][c] == -1 for c in range(x0, x0 + w)):
                 candidates["down"] = (x0, y0, w, h + 1)
             if x0 > 0 and all(owner[r][x0 - 1] == -1 for r in range(y0, y0 + h)):
                 candidates["left"] = (x0 - 1, y0, w + 1, h)
@@ -866,7 +938,10 @@ def _grow_rooms(
     for i in range(n):
         if not cells_by_room[i] or len(cells_by_room[i]) >= min_cells[i]:
             continue
-        _grow_arm(owner, cells_by_room[i], i, cols, rows, min_cells[i] - len(cells_by_room[i]), max_cells[i])
+        _grow_arm(
+            owner, cells_by_room[i], i, cols, rows,
+            min_cells[i] - len(cells_by_room[i]), max_cells[i], row_lo[i], row_hi[i],
+        )
 
     # Steal fallback (2026-10, Phase A2 "Bug B" fix - absolute last resort,
     # one rung below the free-cell arm fallback above): a room can still be
@@ -891,7 +966,8 @@ def _grow_rooms(
         if not cells_by_room[i] or len(cells_by_room[i]) >= min_cells[i]:
             continue
         _steal_arm(
-            owner, cells_by_room, i, cols, rows, min_cells[i] - len(cells_by_room[i]), max_cells[i], min_cells
+            owner, cells_by_room, i, cols, rows, min_cells[i] - len(cells_by_room[i]), max_cells[i],
+            min_cells, row_lo[i], row_hi[i],
         )
 
 
@@ -904,6 +980,8 @@ def _steal_arm(
     needed: int,
     cap: int,
     min_cells: list[int],
+    row_lo: int = 0,
+    row_hi: int | None = None,
 ) -> None:
     """Absolute last resort for a room still under its own real minimum
     after both whole-strip growth and the free-cell arm fallback
@@ -921,12 +999,16 @@ def _steal_arm(
     cell can in a genuinely pathological case leave the donor with an odd
     notch - an accepted, honestly-stated edge case for an absolute last
     resort, not a general guarantee."""
+    # Phase D0: never steal outside this room's own zone band (row_lo..hi),
+    # or a public room would pull a back-zone cell in and re-introduce the
+    # front-public/back-private leak the growth band gate prevents.
+    hi = rows - 1 if row_hi is None else row_hi
     heap: list[tuple[int, int, int]] = []
     seen: set[tuple[int, int]] = set(cells_by_room[room_id])
     for (c, r) in cells_by_room[room_id]:
         for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
             nc, nr = c + dc, r + dr
-            if 0 <= nc < cols and 0 <= nr < rows and (nc, nr) not in seen:
+            if 0 <= nc < cols and row_lo <= nr <= hi and (nc, nr) not in seen:
                 seen.add((nc, nr))
                 heapq.heappush(heap, (1, nr, nc))
 
@@ -943,7 +1025,7 @@ def _steal_arm(
                 claimed += 1
         for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
             nc, nr = c + dc, r + dr
-            if 0 <= nc < cols and 0 <= nr < rows and (nc, nr) not in seen:
+            if 0 <= nc < cols and row_lo <= nr <= hi and (nc, nr) not in seen:
                 seen.add((nc, nr))
                 heapq.heappush(heap, (dist + 1, nr, nc))
 
@@ -956,18 +1038,24 @@ def _grow_arm(
     rows: int,
     needed: int,
     cap: int,
+    row_lo: int = 0,
+    row_hi: int | None = None,
 ) -> None:
     """A single-source BFS reach from `cells` (a room's already-claimed
     territory) outward through whatever free cells remain, claiming the
     nearest `needed` of them (bounded by `cap`, the room's real maximum) -
     a bounded, last-resort top-up for a room pure rectangle extension left
-    genuinely under its own minimum, not the primary growth mechanism."""
+    genuinely under its own minimum, not the primary growth mechanism.
+    Phase D0: confined to the room's own zone band (row_lo..row_hi) so a
+    public room's top-up never spills into the private back zone (the
+    front-public/back-private leak the growth band gate prevents)."""
+    hi = rows - 1 if row_hi is None else row_hi
     heap: list[tuple[int, int, int]] = []
     seen: set[tuple[int, int]] = set(cells)
     for (c, r) in cells:
         for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
             nc, nr = c + dc, r + dr
-            if 0 <= nc < cols and 0 <= nr < rows and owner[nr][nc] == -1 and (nc, nr) not in seen:
+            if 0 <= nc < cols and row_lo <= nr <= hi and owner[nr][nc] == -1 and (nc, nr) not in seen:
                 seen.add((nc, nr))
                 heapq.heappush(heap, (1, nr, nc))
 
@@ -981,7 +1069,7 @@ def _grow_arm(
         claimed += 1
         for dc, dr in ((0, -1), (0, 1), (-1, 0), (1, 0)):
             nc, nr = c + dc, r + dr
-            if 0 <= nc < cols and 0 <= nr < rows and owner[nr][nc] == -1 and (nc, nr) not in seen:
+            if 0 <= nc < cols and row_lo <= nr <= hi and owner[nr][nc] == -1 and (nc, nr) not in seen:
                 seen.add((nc, nr))
                 heapq.heappush(heap, (dist + 1, nr, nc))
 
@@ -994,10 +1082,26 @@ def _fill_leftovers(
     cols: int,
     rows: int,
     spine_cells: set[tuple[int, int]],
+    zones: list[int] | None = None,
+    band: int = 0,
 ) -> None:
     """Any cell still unclaimed after growth stalls (owner == -1, not
     spine) is absorbed by an adjacent already-claimed room - the footprint
     always tiles completely.
+
+    Phase D0 (2026-10-12): the candidate room a leftover region is absorbed
+    into is kept ZONE-COMPATIBLE with where the region sits - a region fully
+    inside the front public band (every cell row < band) only goes to a
+    PUBLIC room, a region fully behind the band only to a private/
+    circulation room. Without this, a public room that stopped at the band
+    but is still under its preferred area would greedily win a
+    directly-behind-the-band leftover (it's the "most under target"
+    candidate), get a back-zone cell, and then cascade down the whole floor
+    depth on the next pass - re-introducing the exact bowling-alley leak the
+    growth band gate (see _grow_rooms()) exists to prevent. The filter falls
+    back to the unfiltered adjacency set if it would otherwise empty the
+    pool, so no cell is ever left unclaimed (the tiling guarantee wins over
+    the zone preference in a genuine corner case).
 
     Real bug fixed 2026-10 (Phase A2, "Bug A" - a literal unlabeled solid
     black hole rendered inside the house, reproduced deterministically on
@@ -1107,7 +1211,21 @@ def _fill_leftovers(
                             continue
                         owner_val = owner[nr][nc]
                         if owner_val == -1:
-                            if (nc, nr) not in visited:
+                            # Phase D0: the front-public band boundary acts as
+                            # a region separator, so a leftover pocket can
+                            # never span from the band into the back zone -
+                            # that straddle is exactly what let a band pocket's
+                            # unclaimed cells (which an under-filled public room
+                            # stalled short of) connect down to the back and
+                            # get the whole lot dumped on that public room,
+                            # re-opening the bowling-alley leak. Split at the
+                            # band so each pocket is wholly in-band or wholly
+                            # behind it, and the zone filter below assigns each
+                            # to the correct zone's rooms.
+                            crosses_band = (
+                                zones is not None and band > 0 and (r < band) != (nr < band)
+                            )
+                            if (nc, nr) not in visited and not crosses_band:
                                 visited.add((nc, nr))
                                 region.append((nc, nr))
                                 stack.append((nc, nr))
@@ -1143,8 +1261,24 @@ def _fill_leftovers(
                         cells_by_room[best].add((c, r))
                     assigned = True
                     continue
-                under_cap = [i for i in adjacent_rooms if len(cells_by_room[i]) < max_cells[i]]
-                pool = under_cap or adjacent_rooms
+                # Zone-compatible candidate set (Phase D0): a region fully
+                # in the band may only go to a public room, a region fully
+                # behind the band only to a non-public room. Fall back to the
+                # full adjacency set if filtering would empty it, so a cell
+                # is never left unclaimed.
+                candidate_rooms = adjacent_rooms
+                if zones is not None and band > 0:
+                    rmax = max(r for _, r in region)
+                    rmin = min(r for _, r in region)
+                    if rmax < band:
+                        zone_ok = {i for i in adjacent_rooms if zones[i] == 0}
+                    elif rmin >= band:
+                        zone_ok = {i for i in adjacent_rooms if zones[i] != 0}
+                    else:
+                        zone_ok = adjacent_rooms
+                    candidate_rooms = zone_ok or adjacent_rooms
+                under_cap = [i for i in candidate_rooms if len(cells_by_room[i]) < max_cells[i]]
+                pool = under_cap or candidate_rooms
                 best = min(pool, key=lambda i: len(cells_by_room[i]) - target_cells[i])
                 # Real bug fixed during development (found by rendering a
                 # genuinely minimal 4-room program and seeing a bedroom

@@ -19,6 +19,7 @@ from app.pipeline.floor_layout_mask import (
     layout_floor,
     layout_floor_with_warnings,
 )
+from app.pipeline.layout_quality import SLIVER_ASPECT_RATIO
 from app.pipeline.room_specs import classify_room_category, min_area_for_room, to_plot_unit
 
 # Deliberately NOT a clean divisor of the engine's own internal grid cell
@@ -447,3 +448,102 @@ def test_layout_floor_mask_front_setback_is_a_no_op_on_a_small_plot():
     # A right-sized plot leaves only the pre-existing exterior-wall-
     # thickness gap (well under 2ft) - nowhere near a real driveway setback.
     assert setback_ft < 2.0, f"front setback {setback_ft:.1f}ft - expected a near-zero no-op on a small plot"
+
+
+# ---------------------------------------------------------------------------
+# Phase D0 (2026-10-12): public rooms (Living/Dining) are confined to a
+# front band so they grow wide-and-shallow instead of diving the full floor
+# depth as bowling-alley slivers (the Phase A finding - Living/Dining came
+# out with bounding-box aspect ratios of 3.5-13.3 in every case). These
+# assert the real geometric fix: the public rooms' bounding-box aspect ratio
+# stays below the sliver threshold, across multiple programs and all facings.
+# ---------------------------------------------------------------------------
+
+_D0_CASE_50x60 = [
+    {"name": "Living Room", "area": 3}, {"name": "Kitchen", "area": 1},
+    {"name": "Dining Room", "area": 2}, {"name": "Entry", "area": 1},
+    {"name": "Master Bedroom", "area": 2}, {"name": "Master Bathroom", "area": 1},
+    {"name": "Bedroom 2", "area": 1}, {"name": "Bedroom 3", "area": 1},
+    {"name": "Bathroom 2", "area": 1},
+]
+_D0_CASE_150 = [
+    {"name": "Living Room", "area": 3}, {"name": "Kitchen", "area": 1},
+    {"name": "Dining Room", "area": 2}, {"name": "Garage", "area": 1},
+    {"name": "Entry", "area": 1}, {"name": "Master Bedroom", "area": 2},
+    {"name": "Master Bathroom", "area": 1}, {"name": "Bedroom 2", "area": 1},
+    {"name": "Bathroom 2", "area": 1}, {"name": "Bedroom 3", "area": 1},
+    {"name": "Staircase", "area": 1},
+]
+_D0_CASE_90x40 = [
+    {"name": "Living Room", "area": 3}, {"name": "Kitchen", "area": 1},
+    {"name": "Dining Room", "area": 2}, {"name": "Bedroom 1", "area": 2},
+    {"name": "Bedroom 2", "area": 1}, {"name": "Bedroom 3", "area": 1},
+    {"name": "Bedroom 4", "area": 1}, {"name": "Bathroom 1", "area": 1},
+    {"name": "Bathroom 2", "area": 1},
+]
+_D0_CASE_30x40 = [
+    {"name": "Living Room", "area": 3}, {"name": "Kitchen", "area": 1},
+    {"name": "Dining Room", "area": 1}, {"name": "Bedroom 1", "area": 2},
+    {"name": "Bedroom 2", "area": 1}, {"name": "Bathroom 1", "area": 1},
+]
+
+
+def _bbox_aspect(rect: dict) -> float:
+    return max(rect["w"], rect["h"]) / max(min(rect["w"], rect["h"]), 0.01)
+
+
+@pytest.mark.parametrize(
+    "rooms,dims,garage_cars,facing",
+    [
+        (_D0_CASE_50x60, {"length": 50.0, "width": 60.0, "unit": "ft"}, None, "south"),
+        (_D0_CASE_50x60, {"length": 50.0, "width": 60.0, "unit": "ft"}, None, "north"),
+        (_D0_CASE_50x60, {"length": 50.0, "width": 60.0, "unit": "ft"}, None, "east"),
+        (_D0_CASE_50x60, {"length": 50.0, "width": 60.0, "unit": "ft"}, None, "west"),
+        (_D0_CASE_150, {"length": 150.0, "width": 150.0, "unit": "ft"}, 1, "south"),
+        (_D0_CASE_90x40, {"length": 90.0, "width": 40.0, "unit": "ft"}, None, "south"),
+        (_D0_CASE_30x40, {"length": 30.0, "width": 40.0, "unit": "ft"}, None, "south"),
+    ],
+)
+def test_layout_floor_mask_public_rooms_are_not_bowling_alleys(rooms, dims, garage_cars, facing):
+    """Living Room and Dining Room must not be long thin slivers: their
+    bounding-box aspect ratio stays below SLIVER_ASPECT_RATIO (the Phase A
+    baseline had 3.5-13.3 for exactly these rooms). Judged on the bbox, not
+    per-part: a near-square room with a thin ADJACENT fill-part renders as
+    one contiguous room, so the bbox is the honest 'is this a bowling alley'
+    signal."""
+    rects = layout_floor(rooms, dims, garage_cars=garage_cars, facing=facing)
+    for name in ("Living Room", "Dining Room"):
+        room = next((r for r in rects if r["name"] == name), None)
+        assert room is not None, f"{name} missing for facing={facing}"
+        aspect = _bbox_aspect(room)
+        assert aspect <= SLIVER_ASPECT_RATIO, (
+            f"{name} bbox aspect {aspect:.2f} exceeds sliver threshold "
+            f"{SLIVER_ASPECT_RATIO} (facing={facing}, dims={dims['length']}x{dims['width']})"
+        )
+
+
+def test_layout_floor_mask_public_rooms_stay_in_the_front_band():
+    """The front-band confinement that the no-bowling-alley fix relies on:
+    public rooms (living/kitchen/dining/entry) sit on the FRONT half of the
+    footprint, never diving into the back private zone. Checked south-facing
+    (front = high-y): every public room's own near-the-front edge stays in
+    the front ~65% of the footprint depth."""
+    dims = {"length": 50.0, "width": 60.0, "unit": "ft"}
+    rects = layout_floor(_D0_CASE_50x60, dims, facing="south")
+    fp = footprint_bbox(rects)
+    assert fp is not None
+    fp_y0, fp_y1 = fp[1], fp[3]
+    depth = fp_y1 - fp_y0
+    # South: front is the high-y edge. A public room's DEEPEST reach from the
+    # front is (fp_y1 - its back-most/min-y edge); it must stay within the
+    # front portion of the house (the band is <= half the depth, plus a
+    # little fill spill), i.e. never dive into the back private zone.
+    for name in ("Living Room", "Dining Room", "Kitchen", "Entry"):
+        room = next((r for r in rects if r["name"] == name), None)
+        assert room is not None
+        shallow_y = min(p["y"] for p in room_parts(room))
+        depth_from_front = (fp_y1 - shallow_y) / depth
+        assert depth_from_front <= 0.6, (
+            f"{name} reaches too far into the back zone "
+            f"(depth_from_front={depth_from_front:.2f})"
+        )
