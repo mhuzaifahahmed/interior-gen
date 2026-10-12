@@ -4,6 +4,8 @@ __pycache__/
 venv/
 .env
 data/
+# ...but the mask quality-gate baseline is real, committed test data.
+!tests/data/
 .pytest_cache/
 # Scratch output from scripts/test_*.py (local DXF/PNG/JPEG test artifacts) -
 # never real source, safe to delete anytime.

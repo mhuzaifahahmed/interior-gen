@@ -1,0 +1,1339 @@
+{
+ "150x150_dense_garage_2f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.978,
+   "Bathroom 3": 0.978,
+   "Bedroom 2": 0.699,
+   "Bedroom 3": 1.818,
+   "Bedroom 4": 0.839,
+   "Dining Room": 0.808,
+   "Entry": 1.091,
+   "Kitchen": 1.018,
+   "Laundry": 1.026,
+   "Living Room": 0.594,
+   "Master Bathroom": 3.306,
+   "Master Bedroom": 0.419,
+   "Study": 0.799
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 9.94,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 145.4,
+  "hall_dead_end_len": null,
+  "hard_count": 6,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 237.7,
+  "max_parts": 10,
+  "max_secondary_fraction": 0.722,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Master Bathroom",
+   "Bedroom 3"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 15,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 51.35,
+  "yard_right": 51.35,
+  "yard_top": 83.9
+ },
+ "150x150_dense_garage_2f/floor2": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.672,
+   "Bedroom 2": 1.044,
+   "Master Bathroom": 0.672,
+   "Master Bedroom": 0.719,
+   "Sitting Area": 0.571
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 4.71,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 4,
+  "hard_kinds": [
+   "door_too_narrow",
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 228.3,
+  "max_parts": 17,
+  "max_secondary_fraction": 0.77,
+  "overlap_area": 0.0,
+  "oversized": [],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 12,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 58.73,
+  "yard_right": 58.73,
+  "yard_top": 98.66
+ },
+ "150x150_sparse_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 1": 0.918,
+   "Bedroom 1": 0.627,
+   "Bedroom 2": 0.934
+  },
+  "coverage_gap_fraction": -0.0,
+  "coverage_pct": 1.87,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 2,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 0.0,
+  "max_parts": 3,
+  "max_secondary_fraction": 0.442,
+  "overlap_area": 0.0,
+  "oversized": [],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 4,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 64.75,
+  "yard_right": 64.75,
+  "yard_top": 110.71
+ },
+ "150x150_typical_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.925,
+   "Bedroom 2": 1.279,
+   "Bedroom 3": 0.706,
+   "Dining Room": 1.185,
+   "Entry": 1.084,
+   "Kitchen": 0.728,
+   "Living Room": 0.451,
+   "Master Bathroom": 5.054,
+   "Master Bedroom": 0.416
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 7.05,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 213.3,
+  "hall_dead_end_len": null,
+  "hard_count": 4,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": true,
+  "living_area": 180.5,
+  "max_parts": 4,
+  "max_secondary_fraction": 0.517,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Dining Room",
+   "Master Bathroom",
+   "Bedroom 2"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 11,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 55.08,
+  "yard_right": 55.08,
+  "yard_top": 91.36
+ },
+ "150x200_2f_reported/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 1": 0.957,
+   "Bedroom 1": 1.856,
+   "Dining Room": 0.951,
+   "Entry": 1.068,
+   "Kitchen": 0.756,
+   "Living Room": 0.482,
+   "Master Bathroom": 3.669,
+   "Master Bedroom": 0.418
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 5.47,
+  "daylight_fail_hard": [
+   "Master Bedroom"
+  ],
+  "daylight_fail_soft": [],
+  "dining_area": 171.1,
+  "hall_dead_end_len": null,
+  "hard_count": 4,
+  "hard_kinds": [
+   "door_too_narrow",
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 193.0,
+  "max_parts": 5,
+  "max_secondary_fraction": 0.489,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Master Bathroom",
+   "Bedroom 1"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 9,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 57.47,
+  "yard_right": 57.47,
+  "yard_top": 134.35
+ },
+ "150x200_2f_reported/floor2": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.936,
+   "Bedroom 2": 1.831,
+   "Family Lounge": 0.633
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 2.25,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 0,
+  "hard_kinds": [],
+  "hierarchy_inverted": false,
+  "living_area": 253.1,
+  "max_parts": 5,
+  "max_secondary_fraction": 0.283,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 2"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 4,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 63.77,
+  "yard_right": 63.77,
+  "yard_top": 151.17
+ },
+ "300x300_sparse_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 1": 0.918,
+   "Bedroom 1": 0.627,
+   "Bedroom 2": 0.934
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 0.47,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 2,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 0.0,
+  "max_parts": 3,
+  "max_secondary_fraction": 0.442,
+  "overlap_area": 0.0,
+  "oversized": [],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 4,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 139.75,
+  "yard_right": 139.75,
+  "yard_top": 260.71
+ },
+ "300x300_typical_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.925,
+   "Bedroom 2": 1.279,
+   "Bedroom 3": 0.706,
+   "Dining Room": 1.185,
+   "Entry": 1.084,
+   "Kitchen": 0.728,
+   "Living Room": 0.451,
+   "Master Bathroom": 5.054,
+   "Master Bedroom": 0.416
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 1.76,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 213.3,
+  "hall_dead_end_len": null,
+  "hard_count": 4,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": true,
+  "living_area": 180.5,
+  "max_parts": 4,
+  "max_secondary_fraction": 0.517,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Dining Room",
+   "Master Bathroom",
+   "Bedroom 2"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 11,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 130.08,
+  "yard_right": 130.08,
+  "yard_top": 241.36
+ },
+ "30x40_small_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 1": 0.974,
+   "Bedroom 1": 0.995,
+   "Bedroom 2": 1.32,
+   "Dining Room": 1.016,
+   "Entry": 0.998,
+   "Kitchen": 0.776,
+   "Living Room": 0.498
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 91.39,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 182.8,
+  "hall_dead_end_len": null,
+  "hard_count": 3,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 199.2,
+  "max_parts": 3,
+  "max_secondary_fraction": 0.403,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 2"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 6,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 0.75,
+  "yard_left": 0.75,
+  "yard_right": 0.75,
+  "yard_top": 0.75
+ },
+ "30x40_sparse_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 1": 1.498,
+   "Bedroom 1": 0.655,
+   "Bedroom 2": 0.556
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 35.0,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 2,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 0.0,
+  "max_parts": 11,
+  "max_secondary_fraction": 0.647,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bathroom 1"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 7,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 15.43,
+  "yard_left": 6.18,
+  "yard_right": 6.18,
+  "yard_top": 0.75
+ },
+ "40x60_typical_1f_east/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.915,
+   "Bedroom 2": 1.577,
+   "Bedroom 3": 0.712,
+   "Dining Room": 0.763,
+   "Entry": 0.993,
+   "Kitchen": 1.167,
+   "Living Room": 0.454,
+   "Master Bathroom": 5.539,
+   "Master Bedroom": 0.415
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 66.13,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 137.3,
+  "hall_dead_end_len": null,
+  "hard_count": 3,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 181.6,
+  "max_parts": 4,
+  "max_secondary_fraction": 0.516,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Kitchen",
+   "Master Bathroom",
+   "Bedroom 2"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 9,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 5.44,
+  "yard_left": 0.75,
+  "yard_right": 6.93,
+  "yard_top": 5.44
+ },
+ "40x60_typical_1f_north/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.661,
+   "Bedroom 2": 1.467,
+   "Bedroom 3": 2.298,
+   "Dining Room": 1.094,
+   "Entry": 0.993,
+   "Kitchen": 0.75,
+   "Living Room": 0.492,
+   "Master Bathroom": 0.661,
+   "Master Bedroom": 0.358
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 66.13,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 196.9,
+  "hall_dead_end_len": null,
+  "hard_count": 6,
+  "hard_kinds": [
+   "door_too_narrow",
+   "narrow",
+   "small_area"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 196.9,
+  "max_parts": 9,
+  "max_secondary_fraction": 0.635,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 2",
+   "Bedroom 3"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 14,
+  "undersized": [
+   "Master Bedroom"
+  ],
+  "unreachable": null,
+  "yard_bottom": 0.75,
+  "yard_left": 3.84,
+  "yard_right": 3.84,
+  "yard_top": 10.13
+ },
+ "40x60_typical_1f_south/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.661,
+   "Bedroom 2": 1.467,
+   "Bedroom 3": 2.298,
+   "Dining Room": 1.094,
+   "Entry": 0.993,
+   "Kitchen": 0.75,
+   "Living Room": 0.492,
+   "Master Bathroom": 0.661,
+   "Master Bedroom": 0.358
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 66.13,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 196.9,
+  "hall_dead_end_len": null,
+  "hard_count": 6,
+  "hard_kinds": [
+   "door_too_narrow",
+   "narrow",
+   "small_area"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 196.9,
+  "max_parts": 9,
+  "max_secondary_fraction": 0.635,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 2",
+   "Bedroom 3"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 14,
+  "undersized": [
+   "Master Bedroom"
+  ],
+  "unreachable": null,
+  "yard_bottom": 10.13,
+  "yard_left": 3.84,
+  "yard_right": 3.84,
+  "yard_top": 0.75
+ },
+ "40x60_typical_1f_west/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.915,
+   "Bedroom 2": 1.577,
+   "Bedroom 3": 0.712,
+   "Dining Room": 0.763,
+   "Entry": 0.993,
+   "Kitchen": 1.167,
+   "Living Room": 0.454,
+   "Master Bathroom": 5.539,
+   "Master Bedroom": 0.415
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 66.13,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 137.3,
+  "hall_dead_end_len": null,
+  "hard_count": 3,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 181.6,
+  "max_parts": 4,
+  "max_secondary_fraction": 0.516,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Kitchen",
+   "Master Bathroom",
+   "Bedroom 2"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 9,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 5.44,
+  "yard_left": 6.93,
+  "yard_right": 0.75,
+  "yard_top": 5.44
+ },
+ "40x60_typical_garage_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.658,
+   "Bedroom 2": 0.554,
+   "Bedroom 3": 2.283,
+   "Dining Room": 0.936,
+   "Entry": 1.073,
+   "Kitchen": 0.751,
+   "Living Room": 0.55,
+   "Master Bathroom": 0.658,
+   "Master Bedroom": 0.743
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 74.48,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 168.4,
+  "hall_dead_end_len": null,
+  "hard_count": 6,
+  "hard_kinds": [
+   "door_too_narrow",
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 220.0,
+  "max_parts": 14,
+  "max_secondary_fraction": 0.632,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 3"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 16,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 7.13,
+  "yard_left": 2.85,
+  "yard_right": 2.85,
+  "yard_top": 0.75
+ },
+ "50x50_2f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 1": 0.991,
+   "Bedroom 1": 2.403,
+   "Dining Room": 1.022,
+   "Entry": 1.101,
+   "Kitchen": 0.73,
+   "Living Room": 0.456
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 42.32,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 183.8,
+  "hall_dead_end_len": null,
+  "hard_count": 3,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": true,
+  "living_area": 182.5,
+  "max_parts": 5,
+  "max_secondary_fraction": 0.45,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Entry",
+   "Bedroom 1"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 5,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 16.72,
+  "yard_left": 8.74,
+  "yard_right": 8.74,
+  "yard_top": 0.75
+ },
+ "50x50_2f/floor2": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.672,
+   "Bedroom 2": 1.044,
+   "Master Bathroom": 0.672,
+   "Master Bedroom": 0.719,
+   "Sitting Area": 0.571
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 42.35,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 4,
+  "hard_kinds": [
+   "door_too_narrow",
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 228.3,
+  "max_parts": 17,
+  "max_secondary_fraction": 0.77,
+  "overlap_area": 0.0,
+  "oversized": [],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 12,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 16.71,
+  "yard_left": 8.73,
+  "yard_right": 8.73,
+  "yard_top": 0.75
+ },
+ "50x50_typical_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.705,
+   "Bedroom 2": 0.554,
+   "Bedroom 3": 1.093,
+   "Dining Room": 1.176,
+   "Entry": 1.124,
+   "Kitchen": 0.77,
+   "Living Room": 0.456,
+   "Master Bathroom": 3.744,
+   "Master Bedroom": 0.416
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 56.43,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 211.6,
+  "hall_dead_end_len": null,
+  "hard_count": 4,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": true,
+  "living_area": 182.5,
+  "max_parts": 5,
+  "max_secondary_fraction": 0.57,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Entry",
+   "Dining Room",
+   "Master Bathroom"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 13,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 11.68,
+  "yard_left": 6.22,
+  "yard_right": 6.22,
+  "yard_top": 0.75
+ },
+ "56x56_typical_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.925,
+   "Bedroom 2": 1.279,
+   "Bedroom 3": 0.706,
+   "Dining Room": 1.185,
+   "Entry": 1.084,
+   "Kitchen": 0.728,
+   "Living Room": 0.451,
+   "Master Bathroom": 5.054,
+   "Master Bedroom": 0.416
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 50.61,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 213.3,
+  "hall_dead_end_len": null,
+  "hard_count": 4,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": true,
+  "living_area": 180.5,
+  "max_parts": 4,
+  "max_secondary_fraction": 0.517,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Dining Room",
+   "Master Bathroom",
+   "Bedroom 2"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 11,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 15.41,
+  "yard_left": 8.08,
+  "yard_right": 8.08,
+  "yard_top": 0.75
+ },
+ "60x80_3f_east/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 1": 0.94,
+   "Bedroom 1": 2.42,
+   "Dining Room": 1.058,
+   "Entry": 1.124,
+   "Kitchen": 0.77,
+   "Living Room": 0.421
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 22.04,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 190.5,
+  "hall_dead_end_len": null,
+  "hard_count": 2,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": true,
+  "living_area": 168.4,
+  "max_parts": 5,
+  "max_secondary_fraction": 0.514,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Entry",
+   "Bedroom 1"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 6,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 21.16,
+  "yard_left": 13.12,
+  "yard_right": 18.8,
+  "yard_top": 21.16
+ },
+ "60x80_3f_east/floor2": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.661,
+   "Bedroom 2": 1.187,
+   "Master Bathroom": 0.661,
+   "Master Bedroom": 0.744,
+   "Sitting Area": 0.642
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 22.06,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 3,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 256.8,
+  "max_parts": 13,
+  "max_secondary_fraction": 0.692,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 2"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 12,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 21.15,
+  "yard_left": 13.11,
+  "yard_right": 18.8,
+  "yard_top": 21.15
+ },
+ "60x80_3f_east/floor3": {
+  "area_ratio_to_max": {
+   "Bathroom 4": 0.936,
+   "Bedroom 4": 1.281,
+   "Sitting Area": 0.669
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 14.06,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 0,
+  "hard_kinds": [],
+  "hierarchy_inverted": false,
+  "living_area": 267.7,
+  "max_parts": 3,
+  "max_secondary_fraction": 0.378,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 4"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 5,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 24.95,
+  "yard_left": 18.78,
+  "yard_right": 18.8,
+  "yard_top": 24.95
+ },
+ "60x80_3f_north/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 1": 0.94,
+   "Bedroom 1": 2.42,
+   "Dining Room": 0.98,
+   "Entry": 1.101,
+   "Kitchen": 0.749,
+   "Living Room": 0.467
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 22.04,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 176.3,
+  "hall_dead_end_len": null,
+  "hard_count": 2,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 186.9,
+  "max_parts": 5,
+  "max_secondary_fraction": 0.34,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Entry",
+   "Bedroom 1"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 6,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 23.52,
+  "yard_left": 15.96,
+  "yard_right": 15.96,
+  "yard_top": 18.8
+ },
+ "60x80_3f_north/floor2": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.94,
+   "Bedroom 2": 1.04,
+   "Master Bathroom": 0.661,
+   "Master Bedroom": 0.488,
+   "Sitting Area": 0.421
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 22.06,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 1,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 168.5,
+  "max_parts": 8,
+  "max_secondary_fraction": 0.598,
+  "overlap_area": 0.0,
+  "oversized": [],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 12,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 23.51,
+  "yard_left": 15.95,
+  "yard_right": 15.95,
+  "yard_top": 18.8
+ },
+ "60x80_3f_north/floor3": {
+  "area_ratio_to_max": {
+   "Bathroom 4": 0.936,
+   "Bedroom 4": 1.188,
+   "Sitting Area": 0.641
+  },
+  "coverage_gap_fraction": -0.0,
+  "coverage_pct": 14.06,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 1,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 256.5,
+  "max_parts": 3,
+  "max_secondary_fraction": 0.463,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 4"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 5,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 31.11,
+  "yard_left": 18.79,
+  "yard_right": 18.79,
+  "yard_top": 18.8
+ },
+ "60x80_3f_south/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 1": 0.94,
+   "Bedroom 1": 2.42,
+   "Dining Room": 0.98,
+   "Entry": 1.101,
+   "Kitchen": 0.749,
+   "Living Room": 0.467
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 22.04,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 176.3,
+  "hall_dead_end_len": null,
+  "hard_count": 2,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 186.9,
+  "max_parts": 5,
+  "max_secondary_fraction": 0.34,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Entry",
+   "Bedroom 1"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 6,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 15.96,
+  "yard_right": 15.96,
+  "yard_top": 23.52
+ },
+ "60x80_3f_south/floor2": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.94,
+   "Bedroom 2": 1.04,
+   "Master Bathroom": 0.661,
+   "Master Bedroom": 0.488,
+   "Sitting Area": 0.421
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 22.06,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 1,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 168.5,
+  "max_parts": 8,
+  "max_secondary_fraction": 0.598,
+  "overlap_area": 0.0,
+  "oversized": [],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 12,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 15.95,
+  "yard_right": 15.95,
+  "yard_top": 23.51
+ },
+ "60x80_3f_south/floor3": {
+  "area_ratio_to_max": {
+   "Bathroom 4": 0.936,
+   "Bedroom 4": 1.188,
+   "Sitting Area": 0.641
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 14.06,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 1,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 256.5,
+  "max_parts": 3,
+  "max_secondary_fraction": 0.463,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 4"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 5,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 18.79,
+  "yard_right": 18.79,
+  "yard_top": 31.11
+ },
+ "60x80_3f_west/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 1": 0.94,
+   "Bedroom 1": 2.42,
+   "Dining Room": 1.058,
+   "Entry": 1.124,
+   "Kitchen": 0.77,
+   "Living Room": 0.421
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 22.04,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 190.5,
+  "hall_dead_end_len": null,
+  "hard_count": 2,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": true,
+  "living_area": 168.4,
+  "max_parts": 5,
+  "max_secondary_fraction": 0.514,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Entry",
+   "Bedroom 1"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 6,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 21.16,
+  "yard_left": 18.8,
+  "yard_right": 13.12,
+  "yard_top": 21.16
+ },
+ "60x80_3f_west/floor2": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.661,
+   "Bedroom 2": 1.187,
+   "Master Bathroom": 0.661,
+   "Master Bedroom": 0.744,
+   "Sitting Area": 0.642
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 22.06,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 3,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 256.8,
+  "max_parts": 13,
+  "max_secondary_fraction": 0.692,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 2"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 12,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 21.15,
+  "yard_left": 18.8,
+  "yard_right": 13.11,
+  "yard_top": 21.15
+ },
+ "60x80_3f_west/floor3": {
+  "area_ratio_to_max": {
+   "Bathroom 4": 0.936,
+   "Bedroom 4": 1.281,
+   "Sitting Area": 0.669
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 14.06,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 0,
+  "hard_kinds": [],
+  "hierarchy_inverted": false,
+  "living_area": 267.7,
+  "max_parts": 3,
+  "max_secondary_fraction": 0.378,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 4"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 5,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 24.95,
+  "yard_left": 18.8,
+  "yard_right": 18.78,
+  "yard_top": 24.95
+ },
+ "60x80_dense_garage_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 1.0,
+   "Bathroom 3": 1.0,
+   "Bedroom 2": 1.769,
+   "Bedroom 3": 1.803,
+   "Bedroom 4": 0.768,
+   "Dining Room": 0.779,
+   "Entry": 1.094,
+   "Kitchen": 0.765,
+   "Laundry": 1.021,
+   "Living Room": 0.646,
+   "Master Bathroom": 1.0,
+   "Master Bedroom": 0.414,
+   "Study": 0.747
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 50.06,
+  "daylight_fail_hard": [
+   "Kitchen"
+  ],
+  "daylight_fail_soft": [],
+  "dining_area": 140.2,
+  "hall_dead_end_len": null,
+  "hard_count": 5,
+  "hard_kinds": [
+   "door_too_narrow",
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 258.3,
+  "max_parts": 6,
+  "max_secondary_fraction": 0.691,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Bedroom 2",
+   "Bedroom 3"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 14,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 8.84,
+  "yard_right": 8.84,
+  "yard_top": 4.42
+ },
+ "60x80_typical_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.661,
+   "Bedroom 2": 0.735,
+   "Bedroom 3": 0.559,
+   "Dining Room": 1.977,
+   "Entry": 1.032,
+   "Kitchen": 0.802,
+   "Living Room": 0.843,
+   "Master Bathroom": 0.661,
+   "Master Bedroom": 0.416
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 33.07,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 355.8,
+  "hall_dead_end_len": null,
+  "hard_count": 4,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": true,
+  "living_area": 337.3,
+  "max_parts": 9,
+  "max_secondary_fraction": 0.61,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Dining Room"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 13,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 12.8,
+  "yard_right": 12.8,
+  "yard_top": 15.05
+ },
+ "90x40_sparse_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bedroom 1": 2.191,
+   "Kitchen": 1.216,
+   "Living Room": 0.375
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 20.69,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 0.0,
+  "hall_dead_end_len": null,
+  "hard_count": 1,
+  "hard_kinds": [
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 150.0,
+  "max_parts": 2,
+  "max_secondary_fraction": 0.131,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Kitchen",
+   "Bedroom 1"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 7,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 18.8,
+  "yard_left": 24.31,
+  "yard_right": 24.31,
+  "yard_top": 3.2
+ },
+ "90x40_typical_1f/floor1": {
+  "area_ratio_to_max": {
+   "Bathroom 2": 0.972,
+   "Bedroom 2": 1.077,
+   "Bedroom 3": 0.7,
+   "Dining Room": 1.141,
+   "Entry": 0.972,
+   "Kitchen": 1.36,
+   "Living Room": 0.7,
+   "Master Bathroom": 4.391,
+   "Master Bedroom": 0.418
+  },
+  "coverage_gap_fraction": 0.0,
+  "coverage_pct": 44.09,
+  "daylight_fail_hard": [],
+  "daylight_fail_soft": [],
+  "dining_area": 205.4,
+  "hall_dead_end_len": null,
+  "hard_count": 2,
+  "hard_kinds": [
+   "door_too_narrow",
+   "narrow"
+  ],
+  "hierarchy_inverted": false,
+  "living_area": 280.1,
+  "max_parts": 4,
+  "max_secondary_fraction": 0.494,
+  "overlap_area": 0.0,
+  "oversized": [
+   "Dining Room",
+   "Kitchen",
+   "Master Bathroom"
+  ],
+  "pass_through_private": null,
+  "single_floor_stair": false,
+  "soft_count": 11,
+  "undersized": [],
+  "unreachable": null,
+  "yard_bottom": 12.97,
+  "yard_left": 14.8,
+  "yard_right": 14.8,
+  "yard_top": 0.75
+ }
+}

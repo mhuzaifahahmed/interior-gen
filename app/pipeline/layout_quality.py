@@ -32,6 +32,7 @@ from app.pipeline.room_specs import (
     min_depth_for_room,
     min_width_for_room,
     preferred_area_for_room,
+    to_plot_unit,
 )
 
 # Local re-implementation of floor_layout.room_parts() (not imported -
@@ -125,8 +126,54 @@ class LayoutScore:
         return [v for v in self.violations if v.hard]
 
 
+# Daylight rule (mask planner quality gate, Phase 0): a habitable room needs a
+# window-capable stretch of the FOOTPRINT's outer boundary. HARD categories
+# must have it, SOFT categories should.
+DAYLIGHT_HARD_CATEGORIES = ("bedroom", "living", "kitchen")
+DAYLIGHT_SOFT_CATEGORIES = ("dining", "study", "family")
+DAYLIGHT_MIN_EDGE_M = 0.9
+
+
+def footprint_edge_length(part: dict, footprint: dict, tol: float = 1e-3) -> float:
+    """Longest stretch of `part`'s edges lying on a side of the footprint
+    bbox ({"x0","y0","x1","y1"}). Shared by layout_metrics and the opt-in
+    daylight check below."""
+    px0, py0 = part["x"], part["y"]
+    px1, py1 = px0 + part["w"], py0 + part["h"]
+    best = 0.0
+    if abs(px0 - footprint["x0"]) < tol or abs(px1 - footprint["x1"]) < tol:
+        best = max(best, min(py1, footprint["y1"]) - max(py0, footprint["y0"]))
+    if abs(py0 - footprint["y0"]) < tol or abs(py1 - footprint["y1"]) < tol:
+        best = max(best, min(px1, footprint["x1"]) - max(px0, footprint["x0"]))
+    return max(best, 0.0)
+
+
+def room_daylight_edge(rect: dict, footprint: dict) -> float:
+    """Best window-capable footprint-edge length across a room's parts."""
+    return max(
+        (footprint_edge_length(p, footprint) for p in _room_parts(rect) if p.get("w", 0) > 0 and p.get("h", 0) > 0),
+        default=0.0,
+    )
+
+
+def daylight_failures(rects: list[dict], footprint: dict, unit: str) -> tuple[list[str], list[str]]:
+    """(hard_fail_names, soft_fail_names) for the daylight rule."""
+    need = to_plot_unit(DAYLIGHT_MIN_EDGE_M, unit)
+    hard, soft = [], []
+    for rect in rects:
+        name = str(rect.get("name") or "")
+        cat = classify_room_category(name)
+        if cat in DAYLIGHT_HARD_CATEGORIES or cat in DAYLIGHT_SOFT_CATEGORIES:
+            if room_daylight_edge(rect, footprint) < need - 1e-6:
+                (hard if cat in DAYLIGHT_HARD_CATEGORIES else soft).append(name)
+    return hard, soft
+
+
 def score_floor_layout(
-    rects: list[dict], dimensions: dict, garage_cars: int | None = None
+    rects: list[dict],
+    dimensions: dict,
+    garage_cars: int | None = None,
+    daylight_footprint: dict | None = None,
 ) -> LayoutScore:
     """Scores one floor's already-computed rectangles (floor_layout.py's
     output shape - [{"name","x","y","w","h"}, ...]) for real-world
@@ -280,7 +327,7 @@ def score_floor_layout(
         # always scores a candidate against the exact box it was built to
         # tile) - rects genuinely touch its 0/length/width edges directly,
         # no further wall-thickness offset needed at this layer.
-        if category in _EGRESS_CATEGORIES and not any(_touches_exterior(p, dimensions) for p in valid_parts):
+        if daylight_footprint is None and category in _EGRESS_CATEGORIES and not any(_touches_exterior(p, dimensions) for p in valid_parts):
             violations.append(Violation(name, "no_egress", False, "no exterior wall for a window"))
 
         # SOFT: well under its own preferred size while other rooms on the
@@ -290,6 +337,13 @@ def score_floor_layout(
         preferred = preferred_area_for_room(name, unit, garage_cars)
         if preferred > min_area and area < min_area + (preferred - min_area) * 0.3:
             violations.append(Violation(name, "below_preferred", False, f"{area:.1f} well under preferred {preferred:.1f}"))
+
+    if daylight_footprint is not None:
+        hard_names, soft_names = daylight_failures(rects, daylight_footprint, unit)
+        for n in hard_names:
+            violations.append(Violation(n, "no_daylight", True, "no window-capable footprint edge"))
+        for n in soft_names:
+            violations.append(Violation(n, "no_daylight", False, "no window-capable footprint edge"))
 
     violations.extend(_door_clearance_violations(rects, unit))
     violations.extend(_coverage_violation(rects, dimensions))
