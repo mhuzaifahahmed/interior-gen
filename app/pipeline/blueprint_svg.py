@@ -357,8 +357,19 @@ def render_floor_blueprint(
     # signal that a wide-open room can't just float unsupported. Drawn
     # after furniture (never obscured by/obscuring a furniture symbol -
     # most real rooms never trigger this at all) and before doors/labels.
-    for rect in rects:
-        _draw_columns(draw, _largest_part_view(rect), plot_x0, plot_y0, scale, unit)
+    label_geoms = [
+        {**_largest_part_view(rect), "_area_override": sum(p["w"] * p["h"] for p in room_parts(rect))}
+        for rect in rects
+    ]
+    label_layouts = [
+        _compute_label_layout(draw, g, plot_x0, plot_y0, scale, unit, label_font, small_font)
+        for g in label_geoms
+    ]
+    for rect, lay in zip(rects, label_layouts):
+        _draw_columns(
+            draw, _largest_part_view(rect), plot_x0, plot_y0, scale, unit,
+            lay["box"] if lay else None,
+        )
 
     for edge, width_px in zip(interior_door_edges, interior_door_widths_px):
         _draw_door(draw, edge, plot_x0, plot_y0, scale, width_px)
@@ -380,11 +391,7 @@ def render_floor_blueprint(
         for part in room_parts(rect):
             _draw_windows(draw, {**rect, **part}, fp, plot_x0, plot_y0, scale, unit)
 
-    for rect in rects:
-        label_geom = {
-            **_largest_part_view(rect),
-            "_area_override": sum(p["w"] * p["h"] for p in room_parts(rect)),
-        }
+    for label_geom in label_geoms:
         _draw_room_label(draw, label_geom, plot_x0, plot_y0, scale, unit, label_font, small_font)
 
     _draw_dimensions(draw, rects, length, width, plot_x0, plot_y0, plot_x1, plot_y1, scale, unit, small_font)
@@ -622,27 +629,70 @@ def _draw_driveway(
 COLUMN_HALF_PX = 7
 
 
-def _draw_columns(
-    draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_y0: float, scale: float, unit: str
-) -> None:
-    """Draws a filled square at each structural-column position
-    room_specs.column_fractions_for_span() returns for this room (empty for
-    the common case - a room whose longer side is already within
-    MAX_UNSUPPORTED_SPAN_M gets no columns at all). Columns are centered on
-    the room's SHORT axis and spaced along its LONG axis - a real engineered
-    signal that a wide-open room has intermediate support, not an unexplained
-    void."""
+# Rooms that never get columns: small/linear, or labelled so tightly a mark
+# would only read as a stain.
+_NO_COLUMN_CATEGORIES = frozenset({"hallway", "bathroom", "powder", "closet", "staircase", "foyer"})
+LABEL_BOX_PAD_PX = 4
+_COLUMN_WALL_MARGIN_PX = COLUMN_HALF_PX * 2 + 6
+
+
+def _column_centres_px(
+    rect: dict, plot_x0: float, plot_y0: float, scale: float, unit: str,
+    label_box: tuple[float, float, float, float] | None,
+) -> list[tuple[float, float]]:
+    """Pixel centres for this room's structural columns. A nominal column
+    position that would overlap label_box is shifted along the long axis to
+    the nearest clear spot (just outside the label, inside the room, away
+    from walls and other columns), or dropped when none exists."""
+    if classify_room_category(rect.get("name") or "") in _NO_COLUMN_CATEGORIES:
+        return []
     fractions = column_fractions_for_span(rect["w"], rect["h"], unit)
     if not fractions:
-        return
+        return []
     x0, y0 = plot_x0 + rect["x"] * scale, plot_y0 + rect["y"] * scale
     w_px, h_px = rect["w"] * scale, rect["h"] * scale
+    horizontal = w_px >= h_px
+    span = w_px if horizontal else h_px
+    origin = x0 if horizontal else y0
     half = COLUMN_HALF_PX
+
+    lo = hi = None
+    if label_box is not None:
+        if horizontal:
+            if label_box[1] - half <= y0 + h_px / 2 <= label_box[3] + half:
+                lo, hi = label_box[0] - half - 2, label_box[2] + half + 2
+        elif label_box[0] - half <= x0 + w_px / 2 <= label_box[2] + half:
+            lo, hi = label_box[1] - half - 2, label_box[3] + half + 2
+
+    placed: list[float] = []
+    margin = _COLUMN_WALL_MARGIN_PX
     for f in fractions:
-        if w_px >= h_px:
-            cx, cy = x0 + w_px * f, y0 + h_px / 2
-        else:
-            cx, cy = x0 + w_px / 2, y0 + h_px * f
+        pos = origin + span * f
+        if lo is not None and lo <= pos <= hi:
+            # Midpoint of each free stretch beside the label (not hugging the
+            # text), only when that stretch is wide enough to read as a bay.
+            candidates = []
+            for a, b in ((origin + margin, lo), (hi, origin + span - margin)):
+                if b - a >= 4 * half:
+                    candidates.append((a + b) / 2)
+            candidates.sort(key=lambda c: abs(c - pos))
+            pos = candidates[0] if candidates else None
+        if pos is None or any(abs(pos - q) < 2 * half + 4 for q in placed):
+            continue
+        placed.append(pos)
+    if horizontal:
+        return [(p, y0 + h_px / 2) for p in placed]
+    return [(x0 + w_px / 2, p) for p in placed]
+
+
+def _draw_columns(
+    draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_y0: float, scale: float, unit: str,
+    label_box: tuple[float, float, float, float] | None = None,
+) -> None:
+    """Draws a filled square at each structural-column position (see
+    _column_centres_px()) - keeps clear of the room's label text box."""
+    half = COLUMN_HALF_PX
+    for cx, cy in _column_centres_px(rect, plot_x0, plot_y0, scale, unit, label_box):
         draw.rectangle([cx - half, cy - half, cx + half, cy + half], fill=WALL_COLOR)
 
 
@@ -1778,31 +1828,24 @@ def _draw_l_shaped_stair_run(
 # ---- Labels ----
 
 
-def _draw_room_label(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_y0: float, scale: float, unit: str, name_font: ImageFont.FreeTypeFont, small_font: ImageFont.FreeTypeFont) -> None:
+def _compute_label_layout(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_y0: float, scale: float, unit: str, name_font: ImageFont.FreeTypeFont, small_font: ImageFont.FreeTypeFont) -> dict | None:
+    """Pure geometry for a room's label (None when the room is too small to
+    label). Shared by _draw_room_label() and the column pass so a structural
+    column can never be placed under the label text. "box" is the padded
+    pixel rectangle (x0, y0, x1, y1) the text occupies."""
     x0, y0, x1, y1 = _room_bbox(rect, plot_x0, plot_y0, scale)
     box_w, box_h = x1 - x0, y1 - y0
     if box_w < 46 or box_h < 34:
-        return  # too small to label legibly
+        return None  # too small to label legibly
 
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     # Parts-aware (2026-10): the label is POSITIONED/sized on the room's
-    # largest part (see _largest_part_view() - there's nowhere to draw text
-    # in an L/U room's empty notch), but the printed area must still be the
-    # room's REAL total area across every part, not just that one part's -
-    # callers pass this explicitly via "_area_override" for a multi-part
-    # room; a plain-rectangle room (no override given) keeps the original
-    # w*h computation, byte-identical to before.
+    # largest part, but the printed area is the room's REAL total area
+    # ("_area_override" for a multi-part room).
     area_units = rect.get("_area_override", rect["w"] * rect["h"])
     area_text = f"{rect['w']:.1f}x{rect['h']:.1f} {unit} ({area_units:.0f} sq {unit})"
-    # Real architectural floor plans conventionally render the room name in
-    # all-caps within its label - a small typographic change (display only,
-    # the underlying name/data is untouched) that reads as a genuine title-
-    # block entry rather than a plain UI text label.
     display_name = rect["name"].upper()
 
-    # Shrink the font and/or wrap onto two lines when the room's own box is
-    # too narrow for the name at the default size - see _fit_room_name()'s
-    # docstring and the _NAME_MIN_FONT_SIZE comment above it.
     max_name_width = max(box_w - _LABEL_WIDTH_MARGIN_PX, 10)
     name_lines, fitted_font = _fit_room_name(draw, display_name, max_name_width, name_font)
 
@@ -1816,40 +1859,44 @@ def _draw_room_label(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot
     divider_gap = 6
     if show_area:
         area_w, area_h = _text_dims(draw, area_text, small_font)
-        # A wrapped (2-line) name takes more vertical room than this
-        # function originally budgeted for - don't ALSO cram in the area
-        # line if there's no real room for it, matching this function's
-        # existing "no label at all" philosophy over a cramped one.
         if name_h + divider_gap + area_h > box_h - 8:
             show_area = False
-        # Real bug (2026-09-04): unlike the room NAME above, this area
-        # sub-line had no width check at all - on a narrow room (e.g. a
-        # compact Entry beside a Garage) it ran straight into whatever was
-        # drawn next to it, the exact same overflow class _fit_room_name()
-        # already fixed for names. The area line is purely supplementary
-        # (dimensions already appear in the dimension lines along the plot's
-        # own edges), so it's simply dropped rather than shrunk/wrapped
-        # further when it doesn't fit - same "no label at all beats a
-        # cramped one" rule already applied everywhere else in this function.
         elif area_w > max_name_width:
+            # Purely supplementary line - dropped rather than shrunk.
             show_area = False
 
     total_h = name_h + (divider_gap + area_h if show_area else 0)
-    y_cursor = cy - total_h / 2
-    for i, line in enumerate(name_lines):
-        line_w, line_height = line_dims[i]
-        _draw_faux_bold_text(draw, (cx - line_w / 2, y_cursor), line, fitted_font, INK)
-        y_cursor += line_height + (_NAME_LINE_GAP_PX if i < len(name_lines) - 1 else 0)
+    text_w = max(name_w, area_w if show_area else 0)
+    pad = LABEL_BOX_PAD_PX
+    return {
+        "cx": cx, "cy": cy, "name_lines": name_lines, "fitted_font": fitted_font,
+        "line_dims": line_dims, "name_w": name_w, "area_text": area_text,
+        "show_area": show_area, "area_w": area_w, "area_h": area_h,
+        "divider_gap": divider_gap, "total_h": total_h,
+        "box": (cx - text_w / 2 - pad, cy - total_h / 2 - pad, cx + text_w / 2 + pad, cy + total_h / 2 + pad),
+    }
 
-    if show_area:
-        # A thin divider rule between name and area - the one small touch
-        # that separates "two lines of text" from "a real title-block entry".
+
+def _draw_room_label(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float, plot_y0: float, scale: float, unit: str, name_font: ImageFont.FreeTypeFont, small_font: ImageFont.FreeTypeFont) -> None:
+    lay = _compute_label_layout(draw, rect, plot_x0, plot_y0, scale, unit, name_font, small_font)
+    if lay is None:
+        return
+    cx = lay["cx"]
+    y_cursor = lay["cy"] - lay["total_h"] / 2
+    for i, line in enumerate(lay["name_lines"]):
+        line_w, line_height = lay["line_dims"][i]
+        _draw_faux_bold_text(draw, (cx - line_w / 2, y_cursor), line, lay["fitted_font"], INK)
+        y_cursor += line_height + (_NAME_LINE_GAP_PX if i < len(lay["name_lines"]) - 1 else 0)
+
+    if lay["show_area"]:
+        # A thin divider rule between name and area.
+        divider_gap, area_w = lay["divider_gap"], lay["area_w"]
         divider_y = y_cursor + divider_gap / 2
-        divider_half_w = max(name_w, area_w) * 0.32
+        divider_half_w = max(lay["name_w"], area_w) * 0.32
         draw.line(
             [(cx - divider_half_w, divider_y), (cx + divider_half_w, divider_y)], fill=INK_SOFT, width=1
         )
-        draw.text((cx - area_w / 2, divider_y + divider_gap / 2), area_text, font=small_font, fill=INK_SOFT)
+        draw.text((cx - area_w / 2, divider_y + divider_gap / 2), lay["area_text"], font=small_font, fill=INK_SOFT)
 
 
 def _text_dims(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> tuple[float, float]:

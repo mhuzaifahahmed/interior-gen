@@ -999,3 +999,55 @@ def test_render_floor_blueprint_yard_only_on_ground_floor():
         int(MARGIN_TOP_PX + 35 * scale),
     )
     assert ImageChops.difference(floor1.crop(band), floor2.crop(band)).getbbox() is not None
+
+
+# ---- Columns must never sit under a room label (2026-10 black-square fix) ----
+
+
+def _columns_and_label_box(rect, scale, unit="ft"):
+    from app.pipeline.blueprint_svg import _column_centres_px, _compute_label_layout
+
+    image = Image.new("RGB", (int(rect["w"] * scale) + 60, int(rect["h"] * scale) + 60), PAPER)
+    draw = ImageDraw.Draw(image)
+    lay = _compute_label_layout(
+        draw, rect, 30, 30, scale, unit, ImageFont.load_default(size=13), ImageFont.load_default(size=11)
+    )
+    box = lay["box"] if lay else None
+    return image, draw, box, _column_centres_px(rect, 30, 30, scale, unit, box)
+
+
+def test_column_never_covers_the_label_text_box():
+    rect = {"name": "Living Room", "x": 0, "y": 0, "w": 30, "h": 12}
+    image, draw, box, centres = _columns_and_label_box(rect, 10.0)
+    # Sanity: the nominal centre column WOULD have hit the label.
+    from app.pipeline.blueprint_svg import _column_centres_px
+
+    assert len(_column_centres_px(rect, 30, 30, 10.0, "ft", None)) == 1
+    _draw_columns(draw, rect, 30, 30, 10.0, "ft", box)
+    x0, y0, x1, y1 = (int(v) for v in box)
+    for x in range(x0, x1 + 1):
+        for y in range(y0, y1 + 1):
+            assert image.getpixel((x, y)) != WALL_COLOR
+
+
+def test_long_room_keeps_its_bays_clear_of_the_label():
+    rect = {"name": "Living Room", "x": 0, "y": 0, "w": 45, "h": 18}
+    _, _, box, centres = _columns_and_label_box(rect, 10.0)
+    assert len(centres) == 2
+    half = 7
+    for cx, cy in centres:
+        assert cx + half < box[0] or cx - half > box[2]
+
+
+def test_label_clash_shifts_column_rather_than_dropping_it_when_room_allows():
+    rect = {"name": "Living Room", "x": 0, "y": 0, "w": 30, "h": 12}
+    _, _, box, centres = _columns_and_label_box(rect, 10.0)
+    assert len(centres) == 1
+    assert centres[0][0] > box[2] or centres[0][0] < box[0]
+
+
+def test_no_columns_in_hallway_bathroom_closet_staircase_foyer():
+    for name in ("Hallway", "Master Bathroom", "Powder Room", "Walk-in Closet", "Staircase", "Entry"):
+        rect = {"name": name, "x": 0, "y": 0, "w": 45, "h": 6}
+        _, _, _, centres = _columns_and_label_box(rect, 10.0)
+        assert centres == [], name

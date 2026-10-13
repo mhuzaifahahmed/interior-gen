@@ -215,7 +215,8 @@ def render_floor_blueprint_dxf(
     # room_specs.column_fractions_for_span() source, so the two can never
     # disagree about where a column belongs).
     for rect in rects:
-        _draw_columns(msp, _largest_part_view(rect), unit)
+        view = _largest_part_view(rect)
+        _draw_columns(msp, view, unit, _label_text_rect(view, unit))
 
     buffer = io.StringIO()
     doc.write(buffer)
@@ -446,21 +447,78 @@ def _draw_window_symbol(msp, orientation: str, pos: float, gap_start: float, gap
 _COLUMN_HALF_SIZE_M = 0.15
 
 
-def _draw_columns(msp, rect: dict, unit: str) -> None:
-    """Draws a small, closed square LWPOLYLINE on the COLUMNS layer at each
-    structural-column position room_specs.column_fractions_for_span()
-    returns for this room - empty (nothing drawn) for the common case where
-    the room's own longer side is already within the real max span."""
+# Rooms that never get columns (mirrors blueprint_svg._NO_COLUMN_CATEGORIES).
+_NO_COLUMN_CATEGORIES = frozenset({"hallway", "bathroom", "powder", "closet", "staircase", "foyer"})
+_TEXT_CHAR_WIDTH_RATIO = 0.75  # generous average glyph width / text height
+
+
+def _label_text_rect(rect: dict, unit: str) -> tuple[float, float, float, float]:
+    """Real-unit (x0, y0, x1, y1) estimate of the room's name + dimensions
+    text block as _draw_room_text() places it. Shared by the label pass and
+    the column pass so a column can never sit under the text."""
+    x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
+    label_height = max(_ROOM_LABEL_MIN_HEIGHT, min(_ROOM_LABEL_MAX_HEIGHT, _ROOM_LABEL_HEIGHT_RATIO * min(w, h)))
+    cx, cy = x + w / 2, y + h / 2
+    name_w = len(rect["name"]) * label_height * _TEXT_CHAR_WIDTH_RATIO
+    dims_h = label_height * 0.75
+    dims_w = len(f"{w:.1f}x{h:.1f}{unit}") * dims_h * _TEXT_CHAR_WIDTH_RATIO
+    half_w = max(name_w, dims_w) / 2
+    return (
+        cx - half_w, cy - label_height * 0.6 - dims_h / 2,
+        cx + half_w, cy + label_height * 0.6 + label_height / 2,
+    )
+
+
+def _column_centres(
+    rect: dict, unit: str, label_rect: tuple[float, float, float, float] | None
+) -> list[tuple[float, float]]:
+    """Column centres (plot units), shifted along the long axis to clear
+    label_rect, or dropped when no clear spot exists."""
+    if classify_room_category(rect.get("name") or "") in _NO_COLUMN_CATEGORIES:
+        return []
     fractions = column_fractions_for_span(rect["w"], rect["h"], unit)
     if not fractions:
-        return
+        return []
     half = to_plot_unit(_COLUMN_HALF_SIZE_M, unit)
     x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
+    horizontal = w >= h
+    span = w if horizontal else h
+    origin = x if horizontal else y
+    mid_perp = (y + h / 2) if horizontal else (x + w / 2)
+
+    lo = hi = None
+    if label_rect is not None:
+        lx0, ly0, lx1, ly1 = label_rect
+        p0, p1, q0, q1 = (lx0, lx1, ly0, ly1) if horizontal else (ly0, ly1, lx0, lx1)
+        if q0 - half <= mid_perp <= q1 + half:
+            lo, hi = p0 - half * 1.5, p1 + half * 1.5
+
+    placed: list[float] = []
+    margin = half * 4
     for f in fractions:
-        if w >= h:
-            cx, cy = x + w * f, y + h / 2
-        else:
-            cx, cy = x + w / 2, y + h * f
+        pos = origin + span * f
+        if lo is not None and lo <= pos <= hi:
+            cands = []
+            for a, b in ((origin + margin, lo), (hi, origin + span - margin)):
+                if b - a >= 4 * half:
+                    cands.append((a + b) / 2)
+            cands.sort(key=lambda c: abs(c - pos))
+            pos = cands[0] if cands else None
+        if pos is None or any(abs(pos - q) < 3 * half for q in placed):
+            continue
+        placed.append(pos)
+    return [(p, mid_perp) if horizontal else (mid_perp, p) for p in placed]
+
+
+def _draw_columns(
+    msp, rect: dict, unit: str, label_rect: tuple[float, float, float, float] | None = None
+) -> None:
+    """Draws a small, closed square LWPOLYLINE on the COLUMNS layer at each
+    structural-column position room_specs.column_fractions_for_span()
+    returns for this room - empty for the common case, and kept clear of the
+    room's label text rectangle."""
+    half = to_plot_unit(_COLUMN_HALF_SIZE_M, unit)
+    for cx, cy in _column_centres(rect, unit, label_rect):
         points = [
             (cx - half, cy - half), (cx + half, cy - half),
             (cx + half, cy + half), (cx - half, cy + half),

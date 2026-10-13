@@ -411,3 +411,26 @@ def test_render_floor_blueprint_dxf_no_yard_when_footprint_fills_the_plot():
 
     audit_result = doc.audit()
     assert len(audit_result.errors) == 0
+
+
+def test_dxf_columns_do_not_intersect_the_label_text_rectangle():
+    from app.pipeline.blueprint_dxf import _label_text_rect
+
+    dimensions = {"length": 30, "width": 12, "unit": "ft"}
+    rect = {"name": "Living Room", "x": 0, "y": 0, "w": 30, "h": 12}
+    doc = _parse(render_floor_blueprint_dxf(1, [rect], dimensions))
+    columns = [p for p in doc.modelspace().query("LWPOLYLINE") if p.dxf.layer == "COLUMNS"]
+    assert len(columns) == 1  # shifted, not dropped
+    lx0, ly0, lx1, ly1 = _label_text_rect(rect, "ft")
+    for col in columns:
+        xs = [pt[0] for pt in col.get_points()]
+        ys = [pt[1] for pt in col.get_points()]
+        overlap = min(max(xs), lx1) > max(min(xs), lx0) and min(max(ys), ly1) > max(min(ys), ly0)
+        assert not overlap
+
+
+def test_dxf_no_columns_in_excluded_room_categories():
+    dimensions = {"length": 45, "width": 6, "unit": "ft"}
+    rect = {"name": "Hallway", "x": 0, "y": 0, "w": 45, "h": 6}
+    doc = _parse(render_floor_blueprint_dxf(1, [rect], dimensions))
+    assert not [p for p in doc.modelspace().query("LWPOLYLINE") if p.dxf.layer == "COLUMNS"]
