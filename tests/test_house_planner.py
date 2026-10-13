@@ -97,18 +97,25 @@ def test_targets_sum_to_usable_area():
         plan = plan_building(case["floors"], case["plot"], case["facing"], case["garage_cars"], len(case["floors"]))
         for f in plan.floors:
             total = sum(f.room_targets.values()) + f.unallocated_area
-            assert total == pytest.approx(f.usable_area, rel=1e-6), (case["id"], f.floor_number)
+            # The ground-floor Verandah (big-plot tiers) is open area on top
+            # of the enclosed usable area.
+            porch = plan.porch_area if f.floor_number == 1 and rules.GROUND_FLOOR_EXCESS_FALLBACK in f.room_targets else 0.0
+            assert total == pytest.approx(f.usable_area + porch, rel=1e-6), (case["id"], f.floor_number)
 
 
 def test_bonus_rooms_respect_priority_eligibility_and_counts():
     plan = plan_building([GROUND_2F, UPPER_2F], _plot(150, 150), "south", total_floors=2)
-    order = [b["name"] for b in rules.BONUS_ROOM_PRIORITY]
+    assert plan.tier == "spacious"
+    tier_list = rules.BONUS_ROOM_PRIORITY_BY_TIER[plan.tier]
+    order = [b["name"] for b in tier_list]
     for f in plan.floors:
         spare = [a["name"] for a in f.added_rooms if a["added_reason"] == ADDED_REASON_SPARE]
-        assert spare == sorted(spare, key=order.index)  # priority order
+        # priority order (a numbered extra, e.g. "Library 2", ranks with its entry)
+        base = [n if n in order else n.rsplit(" ", 1)[0] for n in spare]
+        assert base == sorted(base, key=order.index)
         for a in f.added_rooms:
             assert a["planner_added"] is True
-            entry = next((b for b in rules.BONUS_ROOM_PRIORITY if b["name"] == a["name"]), None)
+            entry = next((b for b in tier_list if a["name"] in (b["name"], b["name"] + " 2", b["name"] + " 3")), None)
             if entry and entry["floors"] == "ground":
                 assert f.floor_number == 1
             # Never a bedroom or bathroom.
@@ -123,6 +130,7 @@ def test_bonus_rooms_respect_priority_eligibility_and_counts():
 
 def test_walk_in_closet_eligibility_is_per_master_suite(monkeypatch):
     monkeypatch.setattr(rules, "BONUS_ROOM_MIN_TARGET_SQM", 0.0)
+    monkeypatch.setitem(rules.BONUS_ROOM_MIN_TARGET_SQM_BY_TIER, "spacious", 0.0)  # 150x150 = spacious tier
     plan = plan_building([GROUND_2F, UPPER_2F], _plot(150, 150), "south", total_floors=2)
     assert "Walk-in Closet" in plan.floors[1].room_targets  # master suite upstairs
     assert "Walk-in Closet" not in plan.floors[0].room_targets

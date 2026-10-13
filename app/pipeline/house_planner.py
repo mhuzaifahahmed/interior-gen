@@ -43,6 +43,7 @@ from app.pipeline.room_specs import (
 
 ADDED_REASON_SPARE = "spare floor area"
 ADDED_REASON_TERRACE = "spare upper-floor area"
+ADDED_REASON_PORCH = "covered open area (spare ground-floor area)"
 
 # The footprint is never sized to make EVERY room sit exactly at its max:
 # grid packing is never 100% efficient, and with zero slack any packing gap
@@ -80,6 +81,13 @@ class FloorPlan:
     usable_area: float = 0.0
     circulation_area: float = 0.0
     unallocated_area: float = 0.0
+    # Names of the floor's remainder-sink rooms (upper-floor Terrace, ground-
+    # floor Verandah): sized to the leftover area, so they are reported
+    # separately and never counted as "oversized".
+    remainder_rooms: list = field(default_factory=list)
+    # Diagnostic (set by floor_layout_mask after layout): which candidate
+    # tier won - "rectified" / "reference_reconnect" / "reference_raw".
+    layout_path: str = ""
 
 
 @dataclass
@@ -96,6 +104,10 @@ class BuildingPlan:
     envelope_area: float
     infeasible: bool
     floors: list = field(default_factory=list)
+    tier: str = "standard"
+    porch_area: float = 0.0  # ground-floor Verandah share of footprint_area
+    built_area_cap: float | None = None  # estate cap on footprint x floors (L/XL)
+    total_floors: int = 1
 
     def for_floor(self, floor_number: int) -> FloorPlan:
         for fp in self.floors:
@@ -111,10 +123,14 @@ def _private_count(rooms: list[dict]) -> int:
     return sum(1 for r in rooms if _zone_key(str(r.get("name") or "")) == 2)
 
 
-def _eligible_bonus_rooms(rooms: list[dict], floor_number: int, exclude: set | None = None) -> list[dict]:
-    """BONUS_ROOM_PRIORITY entries eligible on this floor that the program
-    does not already have (by category; walk-in closet: one per master
-    suite). Returns [{"name","category"}] in priority order."""
+def _eligible_bonus_rooms(
+    rooms: list[dict], floor_number: int, exclude: set | None = None, tier: str = "standard",
+) -> list[dict]:
+    """Bonus-room entries (planning_rules.BONUS_ROOM_PRIORITY_BY_TIER[tier])
+    eligible on this floor that the program does not already have (by
+    category; walk-in closet: one per master suite). Returns
+    [{"name","category"}] in priority order. Never a bedroom or bathroom.
+    Standard tier = exactly the Phase 2/3 list (one room per entry)."""
     names = {str(r.get("name") or "").strip().lower() for r in rooms}
     cats = [classify_room_category(str(r.get("name") or "")) for r in rooms]
     masters = sum(
@@ -122,8 +138,13 @@ def _eligible_bonus_rooms(rooms: list[dict], floor_number: int, exclude: set | N
         if "master" in str(r.get("name") or "").lower()
         and classify_room_category(str(r.get("name") or "")) == "bedroom"
     )
+    min_target = (
+        rules.BONUS_ROOM_MIN_TARGET_SQM if tier == "standard"
+        else rules.BONUS_ROOM_MIN_TARGET_SQM_BY_TIER.get(tier, rules.BONUS_ROOM_MIN_TARGET_SQM)
+    )
     out = []
-    for entry in rules.BONUS_ROOM_PRIORITY:
+    added_by_cat: dict[str, int] = {}
+    for entry in rules.BONUS_ROOM_PRIORITY_BY_TIER.get(tier, rules.BONUS_ROOM_PRIORITY):
         floors = entry["floors"]
         if floors == "ground" and floor_number != 1:
             continue
@@ -131,32 +152,61 @@ def _eligible_bonus_rooms(rooms: list[dict], floor_number: int, exclude: set | N
             continue
         allowed = masters if entry["per_suite"] else entry["max_count"]
         existing = cats.count(entry["category"])
+        if tier != "standard":
+            existing += added_by_cat.get(entry["category"], 0)
         if entry["name"].lower() in names or existing >= allowed or entry["name"] in (exclude or ()):
             continue
-        if target_area_for_room(entry["name"], "m") < rules.BONUS_ROOM_MIN_TARGET_SQM:
+        if rules.tier_target_area(entry["name"], "m", tier=tier) < min_target:
             continue
-        out.append({"name": entry["name"], "category": entry["category"]})
+        count = 1 if tier == "standard" else allowed - existing
+        for k in range(count):
+            name = entry["name"] if k == 0 else f"{entry['name']} {k + 1}"
+            if name.lower() in names or name in (exclude or ()):
+                continue
+            out.append({"name": name, "category": entry["category"]})
+            added_by_cat[entry["category"]] = added_by_cat.get(entry["category"], 0) + 1
     return out
+
+
+def _max_area(name: str, unit: str, garage_cars, tier: str) -> float:
+    if tier == "standard":
+        return max_area_for_room(name, unit, garage_cars)
+    return rules.tier_max_area(name, unit, garage_cars, tier)
 
 
 def program_bounds(
     rooms: list[dict], unit: str, garage_cars: int | None = None, floor_number: int = 1,
-    include_bonus: bool = True, exclude_bonus: set | None = None,
+    include_bonus: bool = True, exclude_bonus: set | None = None, tier: str = "standard",
 ) -> tuple[float, float]:
     """(program_min, program_ceiling) for one floor's room program, in the
     plot unit squared. program_min = sum of minimums x (1 + circulation);
-    program_ceiling = sum of max areas of the requested rooms plus every
-    eligible bonus room, x (1 + circulation)."""
+    program_ceiling = sum of (tier) max areas of the requested rooms plus
+    every eligible bonus room, x (1 + circulation)."""
     circ = rules.circulation_fraction(_private_count(rooms))
     names = [str(r.get("name") or "") for r in rooms]
     pmin = sum(min_area_for_room(n, unit, garage_cars) for n in names)
-    pmax = sum(max(max_area_for_room(n, unit, garage_cars), min_area_for_room(n, unit, garage_cars)) for n in names)
+    pmax = sum(max(_max_area(n, unit, garage_cars, tier), min_area_for_room(n, unit, garage_cars)) for n in names)
     if include_bonus:
         pmax += sum(
-            max_area_for_room(b["name"], unit, garage_cars)
-            for b in _eligible_bonus_rooms(rooms, floor_number, exclude_bonus)
+            _max_area(b["name"], unit, garage_cars, tier)
+            for b in _eligible_bonus_rooms(rooms, floor_number, exclude_bonus, tier)
         )
     return pmin * (1 + circ), pmax * (1 + circ)
+
+
+def built_area_cap(floors_rooms: list[list[dict]], band_name: str, unit: str) -> float | None:
+    """Estate cap (option 4): on L/XL bands, total built area (footprint x
+    floors) <= bedrooms x BUILT_SQFT_PER_BEDROOM_CAP, bedrooms counted from
+    the requested program (never changed). None when it does not apply."""
+    if band_name not in rules.BUILT_AREA_CAP_BANDS:
+        return None
+    bedrooms = sum(
+        1 for rooms in floors_rooms for r in rooms
+        if classify_room_category(str(r.get("name") or "")) == "bedroom"
+    )
+    if bedrooms <= 0:
+        return None
+    return _sqft_to_unit(bedrooms * rules.BUILT_SQFT_PER_BEDROOM_CAP, unit)
 
 
 # ---------------------------------------------------------------- footprint
@@ -295,23 +345,31 @@ def _apply_hierarchy(entries, alloc, maxs, floor_area: float, unit: str) -> floa
     return freed
 
 
-def _entry(name: str, unit: str, garage_cars) -> dict:
+def _entry(name: str, unit: str, garage_cars, tier: str = "standard") -> dict:
     mn = min_area_for_room(name, unit, garage_cars)
     pref = max(preferred_area_for_room(name, unit, garage_cars), mn)
-    mx = max(max_area_for_room(name, unit, garage_cars), pref)
-    tgt = min(max(target_area_for_room(name, unit, garage_cars), pref), mx)
+    if tier == "standard":
+        mx = max(max_area_for_room(name, unit, garage_cars), pref)
+        tgt = min(max(target_area_for_room(name, unit, garage_cars), pref), mx)
+    else:
+        mx = max(rules.tier_max_area(name, unit, garage_cars, tier), pref)
+        tgt = min(max(rules.tier_target_area(name, unit, garage_cars, tier), pref), mx)
     return {"name": name, "category": classify_room_category(name), "min": mn, "pref": pref, "target": tgt, "max": mx}
 
 
 def _allocate_floor(
     rooms: list[dict], floor_number: int, total_floors: int, footprint_area: float, unit: str,
-    garage_cars, add_bonus: bool, exclude_bonus: set | None = None,
+    garage_cars, add_bonus: bool, exclude_bonus: set | None = None, tier: str = "standard",
+    porch_area: float = 0.0,
 ) -> FloorPlan:
     names = [str(r.get("name") or "") for r in rooms]
-    entries = [_entry(n, unit, garage_cars) for n in names]
+    entries = [_entry(n, unit, garage_cars, tier) for n in names]
     circ = rules.circulation_fraction(_private_count(rooms))
-    circulation_area = footprint_area * circ
-    usable = footprint_area - circulation_area
+    # The ground-floor Verandah (porch_area) is open area, not enclosed:
+    # circulation and room allocation work on the enclosed part only.
+    enclosed_area = footprint_area - porch_area
+    circulation_area = enclosed_area * circ
+    usable = enclosed_area - circulation_area
 
     alloc = [e["min"] for e in entries]
     rem = usable - sum(alloc)
@@ -320,8 +378,8 @@ def _allocate_floor(
 
     added: list[dict] = []
     if add_bonus:
-        for b in _eligible_bonus_rooms(rooms, floor_number, exclude_bonus):
-            e = _entry(b["name"], unit, garage_cars)
+        for b in _eligible_bonus_rooms(rooms, floor_number, exclude_bonus, tier):
+            e = _entry(b["name"], unit, garage_cars, tier)
             # Only when the spare area gives the bonus room its full TARGET
             # size - a bonus room squeezed in at its bare minimum is clutter
             # (a sliver closet/pantry), not a use of spare area.
@@ -337,6 +395,28 @@ def _allocate_floor(
     rem += _apply_hierarchy(entries, alloc, maxs, footprint_area, unit)
 
     room_max: dict[str, float] = {}
+    remainder: list[str] = []
+    if tier != "standard":
+        # Tier maxima reach the engine (max_cells), the bounded fill, the
+        # rebalance, the scorer's `oversized` check and the metrics/scorecard
+        # through this override map. Standard tier: room_specs' own numbers.
+        for e in entries:
+            room_max[e["name"]] = e["max"]
+    has_porch_room = any(e["category"] == "porch" for e in entries)
+    if floor_number == 1 and porch_area > 0 and not has_porch_room:
+        porch = rules.GROUND_FLOOR_EXCESS_FALLBACK
+        size = porch_area + max(rem, 0.0)
+        entries.append({"name": porch, "category": classify_room_category(porch), "min": size,
+                        "pref": size, "target": size, "max": size})
+        alloc.append(size)
+        # Remainder sink, like the Terrace above it.
+        room_max[porch] = footprint_area
+        remainder.append(porch)
+        added.append({"name": porch, "planner_added": True, "added_reason": ADDED_REASON_PORCH,
+                      "open_area": True})
+        rem = 0.0
+    elif floor_number == 1 and porch_area > 0:
+        rem += porch_area  # program already has its own porch; nothing reserved
     if floor_number > 1 and rem > 0:
         terrace = rules.UPPER_FLOOR_EXCESS_FALLBACK
         if terrace.lower() not in {n.lower() for n in names} and rem >= min_area_for_room(terrace, unit):
@@ -347,7 +427,11 @@ def _allocate_floor(
             # floor, so any packing residue lands here, never in a bedroom or
             # the staircase. (Reported as such by the scorecard.)
             room_max[terrace] = footprint_area
-            added.append({"name": terrace, "planner_added": True, "added_reason": ADDED_REASON_TERRACE})
+            remainder.append(terrace)
+            terrace_dict = {"name": terrace, "planner_added": True, "added_reason": ADDED_REASON_TERRACE}
+            if tier != "standard":
+                terrace_dict["open_area"] = True
+            added.append(terrace_dict)
             rem = 0.0
 
     targets = {}
@@ -364,6 +448,7 @@ def _allocate_floor(
         usable_area=usable,
         circulation_area=circulation_area,
         unallocated_area=max(rem, 0.0),
+        remainder_rooms=remainder,
     )
 
 
@@ -399,13 +484,14 @@ def plan_building(
     exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
     net_area = max(length - 2 * exterior, 0.0) * max(width - 2 * exterior, 0.0)
     band = rules.plot_band(net_area, unit)
+    tier = rules.size_tier(band.name)
     adjust = rules.floor_count_coverage_adjust(total_floors)
 
     depth_len, cross_len = (width, length) if facing in ("north", "south") else (length, width)
 
     bounds = [
         program_bounds(rooms, unit, garage_cars, i + 1, include_bonus=add_bonus,
-                       exclude_bonus=(exclude_bonus or {}).get(i + 1))
+                       exclude_bonus=(exclude_bonus or {}).get(i + 1), tier=tier)
         for i, rooms in enumerate(floors_rooms)
     ]
     program_min = max(b[0] for b in bounds)
@@ -424,9 +510,34 @@ def plan_building(
     envelope_area = env_depth * env_cross
 
     target = band.target_cov * adjust * net_area
-    area = min(max(target, program_min), min(program_ceiling * CEILING_PACKING_FRACTION, envelope_area))
+    cap_total = built_area_cap(floors_rooms, band.name, unit)
+    cap_fp = cap_total / total_floors if cap_total else None
+    upper = min(program_ceiling * CEILING_PACKING_FRACTION, envelope_area)
+    if cap_fp is not None:
+        # The cap never pushes the house below what the program needs.
+        upper = min(upper, max(cap_fp, program_min))
+    area = min(max(target, program_min), upper)
+    porch_area = 0.0
+    if tier in rules.PORCH_TIERS and target > area:
+        # Ceiling-limited big plot: a ground-floor Verandah (open, covered)
+        # takes part of the slack - at most PORCH_MAX_FRACTION of the
+        # enclosed footprint and the tier's porch max, never past the
+        # envelope or the built-area cap.
+        porch_name = rules.GROUND_FLOOR_EXCESS_FALLBACK
+        room_cap = rules.tier_max_area(porch_name, unit, None, tier)
+        porch_area = min(target - area, room_cap, rules.PORCH_MAX_FRACTION * area, envelope_area - area)
+        if cap_fp is not None:
+            porch_area = min(porch_area, cap_fp - area)
+        # A verandah squeezed below its PREFERRED size is clutter (measured:
+        # a 69 sq ft one on the sparse 150x150 case pinched the bathroom).
+        if porch_area < preferred_area_for_room(porch_name, unit):
+            porch_area = 0.0
+        area += porch_area
     fp_depth, fp_cross = _shape(area, env_depth, env_cross)
-    area = fp_depth * fp_cross
+    shaped = fp_depth * fp_cross
+    if porch_area > 0:
+        porch_area = max(porch_area - max(area - shaped, 0.0), 0.0)
+    area = shaped
     front, rear, side = _yards(depth_len, cross_len, fp_depth, fp_cross, sb)
     yards = _plot_yards(facing, front, rear, side)
     if facing in ("north", "south"):
@@ -438,10 +549,12 @@ def plan_building(
         unit=unit, footprint_length=fp_length, footprint_width=fp_width, yards=yards, band=band.name,
         net_plot_area=net_area, footprint_area=area, program_min=program_min,
         program_ceiling=program_ceiling, envelope_area=envelope_area, infeasible=infeasible,
+        tier=tier, porch_area=porch_area, built_area_cap=cap_total, total_floors=total_floors,
     )
     for i, rooms in enumerate(floors_rooms):
         fp = _allocate_floor(rooms, i + 1, total_floors, area, unit, garage_cars, add_bonus,
-                             (exclude_bonus or {}).get(i + 1))
+                             (exclude_bonus or {}).get(i + 1), tier,
+                             porch_area if i == 0 else 0.0)
         fp.footprint_length, fp.footprint_width, fp.yards = fp_length, fp_width, yards
         plan.floors.append(fp)
     return plan
@@ -460,12 +573,17 @@ def plan_to_dict(plan: BuildingPlan) -> dict:
         "footprint_width": plan.footprint_width,
         "yards": dict(plan.yards),
         "band": plan.band,
+        "tier": plan.tier,
+        "porch_area": plan.porch_area,
+        "built_area_cap": plan.built_area_cap,
         "floors": [
             {
                 "floor_number": f.floor_number,
                 "room_targets": dict(f.room_targets),
                 "room_max": dict(f.room_max),
                 "added_rooms": [dict(a) for a in f.added_rooms],
+                "remainder_rooms": list(f.remainder_rooms),
+                "layout_path": f.layout_path,
             }
             for f in plan.floors
         ],
@@ -484,6 +602,8 @@ def floor_plan_from_dict(data: dict | None, floor_number: int) -> FloorPlan | No
             room_targets=dict(floor.get("room_targets") or {}),
             room_max=dict(floor.get("room_max") or {}),
             added_rooms=[dict(a) for a in floor.get("added_rooms") or []],
+            remainder_rooms=list(floor.get("remainder_rooms") or []),
+            layout_path=str(floor.get("layout_path") or ""),
         )
     except (KeyError, TypeError, ValueError, StopIteration):
         return None

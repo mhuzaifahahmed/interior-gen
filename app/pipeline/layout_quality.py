@@ -419,20 +419,26 @@ def score_floor_layout(
         violations.extend(_planner_size_violations(rects, unit, garage_cars, room_targets, room_max))
         violations.extend(shape_violations(rects))
 
-    score = 0.0
-    _SOFT_PENALTY_BY_KIND = {
-        "sliver": SLIVER_PENALTY,
-        "elongated": ELONGATED_PENALTY,
-        "no_egress": EGRESS_PENALTY,
-        "notch": NOTCH_PENALTY,
-    }
-    for v in violations:
-        if v.kind == "wrapped":
-            score -= WRAPPED_PENALTY
-        else:
-            score -= HARD_VIOLATION_PENALTY if v.hard else _SOFT_PENALTY_BY_KIND.get(v.kind, IMBALANCE_PENALTY)
-
+    score = -sum(violation_penalty(v) for v in violations)
     return LayoutScore(score=score, violations=violations)
+
+
+_SOFT_PENALTY_BY_KIND = {
+    "sliver": SLIVER_PENALTY,
+    "elongated": ELONGATED_PENALTY,
+    "no_egress": EGRESS_PENALTY,
+    "notch": NOTCH_PENALTY,
+}
+
+
+def violation_penalty(v: Violation) -> float:
+    """The score penalty one violation costs (single source for
+    score_floor_layout and the mask engine's stage-1 ranking)."""
+    if v.kind == "wrapped":
+        return WRAPPED_PENALTY
+    if v.kind in ("bedroom_aspect", "stair_oversized"):
+        return SHAPE_CAP_PENALTY if v.hard else IMBALANCE_PENALTY
+    return HARD_VIOLATION_PENALTY if v.hard else _SOFT_PENALTY_BY_KIND.get(v.kind, IMBALANCE_PENALTY)
 
 
 _COVERAGE_TOLERANCE_FRACTION = 0.02
@@ -442,6 +448,36 @@ _NO_MAX_CATEGORIES = ("hallway", "staircase", "garage")
 _OVERSIZE_TOLERANCE = 1.10
 _PINNED_CATEGORIES = ("staircase", "garage")
 _PINNED_OVERSIZE_TOLERANCE = 1.5
+# Big-plot pass: bedroom aspect + explicit stair cap under planner_checks.
+PLANNER_SHAPE_CAPS = True
+# Reported as HARD violations, but they cost less than one gate-tracked hard
+# violation (narrow, small_area, door...) so best-of-N never trades one of
+# those for a squarer bedroom or a smaller stair (measured: at 1000 the
+# quality gate regressed on ~12 floors).
+SHAPE_CAP_PENALTY = 60.0
+
+from app.pipeline.planning_rules import (  # noqa: E402
+    BEDROOM_ASPECT_HARD,
+    BEDROOM_ASPECT_SOFT,
+    STAIR_MAX_AREA_FACTOR,
+)
+
+
+def bedroom_aspect(rect: dict) -> float:
+    """Long/short side of a room's LARGEST part (shared by the scorer's
+    opt-in bedroom_aspect check and layout_metrics)."""
+    parts = [p for p in _room_parts(rect) if p.get("w", 0) > 0 and p.get("h", 0) > 0]
+    if not parts:
+        return 0.0
+    big = max(parts, key=lambda p: p["w"] * p["h"])
+    return max(big["w"], big["h"]) / max(min(big["w"], big["h"]), 1e-9)
+
+
+def stair_over_cap(rect: dict, unit: str) -> bool:
+    """True when a staircase exceeds STAIR_MAX_AREA_FACTOR x its minimum."""
+    name = str(rect.get("name") or "")
+    area = sum(p["w"] * p["h"] for p in _room_parts(rect) if p.get("w", 0) > 0 and p.get("h", 0) > 0)
+    return area > STAIR_MAX_AREA_FACTOR * min_area_for_room(name, unit)
 
 
 def _planner_size_violations(
@@ -463,6 +499,21 @@ def _planner_size_violations(
             dining.append(area)
         if cat == "hallway":
             continue
+        if cat == "bedroom" and PLANNER_SHAPE_CAPS:
+            aspect = bedroom_aspect(rect)
+            if aspect > BEDROOM_ASPECT_HARD:
+                out.append(Violation(name, "bedroom_aspect", True, f"largest part {aspect:.2f}:1 > {BEDROOM_ASPECT_HARD}:1"))
+            elif aspect > BEDROOM_ASPECT_SOFT:
+                out.append(Violation(name, "bedroom_aspect", False, f"largest part {aspect:.2f}:1 > {BEDROOM_ASPECT_SOFT}:1"))
+        if cat == "staircase" and PLANNER_SHAPE_CAPS:
+            # Explicit stair cap (planning_rules.STAIR_MAX_AREA_FACTOR x its
+            # own minimum), reported as its own hard kind. The pre-existing
+            # pinned 1.5x `oversized` check below still applies unchanged
+            # (replacing it with the looser 2.0x cap was measured to let the
+            # engine accept bigger stairs - a gate regression on 60x80 3F).
+            cap = STAIR_MAX_AREA_FACTOR * min_area_for_room(name, unit, garage_cars)
+            if area > cap:
+                out.append(Violation(name, "stair_oversized", True, f"{area:.1f} > {STAIR_MAX_AREA_FACTOR} x min ({cap:.1f})"))
         mx = (room_max or {}).get(name) or max_area_for_room(name, unit, garage_cars)
         if cat in _PINNED_CATEGORIES:
             # Stair/garage are pinned at their functional size; a leftover

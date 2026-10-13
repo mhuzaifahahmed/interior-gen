@@ -11,7 +11,7 @@ that could hide a failure). Circulation/reachability is NOT measured yet
 """
 
 from app.pipeline import planning_rules as rules
-from app.pipeline.house_planner import program_bounds
+from app.pipeline.house_planner import built_area_cap, program_bounds
 from app.pipeline.layout_metrics import measure_floor
 from app.pipeline.room_specs import (
     EXTERIOR_WALL_THICKNESS_M,
@@ -23,7 +23,11 @@ from app.pipeline.room_specs import (
 CIRCULATION_NOT_MEASURED = "NOT MEASURED YET (Phase 4)"
 
 # Check ids, in report order. "circulation" is printed but never scored.
-SCORED_CHECKS = ("coverage", "yards", "sizes", "hard", "parts", "stair")
+# LEGACY_CHECKS are the six Phase 2/3 checks (the "X/210" number); the big-
+# plot pass adds bedroom aspect and the explicit stair-size cap.
+LEGACY_CHECKS = ("coverage", "yards", "sizes", "hard", "parts", "stair")
+NEW_CHECKS = ("aspect", "stair_cap")
+SCORED_CHECKS = LEGACY_CHECKS + NEW_CHECKS
 CHECK_TITLES = {
     "coverage": "1. Footprint scales with plot (coverage within [~0.5x band target, band max])",
     "yards": "2. Balanced yards on small/medium plots (sides <= 2x, front/rear sane)",
@@ -31,6 +35,8 @@ CHECK_TITLES = {
     "hard": "4. Zero hard violations (incl. daylight, narrow, door_too_narrow)",
     "parts": "5. Parts per room <= 2 (informational until Phase 3, still scored)",
     "stair": "7. Single-floor houses have no staircase",
+    "aspect": f"9. Bedrooms: largest part <= {rules.BEDROOM_ASPECT_HARD}:1 (new; first baseline)",
+    "stair_cap": f"10. Staircase <= {rules.STAIR_MAX_AREA_FACTOR}x its minimum area (new; first baseline)",
 }
 LOW_COVERAGE_FLAG_PCT = 12.0
 _SMALL_MEDIUM_BANDS = ("XS", "S", "M")
@@ -60,13 +66,22 @@ def _area(rect: dict) -> float:
     return sum(p["w"] * p["h"] for p in _parts(rect))
 
 
-def building_ceiling(floors_rooms: list[list[dict]], unit: str, garage_cars) -> tuple[float, float]:
+def building_ceiling(
+    floors_rooms: list[list[dict]], unit: str, garage_cars, tier: str = "standard",
+    band_name: str | None = None,
+) -> tuple[float, float]:
     """(program_min, program_ceiling) for the whole building - same rule the
     planner uses: ceiling governed by the ground floor, never below the
-    largest floor minimum."""
-    bounds = [program_bounds(r, unit, garage_cars, i + 1) for i, r in enumerate(floors_rooms)]
+    largest floor minimum. With `band_name` (planner mode) the ceiling is
+    also limited by the estate built-area cap (per floor), like the planner."""
+    bounds = [program_bounds(r, unit, garage_cars, i + 1, tier=tier) for i, r in enumerate(floors_rooms)]
     pmin = max(b[0] for b in bounds)
-    return pmin, max(bounds[0][1], pmin)
+    ceiling = max(bounds[0][1], pmin)
+    if band_name is not None:
+        cap = built_area_cap(floors_rooms, band_name, unit)
+        if cap:
+            ceiling = max(min(ceiling, cap / max(len(floors_rooms), 1)), pmin)
+    return pmin, ceiling
 
 
 def score_floor(
@@ -77,11 +92,17 @@ def score_floor(
     floor_number: int,
     garage_cars: int | None = None,
     max_overrides: dict | None = None,
+    remainder_names: list | None = None,
+    planner: bool = False,
 ) -> dict:
     """Scores one rendered floor. `floors_rooms` is the REQUESTED program for
-    every floor (used for the program ceiling); `max_overrides` names
-    planner-added remainder rooms (Terrace) whose size is intentionally the
-    leftover - they are listed, not counted as oversized."""
+    every floor (used for the program ceiling); `max_overrides` maps room
+    name -> max area (planner tier maxima and remainder sinks).
+    `remainder_names` lists the planner's remainder rooms (Terrace,
+    Verandah) whose size is intentionally the leftover - listed, not counted
+    as oversized; None = every override key (the Phase 2/3 behaviour).
+    `planner` = score with the planner's tier-aware ceiling/caps (the
+    flag-off report passes False and is unchanged)."""
     unit = plot.get("unit") or "ft"
     length, width = float(plot["length"]), float(plot["width"])
     total = len(floors_rooms)
@@ -91,12 +112,15 @@ def score_floor(
     exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
     net_area = max(length - 2 * exterior, 0.0) * max(width - 2 * exterior, 0.0)
     band = rules.plot_band(net_area, unit)
+    tier = rules.size_tier(band.name) if planner else "standard"
     adjust = rules.floor_count_coverage_adjust(total)
     fp_l = length - m["yard_left"] - m["yard_right"]
     fp_w = width - m["yard_top"] - m["yard_bottom"]
     fp_area = max(fp_l, 0.0) * max(fp_w, 0.0)
     cov = fp_area / net_area if net_area else 0.0
-    _pmin, ceiling = building_ceiling(floors_rooms, unit, garage_cars)
+    _pmin, ceiling = building_ceiling(
+        floors_rooms, unit, garage_cars, tier, band.name if planner else None
+    )
     ceiling_cov = ceiling / net_area if net_area else 0.0
     low = 0.5 * band.target_cov * adjust
     low_eff = min(low, 0.9 * ceiling_cov)
@@ -108,7 +132,10 @@ def score_floor(
         "ceiling_used_pct": round(fp_area / ceiling * 100, 1) if ceiling else 0.0,
         "range_pct": (round(low_eff * 100, 1), round(high * 100, 1)),
         "band": band.name,
+        "tier": tier,
         "flag_low": cov * 100 < LOW_COVERAGE_FLAG_PCT,
+        "open_area": round(sum(_area(r) for r in rects if classify_room_category(str(r.get("name") or "")) == "porch"), 1),
+        "footprint_area": round(fp_area, 1),
     }
 
     # Yards: map plot-side yards to front/rear/side by facing.
@@ -129,7 +156,8 @@ def score_floor(
     }
 
     # Sizes.
-    overrides = set((max_overrides or {}).keys())
+    overrides = set(remainder_names if remainder_names is not None else (max_overrides or {}).keys())
+    bath_cap = rules.BATH_CAP_SQFT_BY_TIER.get(tier, 80.0)
     oversized = [n for n in m["oversized"] if n not in overrides]
     big_baths, big_dining, big_pinned = [], [], []
     floor_area = fp_area
@@ -138,10 +166,11 @@ def score_floor(
         name = str(r.get("name") or "")
         cat = classify_room_category(name)
         a = _area(r)
-        if cat == "bathroom" and a > _sqft(80, unit) * _CAP_TOL:
+        if cat == "bathroom" and a > _sqft(bath_cap, unit) * _CAP_TOL:
             big_baths.append(f"{name}={a:.0f}")
         if cat in ("staircase", "garage"):
-            pinned_max = max_area_for_room(name, unit, garage_cars)
+            pinned_max = (max_overrides or {}).get(name) if cat == "garage" else None
+            pinned_max = pinned_max or max_area_for_room(name, unit, garage_cars)
             if a > 1.5 * pinned_max:
                 big_pinned.append(f"{name}={a:.0f}")
         if cat == "dining" and not dining_waived and a > _sqft(rules.HIERARCHY_RULES["dining_cap_sqft"], unit) * _CAP_TOL:
@@ -170,8 +199,12 @@ def score_floor(
         "offenders": [f"{n}={p}" for n, p in room_parts.items() if p > rules.SHAPE_RULES["max_parts"]],
     }
     res["stair"] = {"pass": not m["single_floor_stair"]}
+    res["aspect"] = {"pass": not m["bedroom_aspect_fail"], "offenders": list(m["bedroom_aspect_fail"])}
+    stair_detail = [f"{r['name']}={_area(r):.0f}" for r in rects if str(r.get("name") or "") in m["stair_over_cap"]]
+    res["stair_cap"] = {"pass": not m["stair_over_cap"], "offenders": stair_detail}
     res["circulation"] = CIRCULATION_NOT_MEASURED
     res["clean"] = all(res[c]["pass"] for c in SCORED_CHECKS)
+    res["clean_legacy"] = all(res[c]["pass"] for c in LEGACY_CHECKS)
     return res
 
 
@@ -192,15 +225,24 @@ def capacity_summary() -> dict:
     return out
 
 
-def format_scorecard(results: dict, label: str, capacity: dict | None = None) -> str:
-    """results: {key: score_floor() dict}. Returns the printable report."""
+PATH_KINDS = ("rectified", "reference_reconnect", "reference_raw")
+
+
+def format_scorecard(results: dict, label: str, capacity: dict | None = None, paths: dict | None = None) -> str:
+    """results: {key: score_floor() dict}. `paths` ({key: layout_path},
+    planner mode) adds the Phase-3 fallback-rate line. Returns the
+    printable report."""
     lines = [f"=== MASK SCORECARD [{label}] ===", f"floors scored: {len(results)}", ""]
     keys = list(results)
     total_pass = 0
+    new_pass = 0
     for check in SCORED_CHECKS:
         failing = [k for k in keys if not results[k][check]["pass"]]
         n_pass = len(keys) - len(failing)
-        total_pass += n_pass
+        if check in LEGACY_CHECKS:
+            total_pass += n_pass
+        else:
+            new_pass = new_pass + n_pass
         lines.append(f"{CHECK_TITLES[check]}: {n_pass}/{len(keys)} floors pass")
         for k in failing:
             r = results[k][check]
@@ -225,6 +267,8 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None) ->
                 detail = f"{r['hard_count']} hard {r['hard_kinds']} daylight {r['daylight_fail_hard']}"
             elif check == "parts":
                 detail = f"max {r['max_parts']}: " + ",".join(r["offenders"])
+            elif check in ("aspect", "stair_cap"):
+                detail = ",".join(r["offenders"])
             else:
                 detail = "staircase on a single-floor house"
             lines.append(f"    FAIL {k}: {detail}")
@@ -235,7 +279,9 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None) ->
         if any(p in k for p in ("150x150", "150x200", "300x300")):
             c = results[k]["coverage"]
             flag = "  <-- FLAG <12%" if c["flag_low"] else ""
-            lines.append(f"    {k}: coverage {c['coverage_pct']}%  ceiling used {c['ceiling_used_pct']}%{flag}")
+            lines.append(f"    {k}: coverage {c['coverage_pct']}%  ceiling used {c['ceiling_used_pct']}%"
+                         f"  footprint {c.get('footprint_area', 0):.0f}  open(porch/terrace) {c.get('open_area', 0):.0f}"
+                         f"  tier {c.get('tier', 'standard')}{flag}")
     remainder = [(k, results[k]["sizes"]["remainder_rooms"]) for k in keys if results[k]["sizes"]["remainder_rooms"]]
     if remainder:
         lines.append("Planner remainder rooms (sized to leftover area, excluded from 'oversized'):")
@@ -246,8 +292,19 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None) ->
         lines.append("8. Capacity table (feasibility.room_count_requirements_table, ft):")
         for floors, c in capacity.items():
             lines.append(f"    {floors} floor(s): max bedrooms {c['bedrooms']}, max bathrooms {c['bathrooms']}")
+    if paths:
+        counts = {p: sum(1 for k in keys if paths.get(k) == p) for p in PATH_KINDS}
+        fallback = counts["reference_reconnect"] + counts["reference_raw"]
+        lines.append("")
+        lines.append(f"Phase-3 engine path: floors using the Phase 2 fallback: {fallback}/{len(keys)} "
+                     f"(rectified {counts['rectified']} / reference+reconnect {counts['reference_reconnect']} / "
+                     f"raw reference {counts['reference_raw']})")
     clean = [k for k in keys if results[k]["clean"]]
+    clean_legacy = [k for k in keys if results[k].get("clean_legacy", results[k]["clean"])]
     lines.append("")
-    lines.append(f"OVERALL: {total_pass} of {len(keys) * len(SCORED_CHECKS)} floor-checks pass; "
+    lines.append(f"OVERALL (6 legacy checks): {total_pass} of {len(keys) * len(LEGACY_CHECKS)} floor-checks pass; "
+                 f"{len(clean_legacy)} of {len(keys)} floors fully clean on them")
+    lines.append(f"OVERALL (all {len(SCORED_CHECKS)} checks incl. new aspect/stair cap): "
+                 f"{total_pass + new_pass} of {len(keys) * len(SCORED_CHECKS)} floor-checks pass; "
                  f"{len(clean)} of {len(keys)} floors fully clean (pass ALL scored checks)")
     return "\n".join(lines)

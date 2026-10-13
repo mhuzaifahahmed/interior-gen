@@ -2,7 +2,8 @@
 Measurement only - no I/O, never changes layout behavior. Consumed by
 scripts/mask_quality_report.py and tests/test_mask_quality_gate.py."""
 
-from app.pipeline.layout_quality import daylight_failures, score_floor_layout
+from app.pipeline.layout_quality import bedroom_aspect, daylight_failures, score_floor_layout, stair_over_cap
+from app.pipeline.planning_rules import BEDROOM_ASPECT_HARD
 from app.pipeline.room_specs import (
     classify_room_category,
     max_area_for_room,
@@ -91,6 +92,17 @@ def measure_floor(
         if area < 0.98 * mn:
             undersized.append(name)
 
+    # Big-plot pass: bedrooms whose largest part is longer than
+    # BEDROOM_ASPECT_HARD:1, and staircases over STAIR_MAX_AREA_FACTOR x min.
+    bedroom_aspect_fail = [
+        str(r.get("name") or "") for r in rects
+        if classify_room_category(str(r.get("name") or "")) == "bedroom" and bedroom_aspect(r) > BEDROOM_ASPECT_HARD
+    ]
+    stair_fail = [
+        str(r.get("name") or "") for r in rects
+        if classify_room_category(str(r.get("name") or "")) == "staircase" and stair_over_cap(r, unit)
+    ]
+
     living = max(areas_by_cat.get("living", [0.0]))
     dining = max(areas_by_cat.get("dining", [0.0]))
     inverted = bool(areas_by_cat.get("living") and areas_by_cat.get("dining") and living < dining)
@@ -120,6 +132,8 @@ def measure_floor(
             total_floors == 1
             and any(classify_room_category(str(r.get("name") or "")) == "staircase" for r in rects)
         ),
+        "bedroom_aspect_fail": bedroom_aspect_fail,
+        "stair_over_cap": stair_fail,
         "unreachable": None,
         "pass_through_private": None,
         "hall_dead_end_len": None,

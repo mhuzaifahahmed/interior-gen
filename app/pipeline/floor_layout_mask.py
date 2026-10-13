@@ -101,6 +101,7 @@ over - tracked for a later milestone, not hidden as if solved):
 
 import heapq
 import math
+import time
 from collections import deque
 
 from app.pipeline.floor_layout import (
@@ -117,6 +118,7 @@ from app.pipeline.layout_quality import (
     WRAPPED_PENALTY,
     Violation,
     score_floor_layout,
+    violation_penalty,
     secondary_part_ok,
 )
 from app.pipeline.room_specs import (
@@ -205,6 +207,24 @@ _PHASE2_VARIANT_COUNT = 4
 _BONUS_DECISIONS_ON_RECTIFIED = False  # the first 4 _PLANNER_CANDIDATES are Phase 2's set
 
 _GATE_SEPARATE_KINDS = ("oversized", "hierarchy_inverted", "no_daylight", "small_area")
+# Big-plot pass (planner checks): bedroom aspect and the explicit stair-size
+# cap are scored (they steer best-of-N via the score) but, like `wrapped`,
+# they never decide gate eligibility of a candidate nor bonus-room drops -
+# dropping a bonus room cannot fix a long bedroom or a big stair, it would
+# only shrink the house.
+_SCORE_ONLY_KINDS = ("wrapped", "bedroom_aspect", "stair_oversized")
+
+# Diagnostics for the report/timing script (planner path only; NOT part of
+# any return value). Updated by _layout_with_plan for the floor it just laid
+# out: {"path", "grown", "rectified", "runs", "seconds"}.
+LAST_FLOOR_DIAGNOSTICS: dict = {}
+
+# Planner bounded fill: the staircase is never the last-resort sink for a
+# leftover pocket when another neighbour exists (see _fill_leftovers_bounded).
+_STAIR_NOT_A_SINK = True
+# Planner path: remainder-sink rooms seed far from every other seed (see
+# _seed_rooms(far_sinks=...)).
+_FAR_REMAINDER_SEEDS = False  # tried: fixed the 150x200 upper-floor stair sink but moved the excess into bedrooms (8 gate regressions) - kept off
 
 
 def _worst_over_ratio(rooms: list[dict], room_max: dict) -> float:
@@ -227,7 +247,7 @@ def _gate_vector(violations: list) -> tuple[int, ...]:
     """Counts of the hard violations the mask quality gate ratchets
     separately (oversized, inverted hierarchy, daylight, undersized) plus all
     other hard kinds together; `wrapped` (shape) is deliberately excluded."""
-    hard = [v for v in violations if v.hard and v.kind != "wrapped"]
+    hard = [v for v in violations if v.hard and v.kind not in _SCORE_ONLY_KINDS]
     other = sum(1 for v in hard if v.kind not in _GATE_SEPARATE_KINDS)
     # The gate ignores stair/garage size (pinned), so count those apart.
     pinned_over = sum(
@@ -399,7 +419,10 @@ def _layout_with_plan(
     else:
         core_dimensions = {"length": fp_length, "width": fp_width, "unit": unit}
 
+    diag = {"grown": 0, "rectified": 0, "runs": 0}
+
     def run(room_list: list[dict]) -> tuple[list[dict], list]:
+        diag["runs"] += 1
         targets = _room_targets(_order_rooms(room_list), unit, garage_cars)
         for t in targets:
             mx = plan.room_max.get(t["name"]) or t["max_area"]
@@ -428,6 +451,7 @@ def _layout_with_plan(
         for order, variant in enumerate(_PLANNER_CANDIDATES):
             width_delta, cross_link, band_delta, flip = variant
             stats1: dict = {}
+            diag["grown"] += 1
             candidate = _grow_floor(
                 targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats1,
                 band_delta=band_delta, flip_egress=flip, rectify=False,
@@ -440,9 +464,12 @@ def _layout_with_plan(
                 continue  # several variants can grow the identical layout
             seen_layouts.add(signature)
             s1 = score(candidate)
+            # Ranked (and the Phase-2 reference picked) ignoring shape AND the
+            # big-plot score-only kinds, so the reference stays exactly
+            # Phase 2's pick; those kinds only steer the final choice among
+            # gate-eligible candidates.
             shape_free = s1.score + sum(
-                (WRAPPED_PENALTY if v.kind == "wrapped" else NOTCH_PENALTY)
-                for v in s1.violations if v.kind in ("wrapped", "notch")
+                violation_penalty(v) for v in s1.violations if v.kind in _SCORE_ONLY_KINDS + ("notch",)
             )
             ranked.append((-shape_free, order, variant))
             if order < _PHASE2_VARIANT_COUNT and (reference is None or shape_free > reference[0]):
@@ -455,21 +482,26 @@ def _layout_with_plan(
         for variant in stage2:
             width_delta, cross_link, band_delta, flip = variant
             stats: dict = {}
+            diag["grown"] += 1
+            diag["rectified"] += 1
             candidate = _grow_floor(
                 targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats,
                 band_delta=band_delta, flip_egress=flip,
             )
             options.append((candidate, score(candidate), stats))
+        paths = ["rectified"] * len(options)
         if reference is not None:
             # The Phase-2 pick with only its stranded pieces reconnected.
             width_delta, cross_link, band_delta, flip = reference[1]
             stats_r: dict = {}
+            diag["grown"] += 1
             reconnected = _grow_floor(
                 targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats_r,
                 band_delta=band_delta, flip_egress=flip, rectify="reconnect",
             )
             options.append((reconnected, score(reconnected), stats_r))
             options.append((reference[2], reference[3], reference[4]))
+            paths += ["reference_reconnect", "reference_raw"]
             # A rectified candidate may only win if it is no worse than the
             # Phase-2 pick on every metric the quality gate ratchets - so
             # Phase 3 can never trade a gate metric for a better shape.
@@ -483,21 +515,24 @@ def _layout_with_plan(
                 for o in options
             ]
             n_rect = len(options) - 2
-            eligible = [o for o, good in zip(options[:n_rect], ok[:n_rect]) if good]
+            eligible = [(o, p) for o, p, good in zip(options[:n_rect], paths[:n_rect], ok[:n_rect]) if good]
             if not eligible:
-                eligible = [options[-2]] if ok[-2] else [options[-1]]
+                eligible = [(options[-2], paths[-2])] if ok[-2] else [(options[-1], paths[-1])]
         else:
-            eligible = options
+            eligible = list(zip(options, paths))
         best_rooms: list[dict] | None = None
         best_score: float | None = None
         best_warnings: list = []
         best_stats: dict = {}
-        for candidate, scored, stats in eligible:
+        best_path = ""
+        for (candidate, scored, stats), path in eligible:
             if best_score is None or scored.score > best_score:
                 best_score = scored.score
                 best_rooms = candidate
                 best_warnings = list(scored.violations)
                 best_stats = stats
+                best_path = path
+        diag["path"] = best_path
         if best_stats.get("overflow_cells") or best_stats.get("hallway_unaligned_cells"):
             best_warnings.append(
                 Violation(
@@ -513,16 +548,17 @@ def _layout_with_plan(
         # set - and with it every floor's plan - is exactly Phase 2's.
         decide = best_warnings
         if reference is not None and not _BONUS_DECISIONS_ON_RECTIFIED:
-            decide = [v for v in reference[3].violations if v.kind not in ("wrapped", "notch")]
-        return best_rooms or [], best_warnings, decide
+            decide = [v for v in reference[3].violations if v.kind not in _SCORE_ONLY_KINDS + ("notch",)]
+        return best_rooms or [], best_warnings, decide, best_path
 
     def hard_count(warnings: list) -> int:
         # Shape (`wrapped`, Phase 3) is repaired by rectification, not by
         # dropping rooms - dropping a bonus room to fix a shape would only
         # shrink the house.
-        return sum(1 for v in warnings if v.hard and v.kind != "wrapped")
+        return sum(1 for v in warnings if v.hard and v.kind not in _SCORE_ONLY_KINDS)
 
-    rects, warnings, decide = run(rooms)
+    started = time.perf_counter()
+    rects, warnings, decide, path = run(rooms)
     # Bonus rooms are added only where they actually fit: lowest priority
     # first, a planner-added SPARE-AREA room is dropped when it carries a hard
     # violation itself, or the floor lays out with fewer hard violations
@@ -536,23 +572,29 @@ def _layout_with_plan(
         return sum(1 for v in warnings if v.kind == "oversized")
 
     def involves(warnings: list, name: str) -> bool:
-        return any(v.hard and v.kind != "wrapped" and name in v.room.split("<->") for v in warnings)
+        return any(v.hard and v.kind not in _SCORE_ONLY_KINDS and name in v.room.split("<->") for v in warnings)
 
     for name in reversed(bonus):
         current = hard_count(decide)
         if current == 0:
             break
         trial_rooms = [r for r in rooms if str(r.get("name") or "") != name]
-        t_rects, t_warnings, t_decide = run(trial_rooms)
+        t_rects, t_warnings, t_decide, t_path = run(trial_rooms)
         # Dropped when the bonus room itself did not fit (it carries a hard
         # violation) and removing it does not make the floor worse, or when
         # the floor is strictly better without it.
         t_hard = hard_count(t_decide)
         no_new_oversize = oversized_count(t_decide) <= oversized_count(decide)
         if no_new_oversize and (t_hard < current or (involves(decide, name) and t_hard <= current)):
-            rooms, rects, warnings, decide = trial_rooms, t_rects, t_warnings, t_decide
+            rooms, rects, warnings, decide, path = trial_rooms, t_rects, t_warnings, t_decide, t_path
             warnings.append(Violation(name, "planner_room_dropped", False, "bonus room did not fit cleanly"))
 
+    LAST_FLOOR_DIAGNOSTICS.clear()
+    LAST_FLOOR_DIAGNOSTICS.update(
+        path=path, grown=diag["grown"], rectified=diag["rectified"], runs=diag["runs"],
+        seconds=time.perf_counter() - started,
+    )
+    plan.layout_path = path
     rooms_out = _apply_plan_transform(rects, facing, fp_length, fp_width, plan.yards)
     return rooms_out, warnings
 
@@ -855,7 +897,7 @@ def _grow_floor(
 
     seeds = _seed_rooms(
         targets, public_idx, circulation_idx, private_idx, cols, rows, spine_cells, min_cells, band,
-        garage_i, garage_w_cells, flip_egress,
+        garage_i, garage_w_cells, flip_egress, far_sinks=planner and _FAR_REMAINDER_SEEDS,
     )
 
     cells_by_room: list[set[tuple[int, int]]] = [set() for _ in targets]
@@ -1091,6 +1133,7 @@ def _seed_rooms(
     garage_i: int | None = None,
     garage_w_cells: int = 0,
     flip_egress: bool = False,
+    far_sinks: bool = False,
 ) -> list[tuple[int, int] | None]:
     """One anchor cell per room, matching floor_layout.py's own front-to-
     back convention (front = low-y). Bedroom/living rooms seed ON the
@@ -1270,7 +1313,14 @@ def _seed_rooms(
             suite_seed[suite] = seeds[i]
 
     last_cell = seeds[private_egress[-1]] if private_egress else None
+    # Planner path: remainder sinks (Terrace / Verandah, porch category) are
+    # seeded LAST among private rooms, at the free cell farthest from every
+    # seed so far - so they grow into the floor's otherwise-empty region
+    # instead of that region becoming a pocket only the staircase borders.
+    sinks = [i for i in private_other if targets[i]["category"] == "porch"] if far_sinks else []
     for i in private_other:
+        if i in sinks:
+            continue
         suite = targets[i].get("suite")
         # Phase D2: a wet-service room seeds directly behind this floor's
         # kitchen (the first private row, rows[band], at the kitchen's own
@@ -1295,6 +1345,17 @@ def _seed_rooms(
             seeds[i] = cell
             occupied.add(cell)
             last_cell = cell
+
+    for i in sinks:
+        placed = [c for c in seeds if c is not None]
+        free = [(c, r) for r in range(band, rows) for c in range(cols) if (c, r) not in occupied]
+        if not free:
+            free = [(c, r) for r in range(rows) for c in range(cols) if (c, r) not in occupied]
+        if not free:
+            continue
+        cell = max(free, key=lambda f: (min((_dist2(f, p) for p in placed), default=0), -f[1], -f[0]))
+        seeds[i] = cell
+        occupied.add(cell)
 
     # Circulation (staircase) seeded LAST, into whichever back corner is
     # still free - out of the way of the entrance and every already-seeded
@@ -2256,7 +2317,17 @@ def _fill_leftovers_bounded(
             # not a Voronoi split - splitting across several neighbours drew
             # diagonal stair-step walls); _rebalance_over_max() then pushes
             # the excess along adjacent rooms to wherever headroom remains.
-            best = min(candidates, key=lambda i: (len(cells_by_room[i]) - max_cells[i], i))
+            # Big-plot pass: never dump a whole pocket into the staircase
+            # (zone 1) when any other neighbour exists - it sits exactly at
+            # its pinned max, so "least over max" used to pick it every time
+            # (the 158-570 sq ft stairs); a habitable neighbour's excess can
+            # still be rebalanced, a stair's cannot be used.
+            # (Tried and reverted: turning a pocket bordered ONLY by the stair
+            # + spine into Hallway. It shrank the big stairs and raised the
+            # scorecard 130->151/210, but the planner quality gate regressed
+            # on 11 floors (new `narrow`/oversized on 60x80 3F and 150x200).)
+            pool = [i for i in candidates if not _STAIR_NOT_A_SINK or zones is None or zones[i] != 1] or candidates
+            best = min(pool, key=lambda i: (len(cells_by_room[i]) - max_cells[i], i))
             for (c, r) in region:
                 owner[r][c] = best
                 cells_by_room[best].add((c, r))
@@ -2275,6 +2346,8 @@ def _fill_leftovers_bounded(
         fallback = [j for j, cs in enumerate(cells_by_room) if cs]
         if not fallback:
             return
+        if _STAIR_NOT_A_SINK:
+            fallback = [j for j in fallback if zones is None or zones[j] != 1] or fallback
         best = min(fallback, key=lambda i: len(cells_by_room[i]) - target_cells[i])
         for (c, r) in region:
             owner[r][c] = best

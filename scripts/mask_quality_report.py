@@ -33,6 +33,7 @@ from app.pipeline.layout_metrics import measure_floor  # noqa: E402
 from tests.mask_quality_matrix import CASES, iter_floors  # noqa: E402
 
 OUT_DIR = os.path.join(ROOT, "scripts", "output", "quality")
+EXTRA: dict = {}
 BASELINE_PATHS = {
     "off": os.path.join(ROOT, "tests", "data", "mask_quality_baseline.json"),
     "on": os.path.join(ROOT, "tests", "data", "mask_quality_baseline_planner.json"),
@@ -40,8 +41,10 @@ BASELINE_PATHS = {
 
 
 def compute_all(planner: bool = False) -> dict:
-    """{key: (case, floor_number, rects, metrics, max_overrides)}"""
+    """{key: (case, floor_number, rects, metrics, max_overrides)}; planner
+    mode also fills EXTRA[key] = {"remainder", "path", "plan"}."""
     results = {}
+    EXTRA.clear()
     previous = settings.house_planner_enabled
     settings.house_planner_enabled = planner
     try:
@@ -57,7 +60,9 @@ def compute_all(planner: bool = False) -> dict:
             if planner:
                 plan, floor_results = built[case["id"]]
                 _used, rects, _w = floor_results[floor_n - 1]
-                overrides = dict(plan.for_floor(floor_n).room_max) or None
+                fplan = plan.for_floor(floor_n)
+                overrides = dict(fplan.room_max) or None
+                EXTRA[key] = {"remainder": list(fplan.remainder_rooms), "path": fplan.layout_path, "plan": plan}
             else:
                 rects, _ = layout_floor_with_warnings(
                     rooms, case["plot"], garage_cars=case["garage_cars"], facing=case["facing"]
@@ -131,9 +136,11 @@ def _scorecard(results, label, planner):
 
     scored = {}
     for key, (case, floor_n, rects, _m, overrides) in results.items():
+        extra = EXTRA.get(key) or {}
         scored[key] = score_floor(
             rects, case["plot"], case["facing"], case["floors"], floor_n,
             case["garage_cars"], overrides,
+            remainder_names=extra.get("remainder") if planner else None, planner=planner,
         )
     previous = settings.house_planner_enabled
     settings.house_planner_enabled = planner
@@ -141,12 +148,45 @@ def _scorecard(results, label, planner):
         capacity = capacity_summary()
     finally:
         settings.house_planner_enabled = previous
-    text = format_scorecard(scored, label, capacity)
+    paths = {k: (EXTRA.get(k) or {}).get("path") for k in scored} if planner else None
+    text = format_scorecard(scored, label, capacity, paths)
+    if planner:
+        text += "\n\n" + _built_area_table(results)
     print(text)
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(os.path.join(OUT_DIR, f"scorecard_{label}.txt"), "w", encoding="utf-8") as f:
         f.write(text + "\n")
     return text
+
+
+def _built_area_table(results) -> str:
+    """Built area (footprint x floors, plus the enclosed part = minus the
+    porch-category open areas) per big-plot case, planner mode."""
+    from app.pipeline.room_specs import classify_room_category
+
+    lines = ["Built area (big plots): case | band/tier | floors | footprint | built (fp x floors) | "
+             "open porch/terrace | enclosed built | cap | coverage %"]
+    seen = set()
+    for key, (case, _f, _r, _m, _o) in results.items():
+        cid = case["id"]
+        if cid in seen or not any(p in cid for p in ("150x150", "150x200", "300x300")):
+            continue
+        seen.add(cid)
+        plan = EXTRA[key]["plan"]
+        n = len(case["floors"])
+        open_area = 0.0
+        for fk, (c2, _f2, rects2, _m2, _o2) in results.items():
+            if c2["id"] == cid:
+                open_area += sum(
+                    sum(p["w"] * p["h"] for p in (r.get("parts") or [r]))
+                    for r in rects2 if classify_room_category(str(r.get("name") or "")) == "porch"
+                )
+        built = plan.footprint_area * n
+        cap = f"{plan.built_area_cap:.0f}" if plan.built_area_cap else "-"
+        cov = plan.footprint_area / (case["plot"]["length"] * case["plot"]["width"]) * 100
+        lines.append(f"    {cid} | {plan.band}/{plan.tier} | {n} | {plan.footprint_area:.0f} | {built:.0f} | "
+                     f"{open_area:.0f} | {built - open_area:.0f} | {cap} | {cov:.1f}")
+    return "\n".join(lines)
 
 
 def main():

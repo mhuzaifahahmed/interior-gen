@@ -95,7 +95,10 @@ def test_mask_quality_planner_does_not_regress(monkeypatch, case, floor_n, rooms
 # discipline) clears 60x80 dense (planner-on hard 2 vs baseline 5); 150x150
 # dense floor1 is still not cleared - that one stays strict xfail so it flips
 # to a failure the moment a later phase clears it.
-_PLANNER_STILL_REGRESSED = {"150x150_dense_garage_2f/floor1"}
+# Big-plot pass (spacious tier on 150x150): 150x150 dense floor1 is now
+# cleared too (planner-on hard 2 vs flag-off baseline hard 4; oversized
+# 2 vs 3), so the strict xfail flipped and was removed.
+_PLANNER_STILL_REGRESSED: set = set()
 
 
 def _clear_param(key):
@@ -127,6 +130,11 @@ def _assert_no_regression(case, cur, base):
     assert len(cur["oversized"]) <= len(base["oversized"]), cur["oversized"]
     assert int(cur["hierarchy_inverted"]) <= int(base["hierarchy_inverted"])
     assert len(cur["undersized"]) <= len(base["undersized"]), cur["undersized"]
+    # Big-plot pass metrics (no prior baseline): ratcheted from the first
+    # baseline that records them.
+    for field in ("bedroom_aspect_fail", "stair_over_cap"):
+        if field in base:
+            assert len(cur[field]) <= len(base[field]), (field, cur[field], base[field])
     for field in _LATER_PHASE_FIELDS:
         if cur[field] is not None and base.get(field) is not None:
             assert len(cur[field]) <= len(base[field]), field
