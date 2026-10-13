@@ -76,7 +76,6 @@ import io
 import logging
 import re
 import time
-from itertools import combinations
 
 import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
@@ -86,13 +85,9 @@ from app.dynamic_settings import KAGGLE_AUTOCAD_API_URL_KEY, get_effective_url
 from app.pipeline.blueprint_svg import (
     _DOOR_POSITION_FRACTION,
     _NAME_LINE_GAP_PX,
-    _compute_hallway_adjacent,
     _fit_room_name,
-    _front_door_opening,
-    _shared_edge,
-    _should_suppress_direct_door,
-    _should_suppress_garage_direct_door,
 )
+from app.pipeline.door_graph import build_door_graph
 from app.pipeline.conditioning_image import CANVAS_SIZE, plot_to_canvas_box, render_conditioning_edge_map
 from app.pipeline.floor_layout import footprint_bbox
 from app.pipeline.house_planner import floor_plan_from_dict
@@ -274,22 +269,16 @@ def _door_specs_for_floor(
     # the Computed Layout's (a bathroom door narrower than a bedroom's, etc).
     facing_normalized = (facing or "").strip().lower()
 
-    has_hallway = any(r.get("name") == "Hallway" for r in rects)
-    has_entry = any(classify_room_category(r.get("name") or "") == "foyer" for r in rects)
-    # 2026-10, see blueprint_svg._compute_hallway_adjacent()'s docstring -
-    # same reasoning as the PNG/DXF renderers, so the Concept Layout's door
-    # overlay never disagrees about which doors exist.
-    hallway_adjacent = _compute_hallway_adjacent(rects)
+    # Door decisions come from door_graph.build_door_graph() (Phase 4a pure
+    # refactor). parts_aware=False preserves this module's CURRENT use of the
+    # bbox-only shared_edge() (identical for single-part rooms).
+    # TODO(Phase 4b): consider the parts-aware edge like the PNG does.
+    door_graph = build_door_graph(
+        rects, dimensions, facing_normalized, floor_number, parts_aware=False
+    )
 
     specs: list[dict] = []
-    for a, b in combinations(rects, 2):
-        edge = _shared_edge(a, b)
-        if edge is None:
-            continue
-        if has_hallway and _should_suppress_direct_door(a, b, hallway_adjacent):
-            continue
-        if has_entry and _should_suppress_garage_direct_door(a, b):
-            continue
+    for a, b, edge in door_graph.interior:
         cat_a, cat_b = classify_room_category(a.get("name") or ""), classify_room_category(b.get("name") or "")
         door_m = door_width_for_wall(cat_a, cat_b, unit)
         # Restored original [10, 26] ceiling (2026-10 regression fix) - see
@@ -300,8 +289,7 @@ def _door_specs_for_floor(
         if spec:
             specs.append(spec)
 
-    fp = footprint_bbox(rects) or (0.0, 0.0, length, width)
-    front_edge = _front_door_opening(rects, facing_normalized, fp) if floor_number == 1 else None
+    front_edge = door_graph.front
     if front_edge:
         front_nominal_len_px = max(10.0, min(26.0, to_plot_unit(FRONT_DOOR_WIDTH_M, unit) * scale))
         spec = _front_door_spec(front_edge, facing_normalized, x0c, y0c, scale, front_nominal_len_px)

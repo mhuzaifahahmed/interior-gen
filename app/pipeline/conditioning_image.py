@@ -55,7 +55,8 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw
 
-from app.pipeline.blueprint_svg import _front_door_opening, _largest_part_view
+from app.pipeline.blueprint_svg import _largest_part_view
+from app.pipeline.door_graph import front_door_opening as _front_door_opening
 from app.pipeline.floor_layout import footprint_bbox, room_parts
 from app.pipeline.room_specs import classify_room_category
 

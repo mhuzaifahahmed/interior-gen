@@ -38,18 +38,11 @@ tests.
 """
 
 import io
-from itertools import combinations
-
 import ezdxf
 from ezdxf.enums import TextEntityAlignment
 
-from app.pipeline.blueprint_svg import (
-    _compute_hallway_adjacent,
-    _front_door_opening,
-    _largest_part_view,
-    _shared_edge_between_rooms,
-    _should_suppress_direct_door,
-)
+from app.pipeline.blueprint_svg import _largest_part_view
+from app.pipeline.door_graph import build_door_graph
 from app.pipeline.floor_layout import footprint_bbox, room_parts
 from app.pipeline.room_specs import (
     FRONT_DOOR_WIDTH_M,
@@ -120,7 +113,15 @@ def render_floor_blueprint_dxf(
     # Ground floor only (2026-09-29) - see blueprint_svg.render_floor_
     # blueprint()'s matching gate for why; keeps the PNG and the DXF in
     # agreement about there being no front entrance on upper floors.
-    front_door_edge = _front_door_opening(rects, facing, fp) if floor_number == 1 else None
+    # Door decisions come from door_graph.build_door_graph() (Phase 4a pure
+    # refactor). TODO(Phase 4b): the DXF currently does NOT apply the
+    # garage->living/kitchen/dining door suppression the PNG does
+    # (suppress_garage_doors=False preserves that); making it match is a
+    # deliberate later behaviour change, not part of this refactor.
+    door_graph = build_door_graph(
+        rects, dimensions, facing, floor_number, suppress_garage_doors=False
+    )
+    front_door_edge = door_graph.front
 
     doc = ezdxf.new(dxfversion="R2010")
     doc.header["$INSUNITS"] = _INSUNITS_BY_UNIT.get(unit, 0)
@@ -185,17 +186,10 @@ def render_floor_blueprint_dxf(
     # Interior walls (with real door gaps where a door isn't suppressed) -
     # one pass per unique adjacent room PAIR (combinations never repeats a
     # pair), so a shared wall is drawn exactly once, not once per room.
-    has_hallway = any(r["name"] == "Hallway" for r in rects)
-    # 2026-10, see blueprint_svg._compute_hallway_adjacent()'s docstring -
-    # keeps a "far band" room (no direct hallway edge) from ever having its
-    # only door suppressed, mirrored here so the PNG and the real .dxf
-    # export never disagree about which doors exist.
-    hallway_adjacent = _compute_hallway_adjacent(rects)
-    for a, b in combinations(rects, 2):
-        edge = _shared_edge_between_rooms(a, b)
-        if edge is None:
-            continue
-        suppress_door = has_hallway and _should_suppress_direct_door(a, b, hallway_adjacent)
+    # (door_graph.pairs carries every adjacent pair, flagged suppressed or
+    # not, so a shared wall is still drawn exactly once either way; the
+    # far-band hallway_adjacent safeguard lives in door_graph.)
+    for a, b, edge, suppress_door in door_graph.pairs:
         # Proportional, per-category door width (2026-10, Part 2) - mirrors
         # blueprint_svg.py's own per-edge door sizing so the PNG and the
         # real .dxf export never disagree about how wide a given door is.
