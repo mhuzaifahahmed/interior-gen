@@ -91,12 +91,21 @@ def test_mask_quality_planner_does_not_regress(monkeypatch, case, floor_n, rooms
 
 
 # The two Phase-1 regressions Phase 2 was meant to clear, judged with the
-# planner ON against the flag-OFF baseline numbers. Phase 2 does NOT clear
-# them yet (planner-on: 60x80 dense 9 hard vs 5; 150x150 dense floor1 has
-# more hard violations, though Kitchen is no longer oversized) - strict
-# xfail so this flips to a failure the moment a later phase clears them.
-@pytest.mark.xfail(strict=True, reason="Phase 2 planner does not yet clear the Phase-1 regressions (see report)")
-@pytest.mark.parametrize("key", sorted(_PHASE1_KNOWN_REGRESSIONS))
+# planner ON against the flag-OFF baseline numbers. Phase 3 (shape
+# discipline) clears 60x80 dense (planner-on hard 2 vs baseline 5); 150x150
+# dense floor1 is still not cleared - that one stays strict xfail so it flips
+# to a failure the moment a later phase clears it.
+_PLANNER_STILL_REGRESSED = {"150x150_dense_garage_2f/floor1"}
+
+
+def _clear_param(key):
+    marks = []
+    if key in _PLANNER_STILL_REGRESSED:
+        marks.append(pytest.mark.xfail(strict=True, reason="planner does not yet clear this Phase-1 regression"))
+    return pytest.param(key, id=key, marks=marks)
+
+
+@pytest.mark.parametrize("key", [_clear_param(k) for k in sorted(_PHASE1_KNOWN_REGRESSIONS)])
 def test_planner_clears_phase1_regressions(monkeypatch, key):
     monkeypatch.setattr(settings, "house_planner_enabled", True)
     case, floor_n, rooms, _k = next(i for i in _ITEMS if i[3] == key)

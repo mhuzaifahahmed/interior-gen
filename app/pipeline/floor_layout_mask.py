@@ -100,6 +100,7 @@ over - tracked for a later milestone, not hidden as if solved):
 """
 
 import heapq
+import math
 from collections import deque
 
 from app.pipeline.floor_layout import (
@@ -111,7 +112,13 @@ from app.pipeline.floor_layout import (
     _zone_key,
 )
 from app.config import settings
-from app.pipeline.layout_quality import Violation, score_floor_layout
+from app.pipeline.layout_quality import (
+    NOTCH_PENALTY,
+    WRAPPED_PENALTY,
+    Violation,
+    score_floor_layout,
+    secondary_part_ok,
+)
 from app.pipeline.room_specs import (
     EXTERIOR_WALL_THICKNESS_M,
     classify_room_category,
@@ -179,6 +186,56 @@ _MAX_PUBLIC_BAND_FRACTION = 0.5
 # rect arithmetic. 0 listed first so a tie favors the plainest spine.
 _CANDIDATE_SPINE_WIDTH_DELTAS = (0, 1)
 _CANDIDATE_CROSS_LINK = (True, False)
+
+# Phase 3 (planner path only): widened best-of-N - (spine width delta,
+# cross-link, front-band depth delta, reversed egress perimeter order). The
+# first four are the original 2x2 set. Only the best _PLANNER_RECTIFY_TOP_K
+# (ranked before rectification) are rectified and fully scored.
+_PLANNER_CANDIDATES = (
+    (0, True, 0, False), (0, False, 0, False), (1, True, 0, False), (1, False, 0, False),
+    (0, True, 1, False), (0, False, 1, False), (0, True, -1, False), (0, False, -1, False),
+    (0, True, 0, True), (0, False, 0, True),
+)
+_PLANNER_RECTIFY_TOP_K = 3
+_PHASE2_VARIANT_COUNT = 4
+# Phase 3: False = planner bonus rooms are kept/dropped exactly as Phase 2
+# decided (on the unrectified reference layout). True = decide on the
+# rectified result instead (keeps more bonus rooms; see the Phase 3 report -
+# it can trade one floor's gate metric for a bigger house, so it is off).
+_BONUS_DECISIONS_ON_RECTIFIED = False  # the first 4 _PLANNER_CANDIDATES are Phase 2's set
+
+_GATE_SEPARATE_KINDS = ("oversized", "hierarchy_inverted", "no_daylight", "small_area")
+
+
+def _worst_over_ratio(rooms: list[dict], room_max: dict) -> float:
+    """Largest area / max over habitable rooms (stair/garage/hallway excluded)
+    - an oversized room may not get MORE oversized than in the reference."""
+    worst = 0.0
+    for r in rooms:
+        name = str(r.get("name") or "")
+        if classify_room_category(name) in ("hallway", "staircase", "garage"):
+            continue
+        mx = room_max.get(name)
+        if not mx:
+            continue
+        area = sum(p["w"] * p["h"] for p in (r.get("parts") or [r]))
+        worst = max(worst, area / mx)
+    return worst
+
+
+def _gate_vector(violations: list) -> tuple[int, ...]:
+    """Counts of the hard violations the mask quality gate ratchets
+    separately (oversized, inverted hierarchy, daylight, undersized) plus all
+    other hard kinds together; `wrapped` (shape) is deliberately excluded."""
+    hard = [v for v in violations if v.hard and v.kind != "wrapped"]
+    other = sum(1 for v in hard if v.kind not in _GATE_SEPARATE_KINDS)
+    # The gate ignores stair/garage size (pinned), so count those apart.
+    pinned_over = sum(
+        1 for v in hard
+        if v.kind == "oversized" and classify_room_category(v.room) in ("staircase", "garage")
+    )
+    counts = tuple(sum(1 for v in hard if v.kind == k) for k in _GATE_SEPARATE_KINDS)
+    return (other, counts[0] - pinned_over, pinned_over) + counts[1:]
 
 # Extra safety margin (on top of floor_layout._footprint_target_area()'s
 # own preferred-area-sum + overhead) - see module docstring's "Known
@@ -355,25 +412,92 @@ def _layout_with_plan(
         room_max = {t["name"]: t["max_area"] for t in targets}
         daylight_fp = {"x0": 0.0, "y0": 0.0, "x1": core_dimensions["length"], "y1": core_dimensions["width"]}
 
+        def score(candidate):
+            return score_floor_layout(
+                candidate, core_dimensions, garage_cars, daylight_footprint=daylight_fp,
+                planner_checks=True, room_targets=room_targets, room_max=room_max,
+            )
+
+        # Phase 3: widened best-of-N, two stages. Stage 1 grows every variant
+        # WITHOUT rectification (cheap) and ranks them ignoring shape
+        # violations (rectification changes shapes); stage 2 rectifies and
+        # fully scores only the best _PLANNER_RECTIFY_TOP_K.
+        ranked = []
+        seen_layouts: set = set()
+        reference = None  # the Phase-2 pick: best original variant, unrectified
+        for order, variant in enumerate(_PLANNER_CANDIDATES):
+            width_delta, cross_link, band_delta, flip = variant
+            stats1: dict = {}
+            candidate = _grow_floor(
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats1,
+                band_delta=band_delta, flip_egress=flip, rectify=False,
+            )
+            signature = tuple(
+                (r["name"], round(r["x"], 6), round(r["y"], 6), round(r["w"], 6), round(r["h"], 6), len(r.get("parts") or ()))
+                for r in candidate
+            )
+            if signature in seen_layouts:
+                continue  # several variants can grow the identical layout
+            seen_layouts.add(signature)
+            s1 = score(candidate)
+            shape_free = s1.score + sum(
+                (WRAPPED_PENALTY if v.kind == "wrapped" else NOTCH_PENALTY)
+                for v in s1.violations if v.kind in ("wrapped", "notch")
+            )
+            ranked.append((-shape_free, order, variant))
+            if order < _PHASE2_VARIANT_COUNT and (reference is None or shape_free > reference[0]):
+                reference = (shape_free, variant, candidate, s1, stats1)
+        ranked.sort()
+        stage2 = [v for _neg, _order, v in ranked[:_PLANNER_RECTIFY_TOP_K]]
+        if reference is not None and reference[1] not in stage2:
+            stage2.append(reference[1])
+        options = []
+        for variant in stage2:
+            width_delta, cross_link, band_delta, flip = variant
+            stats: dict = {}
+            candidate = _grow_floor(
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats,
+                band_delta=band_delta, flip_egress=flip,
+            )
+            options.append((candidate, score(candidate), stats))
+        if reference is not None:
+            # The Phase-2 pick with only its stranded pieces reconnected.
+            width_delta, cross_link, band_delta, flip = reference[1]
+            stats_r: dict = {}
+            reconnected = _grow_floor(
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats_r,
+                band_delta=band_delta, flip_egress=flip, rectify="reconnect",
+            )
+            options.append((reconnected, score(reconnected), stats_r))
+            options.append((reference[2], reference[3], reference[4]))
+            # A rectified candidate may only win if it is no worse than the
+            # Phase-2 pick on every metric the quality gate ratchets - so
+            # Phase 3 can never trade a gate metric for a better shape.
+            # Tiers: rectified candidates first; then the reconnected
+            # reference; the raw reference only when nothing else qualifies.
+            ref_vec = _gate_vector(reference[3].violations)
+            ref_worst = _worst_over_ratio(reference[2], room_max)
+            ok = [
+                all(x <= y for x, y in zip(_gate_vector(o[1].violations), ref_vec))
+                and _worst_over_ratio(o[0], room_max) <= ref_worst + 1e-9
+                for o in options
+            ]
+            n_rect = len(options) - 2
+            eligible = [o for o, good in zip(options[:n_rect], ok[:n_rect]) if good]
+            if not eligible:
+                eligible = [options[-2]] if ok[-2] else [options[-1]]
+        else:
+            eligible = options
         best_rooms: list[dict] | None = None
         best_score: float | None = None
         best_warnings: list = []
         best_stats: dict = {}
-        for width_delta in _CANDIDATE_SPINE_WIDTH_DELTAS:
-            for cross_link in _CANDIDATE_CROSS_LINK:
-                stats: dict = {}
-                candidate = _grow_floor(
-                    targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats
-                )
-                scored = score_floor_layout(
-                    candidate, core_dimensions, garage_cars, daylight_footprint=daylight_fp,
-                    planner_checks=True, room_targets=room_targets, room_max=room_max,
-                )
-                if best_score is None or scored.score > best_score:
-                    best_score = scored.score
-                    best_rooms = candidate
-                    best_warnings = list(scored.violations)
-                    best_stats = stats
+        for candidate, scored, stats in eligible:
+            if best_score is None or scored.score > best_score:
+                best_score = scored.score
+                best_rooms = candidate
+                best_warnings = list(scored.violations)
+                best_stats = stats
         if best_stats.get("overflow_cells") or best_stats.get("hallway_unaligned_cells"):
             best_warnings.append(
                 Violation(
@@ -384,12 +508,21 @@ def _layout_with_plan(
                     f"{best_stats.get('hallway_unaligned_cells', 0)} cells absorbed into a non-aligned hallway pocket",
                 )
             )
-        return best_rooms or [], best_warnings
+        # Bonus keep/drop decisions are made on the Phase-2 reference layout's
+        # warnings (see _BONUS_DECISIONS_ON_RECTIFIED), so the building's room
+        # set - and with it every floor's plan - is exactly Phase 2's.
+        decide = best_warnings
+        if reference is not None and not _BONUS_DECISIONS_ON_RECTIFIED:
+            decide = [v for v in reference[3].violations if v.kind not in ("wrapped", "notch")]
+        return best_rooms or [], best_warnings, decide
 
     def hard_count(warnings: list) -> int:
-        return sum(1 for v in warnings if v.hard)
+        # Shape (`wrapped`, Phase 3) is repaired by rectification, not by
+        # dropping rooms - dropping a bonus room to fix a shape would only
+        # shrink the house.
+        return sum(1 for v in warnings if v.hard and v.kind != "wrapped")
 
-    rects, warnings = run(rooms)
+    rects, warnings, decide = run(rooms)
     # Bonus rooms are added only where they actually fit: lowest priority
     # first, a planner-added SPARE-AREA room is dropped when it carries a hard
     # violation itself, or the floor lays out with fewer hard violations
@@ -403,21 +536,21 @@ def _layout_with_plan(
         return sum(1 for v in warnings if v.kind == "oversized")
 
     def involves(warnings: list, name: str) -> bool:
-        return any(v.hard and name in v.room.split("<->") for v in warnings)
+        return any(v.hard and v.kind != "wrapped" and name in v.room.split("<->") for v in warnings)
 
     for name in reversed(bonus):
-        current = hard_count(warnings)
+        current = hard_count(decide)
         if current == 0:
             break
         trial_rooms = [r for r in rooms if str(r.get("name") or "") != name]
-        t_rects, t_warnings = run(trial_rooms)
+        t_rects, t_warnings, t_decide = run(trial_rooms)
         # Dropped when the bonus room itself did not fit (it carries a hard
         # violation) and removing it does not make the floor worse, or when
         # the floor is strictly better without it.
-        t_hard = hard_count(t_warnings)
-        no_new_oversize = oversized_count(t_warnings) <= oversized_count(warnings)
-        if no_new_oversize and (t_hard < current or (involves(warnings, name) and t_hard <= current)):
-            rooms, rects, warnings = trial_rooms, t_rects, t_warnings
+        t_hard = hard_count(t_decide)
+        no_new_oversize = oversized_count(t_decide) <= oversized_count(decide)
+        if no_new_oversize and (t_hard < current or (involves(decide, name) and t_hard <= current)):
+            rooms, rects, warnings, decide = trial_rooms, t_rects, t_warnings, t_decide
             warnings.append(Violation(name, "planner_room_dropped", False, "bonus room did not fit cleanly"))
 
     rooms_out = _apply_plan_transform(rects, facing, fp_length, fp_width, plan.yards)
@@ -624,7 +757,11 @@ def _room_targets(ordered_rooms: list[dict], unit: str, garage_cars: int | None)
 def _grow_floor(
     targets: list[dict], dimensions: dict, spine_width_delta: int, cross_link: bool,
     garage_cars: int | None = None, planner: bool = False, stats: dict | None = None,
+    band_delta: int = 0, flip_egress: bool = False, rectify: bool | str = True,
 ) -> list[dict]:
+    # Phase 3: rectify=False also keeps the legacy row-major decomposition, so
+    # a planner candidate grown without rectification is exactly what Phase 2
+    # produced (the reference the quality gate's baseline was built from).
     """One candidate: grid + spine + seed + grow + fill + decompose.
     Returns room dicts in CORE coordinates (front always at low-y - see
     layout_floor_with_warnings()'s facing transform), tiling
@@ -657,6 +794,9 @@ def _grow_floor(
     max_cells = [max(min_cells[i], round(targets[i]["max_area"] / cell_area)) for i in range(len(targets))]
     if planner and band > 0:
         band = _planner_band_cap(band, public_idx, max_cells, targets, cols, cell_h, unit)
+        if band_delta:
+            # Phase 3 candidate variant: a slightly shallower/deeper front band.
+            band = _clamp(band + band_delta, 1, max(1, int(rows * _MAX_PUBLIC_BAND_FRACTION)))
 
     spine_cells: set[tuple[int, int]] = set()
     if has_spine and not planner:
@@ -715,7 +855,7 @@ def _grow_floor(
 
     seeds = _seed_rooms(
         targets, public_idx, circulation_idx, private_idx, cols, rows, spine_cells, min_cells, band,
-        garage_i, garage_w_cells,
+        garage_i, garage_w_cells, flip_egress,
     )
 
     cells_by_room: list[set[tuple[int, int]]] = [set() for _ in targets]
@@ -748,6 +888,23 @@ def _grow_floor(
     else:
         _fill_leftovers(owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells, zones, band)
     _ensure_minimum_presence(cells_by_room, min_cells, owner)
+    if planner and rectify == "reconnect":
+        n_t = len(targets)
+        if zones is not None and band > 0:
+            lo_r = [0 if zones[i] == 0 else band for i in range(n_t)]
+            hi_r = [band - 1 if zones[i] == 0 else rows - 1 for i in range(n_t)]
+        else:
+            lo_r, hi_r = [0] * n_t, [rows - 1] * n_t
+        _reconnect_rooms(
+            owner, cells_by_room, targets, target_cells, max_cells, lo_r, hi_r,
+            {i for i in range(n_t) if targets[i]["category"] in ("garage", "staircase", "hallway")},
+            _ShapeCtx(cols, rows, cell_w, cell_h, unit, targets), stats,
+        )
+    elif planner and rectify:
+        _rectify_rooms(
+            owner, cells_by_room, targets, target_cells, min_cells, max_cells, zones, band,
+            _ShapeCtx(cols, rows, cell_w, cell_h, unit, targets), stats,
+        )
     if planner and stats is not None:
         stats["overflow_rooms"] = [targets[int(i)]["name"] for i in stats.get("overflow_rooms", [])]
         stats["over_max_rooms"] = [
@@ -756,7 +913,7 @@ def _grow_floor(
 
     rooms_out = []
     for t, cells in zip(targets, cells_by_room):
-        room = _cells_to_room(t["name"], cells, cell_w, cell_h)
+        room = _cells_to_room(t["name"], cells, cell_w, cell_h, bool(planner and rectify))
         if room is None:
             continue
         if t.get("suite") is not None:
@@ -771,17 +928,21 @@ def _grow_floor(
     # unclaimed - this is what actually closes Bug A, the "black hole").
     final_spine_cells = {(c, r) for r in range(rows) for c in range(cols) if owner[r][c] == -2}
     if final_spine_cells:
-        hallway = _cells_to_room("Hallway", final_spine_cells, cell_w, cell_h)
+        hallway = _cells_to_room("Hallway", final_spine_cells, cell_w, cell_h, bool(planner and rectify))
         if hallway is not None:
             rooms_out.append(hallway)
 
     return rooms_out
 
 
-def _cells_to_room(name: str, cells: set[tuple[int, int]], cell_w: float, cell_h: float) -> dict | None:
+def _cells_to_room(
+    name: str, cells: set[tuple[int, int]], cell_w: float, cell_h: float, planner: bool = False
+) -> dict | None:
     if not cells:
         return None
-    part_cells = _decompose(cells)
+    # Planner path (Phase 3): fewest-rectangle decomposition; flag-off keeps
+    # the legacy row-major greedy (byte-identical).
+    part_cells = _decompose_planner(cells) if planner else _decompose(cells)
     parts = [
         {"x": c * cell_w, "y": r * cell_h, "w": pw * cell_w, "h": ph * cell_h}
         for (c, r, pw, ph) in part_cells
@@ -929,6 +1090,7 @@ def _seed_rooms(
     band: int = 0,
     garage_i: int | None = None,
     garage_w_cells: int = 0,
+    flip_egress: bool = False,
 ) -> list[tuple[int, int] | None]:
     """One anchor cell per room, matching floor_layout.py's own front-to-
     back convention (front = low-y). Bedroom/living rooms seed ON the
@@ -1046,6 +1208,10 @@ def _seed_rooms(
     # instead of 1 gives each room roughly 3x the real wall frontage to
     # grow from.
     private_egress = [i for i in private_idx if targets[i]["category"] in _EGRESS_CATEGORIES]
+    if flip_egress:
+        # Phase 3 candidate variant (planner path only): walk the egress rooms
+        # around the perimeter in the opposite order.
+        private_egress = private_egress[::-1]
     private_other = [i for i in private_idx if i not in private_egress]
     boundary_path = _exterior_boundary_path(cols, rows, band)
 
@@ -2343,6 +2509,774 @@ def _decompose(cells: set[tuple[int, int]]) -> list[tuple[int, int, int, int]]:
                 remaining.discard((cc, rr))
         rects.append((c0, r0, w, h))
     return rects
+
+
+# ---- Phase 3: shape discipline (planner path only) ----
+
+
+def _max_rect(cells) -> tuple[int, int, int, int] | None:
+    """Largest-area axis-aligned rectangle (col, row, w, h) fully inside
+    `cells` (histogram/stack method over the bbox). Ties: squarer first, then
+    lowest (row, col) - deterministic."""
+    if not cells:
+        return None
+    xs = [c for c, _ in cells]
+    ys = [r for _, r in cells]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    width = x1 - x0 + 1
+    heights = [0] * (width + 1)  # sentinel 0 at the end
+    best = None
+    best_area = 0
+    best_key = None
+    for r in range(y0, y1 + 1):
+        for k in range(width):
+            heights[k] = heights[k] + 1 if (x0 + k, r) in cells else 0
+        stack: list[int] = []
+        for k in range(width + 1):
+            h = heights[k]
+            while stack and heights[stack[-1]] >= h:
+                top = stack.pop()
+                hh = heights[top]
+                left = stack[-1] + 1 if stack else 0
+                ww = k - left
+                area = ww * hh
+                if area <= 0 or area < best_area:
+                    continue
+                key = (-area, max(ww, hh) / min(ww, hh), r - hh + 1, x0 + left)
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_area = area
+                    best = (x0 + left, r - hh + 1, ww, hh)
+            stack.append(k)
+    return best
+
+
+def _row_masks(cells, transpose: bool = False) -> dict[int, int]:
+    masks: dict[int, int] = {}
+    if transpose:
+        for c, r in cells:
+            masks[c] = masks.get(c, 0) | (1 << r)
+    else:
+        for c, r in cells:
+            masks[r] = masks.get(r, 0) | (1 << c)
+    return masks
+
+
+def _decompose_masks(masks: dict[int, int]) -> list[tuple[int, int, int, int]]:
+    """Row-major greedy on per-row bitmasks - the same partition _decompose()
+    produces (smallest (row, col) cell first, grow right, then down while the
+    full-width row below is present), much faster. Consumes `masks`."""
+    rects: list[tuple[int, int, int, int]] = []
+    for r in sorted(masks):
+        m = masks[r]
+        while m:
+            c0 = (m & -m).bit_length() - 1
+            x = m >> c0
+            w = (~x & (x + 1)).bit_length() - 1
+            seg = ((1 << w) - 1) << c0
+            h = 1
+            while (masks.get(r + h, 0) & seg) == seg:
+                masks[r + h] &= ~seg
+                h += 1
+            m &= ~seg
+            rects.append((c0, r, w, h))
+        masks[r] = 0
+    return rects
+
+
+def _decompose_fast(cells) -> list[tuple[int, int, int, int]]:
+    """Same output as _decompose() (row-major greedy), on bitmasks."""
+    return _decompose_masks(_row_masks(cells))
+
+
+def _reflex_corners(cells) -> int:
+    """Number of concave (reflex) corners of the cell-set's outline = 2x2
+    windows holding exactly 3 cells - a cheap lower bound on rectangle count:
+    parts >= reflex/2 + 1 (exact for an L)."""
+    masks = _row_masks(cells)
+    n = 0
+    for r, a0 in masks.items():
+        b0 = masks.get(r + 1, 0)
+        if not b0:
+            continue
+        a1, b1 = a0 >> 1, b0 >> 1
+        n += (
+            (~a0 & a1 & b0 & b1) | (a0 & ~a1 & b0 & b1) | (a0 & a1 & ~b0 & b1) | (a0 & a1 & b0 & ~b1)
+        ).bit_count()
+    return n
+
+
+def _cost_lower_bound(cells) -> float:
+    if not cells:
+        return 0.0
+    reflex = _reflex_corners(cells)
+    if reflex == 0:
+        return 0.0
+    parts = -(-reflex // 2) + 1
+    return 1.0 if parts == 2 else 10.0 + 4.0 * (parts - 2)
+
+
+def _decompose_planner(cells) -> list[tuple[int, int, int, int]]:
+    """Planner-path decomposition (Phase 3): row-major or column-major greedy,
+    whichever gives FEWER rectangles (an L whose long arm runs vertically is
+    1+1 column-major but can be 3+ row-major); ties prefer the one with the
+    bigger largest part (what the scorer judges for width), then row-major.
+    Exact partition either way."""
+    row_major = _decompose_fast(cells)
+    if len(row_major) == 1:
+        return row_major
+    col_major = [(r, c, h, w) for (c, r, w, h) in _decompose_masks(_row_masks(cells, transpose=True))]
+    best = None
+    best_key = None
+    for order, parts in enumerate((row_major, col_major)):
+        key = (len(parts), -max(w * h for _, _, w, h in parts), order)
+        if best_key is None or key < best_key:
+            best_key = key
+            best = parts
+    return best
+
+
+def _parts_components(parts: list[tuple[int, int, int, int]]) -> int:
+    """Number of 4-connected pieces of an exact rectangle partition: rects
+    that share an edge segment of positive length are joined (union-find)."""
+    parent = list(range(len(parts)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(parts)):
+        c1, r1, w1, h1 = parts[i]
+        for j in range(i + 1, len(parts)):
+            c2, r2, w2, h2 = parts[j]
+            touch_x = (c1 + w1 == c2 or c2 + w2 == c1) and min(r1 + h1, r2 + h2) > max(r1, r2)
+            touch_y = (r1 + h1 == r2 or r2 + h2 == r1) and min(c1 + w1, c2 + w2) > max(c1, c2)
+            if touch_x or touch_y:
+                parent[find(i)] = find(j)
+    return len({find(i) for i in range(len(parts))})
+
+
+def _components(cells) -> int:
+    """Number of 4-connected pieces of a cell-set."""
+    return _parts_components(_decompose_fast(cells)) if cells else 0
+
+
+class _ShapeCtx:
+    """Per-candidate context for _rectify_rooms (grid geometry + room meta)."""
+
+    def __init__(self, cols, rows, cell_w, cell_h, unit, targets):
+        self.cols, self.rows, self.cell_w, self.cell_h = cols, rows, cell_w, cell_h
+        self.need_daylight = to_plot_unit(0.9, unit)
+        self.min_w = [
+            0.0 if t["category"] in ("garage", "staircase", "hallway") else min_width_for_room(t["name"], unit)
+            for t in targets
+        ]
+        from app.pipeline.planning_rules import DAYLIGHT_HARD_CATEGORIES, DAYLIGHT_SOFT_CATEGORIES
+
+        self.daylit = [t["category"] in DAYLIGHT_HARD_CATEGORIES + DAYLIGHT_SOFT_CATEGORIES for t in targets]
+        self._cache: dict = {}
+
+    def info(self, cells) -> tuple[float, list, float]:
+        """(shape cost, decomposed parts, best daylight edge in real units)."""
+        key = frozenset(cells)
+        hit = self._cache.get(key)
+        if hit is not None:
+            return hit
+        if not cells:
+            res = (0.0, [], 0.0)
+            self._cache[key] = res
+            return res
+        parts = _decompose_planner(cells)
+        cost = 0.0
+        comps = _parts_components(parts) if len(parts) > 1 else 1
+        if comps > 1:
+            cost += 50.0 * (comps - 1)
+        if len(parts) == 2:
+            dicts = [self._part_dict(p) for p in sorted(parts, key=lambda p: -p[2] * p[3])]
+            total = sum(d["w"] * d["h"] for d in dicts)
+            cost += 1.0 if secondary_part_ok(dicts[0], dicts[1], total) else 10.0
+        elif len(parts) > 2:
+            cost += 10.0 + 4.0 * (len(parts) - 2)
+        daylight = 0.0
+        for (c, r, w, h) in parts:
+            if r == 0 or r + h == self.rows:
+                daylight = max(daylight, w * self.cell_w)
+            if c == 0 or c + w == self.cols:
+                daylight = max(daylight, h * self.cell_h)
+        res = (cost, parts, daylight)
+        self._cache[key] = res
+        return res
+
+    def lower_bound(self, cells) -> float:
+        hit = self._cache.get(cells)
+        if hit is not None:
+            return hit[0]
+        key = ("lb", cells)
+        lb = self._cache.get(key)
+        if lb is None:
+            lb = _cost_lower_bound(cells)
+            self._cache[key] = lb
+        return lb
+
+    def _part_dict(self, p) -> dict:
+        c, r, w, h = p
+        return {"x": c * self.cell_w, "y": r * self.cell_h, "w": w * self.cell_w, "h": h * self.cell_h}
+
+    def usable(self, i, parts) -> bool:
+        if not parts or self.min_w[i] <= 0:
+            return True
+        _c, _r, pw, ph = max(parts, key=lambda p: p[2] * p[3])
+        return min(pw * self.cell_w, ph * self.cell_h) >= self.min_w[i] * 0.98
+
+
+_RECTIFY_MAX_MOVES = 120
+# Shape cost per cell a room sits over its max: moves that relieve an
+# over-max room count as improvements (50 excess cells ~ one wrapped room).
+_OVER_MAX_WEIGHT = 0.25
+
+
+def _over(i: int, size: int, max_cells: list[int]) -> float:
+    return _OVER_MAX_WEIGHT * max(0, size - max_cells[i])
+
+
+def _rectify_rooms(
+    owner: list[list[int]],
+    cells_by_room: list[set[tuple[int, int]]],
+    targets: list[dict],
+    target_cells: list[int],
+    min_cells: list[int],
+    max_cells: list[int],
+    zones: list[int] | None,
+    band: int,
+    ctx: _ShapeCtx,
+    stats: dict | None = None,
+) -> None:
+    """Phase 3 shape discipline (planner path only), run after growth / bounded
+    fill / over-max rebalance and before decomposition.
+
+    Deterministic local search (at most _RECTIFY_MAX_MOVES moves). Three move
+    kinds, all between a room and an ADJACENT room:
+      1. give a fragment (a non-primary decomposed part, or a branch hanging
+         off the largest rectangle, or a stray disconnected piece) to the
+         neighbour;
+      2. swap: the neighbour takes the fragment and, if that would put it past
+         its max, hands back the same number of its own cells farthest from
+         the fragment (so a small room enclosed by a big one slides inside it);
+      3. pair re-split: one straight cut, or a corner-carved rectangle, across
+         the two rooms' combined cells (tried only when no 1/2 move helps a
+         wrapped or over-max room).
+    A move is applied only if it lowers the two rooms' combined cost (shape
+    cost from _ShapeCtx.info plus _OVER_MAX_WEIGHT per cell over max) and
+    keeps every guarantee:
+      - every cell keeps an owner (cells only change hands; tiling is exact);
+      - spine/Hallway cells are never moved and never receive a fragment;
+      - garage/staircase never receive (they are pinned to a functional size);
+      - no room ends above max(its max, its current size);
+      - the donor never drops below its min area (rounded up), never loses a
+        usable primary width it had, never loses a >= 0.9 m daylight edge it
+        had (the same holds for the recipient's width/daylight);
+      - nothing crosses the front public band boundary.
+    A fragment no neighbour can legally take stays where it is (the room then
+    stays `wrapped` and is scored as such - never silently hidden), except a
+    disconnected piece, which _reconnect_rooms() relocates afterwards."""
+    n = len(cells_by_room)
+    cols, rows = ctx.cols, ctx.rows
+    if zones is not None and band > 0:
+        row_lo = [0 if zones[i] == 0 else band for i in range(n)]
+        row_hi = [band - 1 if zones[i] == 0 else rows - 1 for i in range(n)]
+    else:
+        row_lo, row_hi = [0] * n, [rows - 1] * n
+    no_receive = {i for i in range(n) if targets[i]["category"] in ("garage", "staircase", "hallway")}
+    # Min-area floor in cells, rounded UP (min_cells rounds to nearest, which
+    # can sit just under the scorer's 0.98 x min-area tolerance).
+    cell_area = max(ctx.cell_w * ctx.cell_h, 1e-9)
+    floor_cells = [
+        max(min_cells[i], math.ceil(0.985 * float(targets[i].get("min_area") or 0.0) / cell_area))
+        for i in range(n)
+    ]
+
+    def over(i: int, size: int) -> float:
+        return _OVER_MAX_WEIGHT * max(0, size - max_cells[i])
+
+    moves = 0
+    # A donor whose own cells and every neighbour's cells are unchanged since
+    # it last found no move cannot find one now - skip it (version counters).
+    version = [0] * n
+    no_move_at: dict[int, tuple] = {}
+    while moves < _RECTIFY_MAX_MOVES:
+        order = sorted(
+            (i for i in range(n) if cells_by_room[i]),
+            key=lambda i: (-(ctx.info(cells_by_room[i])[0] + over(i, len(cells_by_room[i]))), i),
+        )
+        applied = False
+        for d in order:
+            d_cells = cells_by_room[d]
+            d_cost, d_parts, d_day = ctx.info(d_cells)
+            d_over = over(d, len(d_cells))
+            if d_cost + d_over <= 1.0:
+                break  # sorted by cost: nothing worse remains
+            around = set()
+            for (c, r) in d_cells:
+                for dc, dr in _DIRS:
+                    nc, nr = c + dc, r + dr
+                    if 0 <= nc < cols and 0 <= nr < rows and owner[nr][nc] >= 0 and owner[nr][nc] != d:
+                        around.add(owner[nr][nc])
+            state = (version[d],) + tuple((o, version[o]) for o in sorted(around))
+            if no_move_at.get(d) == state:
+                continue
+            d_usable = ctx.usable(d, d_parts)
+            fragments = _fragments(d_cells, d_parts)
+            best = None
+            for frag in fragments:
+                if len(d_cells) - len(frag) < floor_cells[d]:
+                    continue
+                f_rows = [r for _, r in frag]
+                f_lo, f_hi = min(f_rows), max(f_rows)
+                nbrs = set()
+                for (c, r) in frag:
+                    for dc, dr in _DIRS:
+                        nc, nr = c + dc, r + dr
+                        if 0 <= nc < cols and 0 <= nr < rows:
+                            o = owner[nr][nc]
+                            if o >= 0 and o != d and o not in no_receive:
+                                nbrs.add(o)
+                if not nbrs:
+                    continue
+                d_after = d_cells - frag
+                da_cost, da_parts, da_day = ctx.info(d_after)
+                if d_usable and not ctx.usable(d, da_parts):
+                    continue
+                if ctx.daylit[d] and d_day >= ctx.need_daylight - 1e-6 and da_day < ctx.need_daylight - 1e-6:
+                    continue
+                for rcv in sorted(nbrs):
+                    if f_lo < row_lo[rcv] or f_hi > row_hi[rcv]:
+                        continue
+                    r_cells = cells_by_room[rcv]
+                    r_cost, r_parts, r_day = ctx.info(r_cells)
+                    r_grown = r_cells | frag
+                    excess = len(r_grown) - max_cells[rcv]
+                    give_back: frozenset = frozenset()
+                    if excess > 0:
+                        # Swap: the recipient takes the fragment and hands back
+                        # `excess` of its own cells farthest from it (still
+                        # touching the donor) - a small room enclosed by a big
+                        # one slides inside it instead of staying wrapped.
+                        give_back = _give_back(r_cells, frag, d_cells - frag, excess, cols, rows)
+                        if len(give_back) != excess or any(
+                            r < row_lo[d] or r > row_hi[d] for _, r in give_back
+                        ):
+                            continue
+                        r_after = r_grown - give_back
+                        d_after_s = (d_cells - frag) | give_back
+                        if len(d_after_s) < floor_cells[d]:
+                            continue
+                        if len(d_after_s) > max(max_cells[d], len(d_cells)):
+                            continue  # a swap never pushes the donor past its max
+                        das_cost, das_parts, das_day = ctx.info(d_after_s)
+                        if d_usable and not ctx.usable(d, das_parts):
+                            continue
+                        if ctx.daylit[d] and d_day >= ctx.need_daylight - 1e-6 and das_day < ctx.need_daylight - 1e-6:
+                            continue
+                        donor_cost = das_cost
+                    else:
+                        if d_usable and not ctx.usable(d, da_parts):
+                            continue
+                        if ctx.daylit[d] and d_day >= ctx.need_daylight - 1e-6 and da_day < ctx.need_daylight - 1e-6:
+                            continue
+                        r_after = r_grown
+                        donor_cost = da_cost
+                    ra_cost, ra_parts, ra_day = ctx.info(r_after)
+                    if ctx.usable(rcv, r_parts) and not ctx.usable(rcv, ra_parts):
+                        continue
+                    if ctx.daylit[rcv] and r_day >= ctx.need_daylight - 1e-6 and ra_day < ctx.need_daylight - 1e-6:
+                        continue
+                    d_new = len(d_cells) - len(frag) + len(give_back)
+                    r_new = len(r_cells) + len(frag) - len(give_back)
+                    delta = (donor_cost + ra_cost + over(d, d_new) + over(rcv, r_new)) - (
+                        d_cost + r_cost + d_over + over(rcv, len(r_cells))
+                    )
+                    if delta >= -1e-9:
+                        continue
+                    # Prefer the biggest improvement, then a plain move over a
+                    # swap, then a recipient under target, then the most
+                    # headroom; deterministic tie-break.
+                    key = (
+                        delta,
+                        len(give_back),
+                        len(r_cells) - target_cells[rcv],
+                        -(max_cells[rcv] - len(r_cells)),
+                        rcv,
+                        min(frag),
+                    )
+                    if best is None or key < best[0]:
+                        best = (key, frag, rcv, give_back)
+            # Pair re-split: one straight cut across (donor + a neighbour).
+            pair = None
+            if best is None and (d_cost >= 10.0 or d_over > 0):
+                pair = _best_pair_resplit(
+                    d, owner, cells_by_room, targets, floor_cells, max_cells, row_lo, row_hi, ctx, no_receive
+                )
+            if pair is not None:
+                _delta, other, new_d, new_o = pair
+                for (c, r) in new_d:
+                    owner[r][c] = d
+                for (c, r) in new_o:
+                    owner[r][c] = other
+                cells_by_room[d] = set(new_d)
+                cells_by_room[other] = set(new_o)
+                version[d] += 1
+                version[other] += 1
+                moves += 1
+                applied = True
+                break
+            if best is not None:
+                _key, frag, rcv, give_back = best
+                for (c, r) in frag:
+                    owner[r][c] = rcv
+                for (c, r) in give_back:
+                    owner[r][c] = d
+                cells_by_room[d] = (d_cells - frag) | give_back
+                cells_by_room[rcv] = (cells_by_room[rcv] | frag) - give_back
+                version[d] += 1
+                version[rcv] += 1
+                moves += 1
+                applied = True
+                break
+            no_move_at[d] = state
+        if not applied:
+            break
+    _reconnect_rooms(owner, cells_by_room, targets, target_cells, max_cells, row_lo, row_hi, no_receive, ctx, stats)
+    if stats is not None:
+        stats["rectify_moves"] = stats.get("rectify_moves", 0) + moves
+
+
+def _reconnect_rooms(
+    owner: list[list[int]],
+    cells_by_room: list[set[tuple[int, int]]],
+    targets: list[dict],
+    target_cells: list[int],
+    max_cells: list[int],
+    row_lo: list[int],
+    row_hi: list[int],
+    no_receive: set[int],
+    ctx: "_ShapeCtx",
+    stats: dict | None,
+) -> None:
+    """Last resort after the local search: a room still split into several
+    disconnected pieces (a piece stranded across the hallway renders as an
+    unlabeled, door-less box) keeps its largest piece; every other piece goes
+    to an adjacent room with headroom, else into an adjacent Hallway, else to
+    the adjacent room most under its target even past its max (as the plan
+    allows when no neighbour has headroom). Every cell keeps an owner.
+    Counted in stats."""
+    cols, rows = ctx.cols, ctx.rows
+    for d in range(len(cells_by_room)):
+        cells = cells_by_room[d]
+        if not cells or ctx.info(cells)[0] < 50.0:
+            continue  # cost >= 50 only when disconnected
+        pieces = []
+        rest = set(cells)
+        while rest:
+            start = min(rest, key=lambda cr: (cr[1], cr[0]))
+            comp = {start}
+            rest.discard(start)
+            stack = [start]
+            while stack:
+                c, r = stack.pop()
+                for dc, dr in _DIRS:
+                    nb = (c + dc, r + dr)
+                    if nb in rest:
+                        rest.discard(nb)
+                        comp.add(nb)
+                        stack.append(nb)
+            pieces.append(comp)
+        pieces.sort(key=lambda p: (-len(p), min(p)))
+        for piece in pieces[1:]:
+            p_lo = min(r for _, r in piece)
+            p_hi = max(r for _, r in piece)
+            nbrs = set()
+            touches_hall = False
+            for (c, r) in piece:
+                for dc, dr in _DIRS:
+                    nc, nr = c + dc, r + dr
+                    if 0 <= nc < cols and 0 <= nr < rows:
+                        o = owner[nr][nc]
+                        if o == -2:
+                            touches_hall = True
+                        elif o >= 0 and o != d and o not in no_receive and row_lo[o] <= p_lo and p_hi <= row_hi[o]:
+                            nbrs.add(o)
+            roomy = [i for i in nbrs if len(cells_by_room[i]) + len(piece) <= max_cells[i]]
+            if roomy or (nbrs and not touches_hall):
+                # Headroom first; else (no hallway either) the neighbour most
+                # under its target, even past its max.
+                rcv = min(roomy or nbrs, key=lambda i: (len(cells_by_room[i]) - target_cells[i], i))
+                for (c, r) in piece:
+                    owner[r][c] = rcv
+                cells_by_room[rcv] = cells_by_room[rcv] | piece
+            elif touches_hall:
+                for (c, r) in piece:
+                    owner[r][c] = -2
+            else:
+                continue  # nowhere legal to go: stays (and stays scored)
+            cells_by_room[d] = cells_by_room[d] - piece
+            if stats is not None:
+                stats["reconnected_cells"] = stats.get("reconnected_cells", 0) + len(piece)
+
+
+def _best_pair_resplit(
+    d: int,
+    owner: list[list[int]],
+    cells_by_room: list[set[tuple[int, int]]],
+    targets: list[dict],
+    min_cells: list[int],
+    max_cells: list[int],
+    row_lo: list[int],
+    row_hi: list[int],
+    ctx: "_ShapeCtx",
+    no_receive: set[int],
+):
+    """Best re-partition of room `d` and one adjacent room - by one straight
+    cut across their combined cells, or by carving one of them as a rectangle
+    into a corner of the union - the move that untangles a small room
+    enclosed by a bigger one, which single fragment moves cannot do without
+    passing through worse states. Both rooms stay within [min, max], inside
+    their zone rows, keep a usable primary width and any daylight edge they
+    already had. Returns (delta, other, new_d_cells, new_other_cells) for the
+    best strictly-improving partition, else None. Garage/staircase/hallway
+    never take part."""
+    if d in no_receive:
+        return None
+    d_cells = cells_by_room[d]
+    nbrs = set()
+    for (c, r) in d_cells:
+        for dc, dr in _DIRS:
+            nc, nr = c + dc, r + dr
+            if 0 <= nc < ctx.cols and 0 <= nr < ctx.rows:
+                o = owner[nr][nc]
+                if o >= 0 and o != d and o not in no_receive:
+                    nbrs.add(o)
+    d_cost, d_parts, d_day = ctx.info(d_cells)
+    need = ctx.need_daylight - 1e-6
+    best = None
+    for o in sorted(nbrs):
+        o_cells = cells_by_room[o]
+        o_cost, o_parts, o_day = ctx.info(o_cells)
+        before = d_cost + o_cost + _over(d, len(d_cells), max_cells) + _over(o, len(o_cells), max_cells)
+        if before <= 0:
+            continue
+        union = d_cells | o_cells
+        ux = [c for c, _ in union]
+        uy = [r for _, r in union]
+        if len(union) < _PAIR_MIN_BBOX_FILL * (max(ux) - min(ux) + 1) * (max(uy) - min(uy) + 1):
+            continue  # irregular union: no two-clean-shapes split worth searching
+        d_ok, o_ok = ctx.usable(d, d_parts), ctx.usable(o, o_parts)
+        u_lo, u_hi = min(uy), max(uy)
+        zone_free = row_lo[d] <= u_lo and u_hi <= row_hi[d] and row_lo[o] <= u_lo and u_hi <= row_hi[o]
+        # Bounds: never shrink below min, never grow past max - but a room the
+        # bounded fill already left over its max may keep (not grow) its size.
+        d_bounds = (min(min_cells[d], len(d_cells)), max(max_cells[d], len(d_cells)))
+        o_bounds = (min(min_cells[o], len(o_cells)), max(max_cells[o], len(o_cells)))
+        for new_d, new_o in _pair_partitions(union, d_bounds, o_bounds, len(d_cells), len(o_cells)):
+            if not zone_free and (
+                any(r < row_lo[d] or r > row_hi[d] for _, r in new_d)
+                or any(r < row_lo[o] or r > row_hi[o] for _, r in new_o)
+            ):
+                continue
+            new_over = _over(d, len(new_d), max_cells) + _over(o, len(new_o), max_cells)
+            if ctx.lower_bound(new_d) + ctx.lower_bound(new_o) + new_over >= before - 1e-9:
+                continue
+            nd_cost, nd_parts, nd_day = ctx.info(new_d)
+            no_cost, no_parts, no_day = ctx.info(new_o)
+            delta = nd_cost + no_cost + new_over - before
+            if delta >= -1e-9:
+                continue
+            if (d_ok and not ctx.usable(d, nd_parts)) or (o_ok and not ctx.usable(o, no_parts)):
+                continue
+            if ctx.daylit[d] and d_day >= need and nd_day < need:
+                continue
+            if ctx.daylit[o] and o_day >= need and no_day < need:
+                continue
+            drift = abs(len(new_d) - len(d_cells))
+            key = (delta, drift, o, min(new_d))
+            if best is None or key < best[0]:
+                best = (key, o, new_d, new_o)
+    if best is None:
+        return None
+    key, o, new_d, new_o = best
+    return key[0], o, new_d, new_o
+
+
+_PAIR_MIN_BBOX_FILL = 0.5  # pair re-split only for near-rectangular unions
+_CARVE_SIZE_SLACK = 0.25  # corner carves stay within +-25% of the room's current size
+_CARVE_MAX_ASPECT = 3.0
+
+
+def _pair_partitions(
+    union: set, d_bounds: tuple[int, int], o_bounds: tuple[int, int], d_size: int, o_size: int
+):
+    """Candidate (new_d, new_o) splits of `union`, both sizes within bounds:
+    every straight vertical/horizontal cut (both assignments), plus a
+    rectangle carved into each corner of the union's bbox for either room
+    (the rest going to the other). Deterministic order."""
+    xs = [c for c, _ in union]
+    ys = [r for _, r in union]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    seen: set = set()
+
+    def ok(a, b):
+        return d_bounds[0] <= len(a) <= d_bounds[1] and o_bounds[0] <= len(b) <= o_bounds[1]
+
+    total = len(union)
+    for axis in (0, 1):
+        lo, hi = (x0, x1) if axis == 0 else (y0, y1)
+        counts: dict[int, int] = {}
+        span_lo: dict[int, int] = {}
+        span_hi: dict[int, int] = {}
+        for cell in union:
+            a_coord, b_coord = cell[axis], cell[1 - axis]
+            counts[a_coord] = counts.get(a_coord, 0) + 1
+            span_lo[a_coord] = min(span_lo.get(a_coord, b_coord), b_coord)
+            span_hi[a_coord] = max(span_hi.get(a_coord, b_coord), b_coord)
+        # Prefix/suffix (count, min, max) so "is the low/high side an exact
+        # rectangle" is O(1) per cut - only cuts with at least one exact
+        # rectangle side are worth evaluating.
+        pre = [(0, 10**9, -1)]
+        for k in range(lo, hi + 1):
+            cnt, mn, mx = pre[-1]
+            pre.append((cnt + counts.get(k, 0), min(mn, span_lo.get(k, 10**9)), max(mx, span_hi.get(k, -1))))
+        suf = [(0, 10**9, -1)]
+        for k in range(hi, lo - 1, -1):
+            cnt, mn, mx = suf[-1]
+            suf.append((cnt + counts.get(k, 0), min(mn, span_lo.get(k, 10**9)), max(mx, span_hi.get(k, -1))))
+        for k in range(lo + 1, hi + 1):
+            n_low, mn_l, mx_l = pre[k - lo]
+            n_high, mn_h, mx_h = suf[hi - k + 1]
+            low_rect = n_low == (k - lo) * (mx_l - mn_l + 1)
+            high_rect = n_high == (hi - k + 1) * (mx_h - mn_h + 1)
+            if not (low_rect or high_rect):
+                continue
+            for a_n, b_n, low_is_d in ((n_low, n_high, True), (n_high, n_low, False)):
+                if not (d_bounds[0] <= a_n <= d_bounds[1] and o_bounds[0] <= b_n <= o_bounds[1]):
+                    continue
+                if abs(a_n - d_size) > _CARVE_SIZE_SLACK * max(d_size, o_size):
+                    continue
+                low = frozenset(cell for cell in union if cell[axis] < k)
+                high = frozenset(union - low)
+                a, b = (low, high) if low_is_d else (high, low)
+                if a and b and a not in seen:
+                    seen.add(a)
+                    yield a, b
+    bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    # 2-D prefix sums over the bbox: O(1) "is this rectangle inside union".
+    pre = [[0] * (bw + 1) for _ in range(bh + 1)]
+    for j in range(bh):
+        row_acc = 0
+        for i in range(bw):
+            row_acc += 1 if (x0 + i, y0 + j) in union else 0
+            pre[j + 1][i + 1] = pre[j][i + 1] + row_acc
+
+    def inside(cx, cy, w, h):
+        i0, j0 = cx - x0, cy - y0
+        return pre[j0 + h][i0 + w] - pre[j0][i0 + w] - pre[j0 + h][i0] + pre[j0][i0] == w * h
+
+    for carve_d in (True, False):
+        lo_n, hi_n = d_bounds if carve_d else o_bounds
+        size = d_size if carve_d else o_size
+        lo_n = max(lo_n, int(size * (1 - _CARVE_SIZE_SLACK)))
+        hi_n = min(hi_n, int(size * (1 + _CARVE_SIZE_SLACK)) + 1)
+        for w in range(1, bw):
+            # One or two heights per width: the carved room keeps ~its size.
+            for h in sorted({max(1, size // w), max(1, -(-size // w))}):
+                if h >= bh or not (lo_n <= w * h <= hi_n) or max(w, h) > _CARVE_MAX_ASPECT * min(w, h):
+                    continue
+                for cx, cy in ((x0, y0), (x1 - w + 1, y0), (x0, y1 - h + 1), (x1 - w + 1, y1 - h + 1)):
+                    if not inside(cx, cy, w, h):
+                        continue
+                    rest_n = total - w * h
+                    if carve_d and not (o_bounds[0] <= rest_n <= o_bounds[1]):
+                        continue
+                    if not carve_d and not (d_bounds[0] <= rest_n <= d_bounds[1]):
+                        continue
+                    rect = frozenset((c, r) for r in range(cy, cy + h) for c in range(cx, cx + w))
+                    rest = frozenset(union - rect)
+                    a, b = (rect, rest) if carve_d else (rest, rect)
+                    if a and b and ok(a, b) and a not in seen:
+                        seen.add(a)
+                        yield a, b
+
+
+def _give_back(r_cells: set, frag: frozenset, donor_rest: set, k: int, cols: int, rows: int) -> frozenset:
+    """Picks `k` of the recipient's ORIGINAL cells to hand back to the donor
+    in a swap: farthest (BFS distance through recipient + fragment) from the
+    fragment first, each one touching the donor or an already-picked cell, so
+    the hand-back stays attached to the donor. Never picks a fragment cell.
+    Returns fewer than k cells when it cannot find enough (the caller then
+    rejects the swap)."""
+    region = set(r_cells) | set(frag)
+    dist = {c: 0 for c in frag}
+    queue = deque(sorted(frag))
+    while queue:
+        c, r = queue.popleft()
+        for dc, dr in _DIRS:
+            nb = (c + dc, r + dr)
+            if nb in region and nb not in dist:
+                dist[nb] = dist[(c, r)] + 1
+                queue.append(nb)
+    picked: set = set()
+    attach = set(donor_rest)
+    pool = sorted((c for c in r_cells if c not in frag), key=lambda c: (-dist.get(c, 10**6), c[1], c[0]))
+    progressed = True
+    while len(picked) < k and progressed:
+        progressed = False
+        for cell in pool:
+            if cell in picked:
+                continue
+            if any((cell[0] + dc, cell[1] + dr) in attach for dc, dr in _DIRS):
+                picked.add(cell)
+                attach.add(cell)
+                progressed = True
+                break
+    return frozenset(picked)
+
+
+def _fragments(cells: set, parts: list) -> list[frozenset]:
+    """Candidate pieces a room may give away: every non-primary decomposed
+    part, every connected branch of (cells - largest rectangle), and every
+    connected component that does not contain the primary. Deduplicated,
+    deterministic order."""
+    out: list[frozenset] = []
+    seen: set = set()
+
+    def add(fs):
+        if fs and fs not in seen and len(fs) < len(cells):
+            seen.add(fs)
+            out.append(fs)
+
+    ordered = sorted(parts, key=lambda p: (-p[2] * p[3], p[1], p[0]))
+    for (c, r, w, h) in ordered[1:]:
+        add(frozenset((cc, rr) for rr in range(r, r + h) for cc in range(c, c + w)))
+    mr = _max_rect(cells)
+    if mr is not None:
+        c0, r0, w0, h0 = mr
+        primary = {(cc, rr) for rr in range(r0, r0 + h0) for cc in range(c0, c0 + w0)}
+        rest = set(cells) - primary
+        while rest:
+            start = min(rest, key=lambda cr: (cr[1], cr[0]))
+            comp = {start}
+            rest.discard(start)
+            stack = [start]
+            while stack:
+                c, r = stack.pop()
+                for dc, dr in _DIRS:
+                    nb = (c + dc, r + dr)
+                    if nb in rest:
+                        rest.discard(nb)
+                        comp.add(nb)
+                        stack.append(nb)
+            add(frozenset(comp))
+    return out
 
 
 def _map_room(room: dict, fn) -> dict:

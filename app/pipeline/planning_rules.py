@@ -124,6 +124,11 @@ UPPER_FLOOR_EXCESS_FALLBACK = "Terrace"
 # them on). Until shape discipline (Phase 3) lands, the planner only adds
 # bonus rooms at least this big. Entries stay in BONUS_ROOM_PRIORITY so
 # lowering this re-enables them.
+# Phase 3 re-test (2026-10, with shape discipline): 3.0 raised the scorecard
+# but broke the quality gate on 3 floors (an undersized Bathroom on 60x80 3F),
+# 0 broke 6 floors; neither grew big-plot coverage measurably (300x300 stays
+# ~2%) - the house size there is capped by the program ceiling, not by
+# bonus-room drops. Kept at 6.5.
 BONUS_ROOM_MIN_TARGET_SQM = 6.5
 
 

@@ -94,6 +94,13 @@ _EGRESS_CATEGORIES = ("bedroom", "living")
 _MIN_PRACTICAL_DOOR_M = 0.6
 
 HARD_VIOLATION_PENALTY = 1000.0
+# Phase 3 (planner_checks only): one small compliant notch is acceptable, but
+# a plain rectangle is still preferred.
+NOTCH_PENALTY = 3.0
+# A wrapped room is a real defect, but less severe than the size/width/door
+# hard violations the quality gate tracks - so best-of-N never trades one of
+# those for a better shape.
+WRAPPED_PENALTY = 100.0
 SLIVER_PENALTY = 25.0
 IMBALANCE_PENALTY = 10.0
 _EDGE_TOL = 1e-4
@@ -171,6 +178,54 @@ def daylight_failures(rects: list[dict], footprint: dict, unit: str) -> tuple[li
             if room_daylight_edge(rect, footprint) < need - 1e-6:
                 (hard if cat in DAYLIGHT_HARD_CATEGORIES else soft).append(name)
     return hard, soft
+
+
+def secondary_part_ok(primary: dict, secondary: dict, total_area: float) -> bool:
+    """Phase 3 shape rule (planning_rules.SHAPE_RULES): a room's ONE allowed
+    secondary part is a small notch/bend - at most `secondary_max_area_fraction`
+    of the room's area, touching the primary along one of its sides, and no
+    longer along that side than `secondary_max_side_fraction` of it."""
+    from app.pipeline.planning_rules import SHAPE_RULES
+
+    if total_area <= 0:
+        return False
+    if secondary["w"] * secondary["h"] > SHAPE_RULES["secondary_max_area_fraction"] * total_area + 1e-9:
+        return False
+    tol = 1e-6
+    side = SHAPE_RULES["secondary_max_side_fraction"]
+    px0, py0, px1, py1 = primary["x"], primary["y"], primary["x"] + primary["w"], primary["y"] + primary["h"]
+    sx0, sy0, sx1, sy1 = secondary["x"], secondary["y"], secondary["x"] + secondary["w"], secondary["y"] + secondary["h"]
+    x_overlap = min(px1, sx1) - max(px0, sx0)
+    y_overlap = min(py1, sy1) - max(py0, sy0)
+    if (abs(sy1 - py0) < tol or abs(sy0 - py1) < tol) and x_overlap > tol:
+        return secondary["w"] <= side * primary["w"] + tol
+    if (abs(sx1 - px0) < tol or abs(sx0 - px1) < tol) and y_overlap > tol:
+        return secondary["h"] <= side * primary["h"] + tol
+    return False
+
+
+def shape_violations(rects: list[dict]) -> list[Violation]:
+    """Phase 3 (opt-in via score_floor_layout's planner_checks): HARD
+    `wrapped` - more than 2 parts, or a 2nd part that is not a small notch
+    (see secondary_part_ok); SOFT `notch` - exactly one compliant notch.
+    The circulation Hallway is exempt (it is a spine, not a room)."""
+    out: list[Violation] = []
+    for rect in rects:
+        name = str(rect.get("name") or "")
+        if not name or classify_room_category(name) == "hallway":
+            continue
+        parts = [p for p in _room_parts(rect) if p.get("w", 0) > 0 and p.get("h", 0) > 0]
+        if len(parts) <= 1:
+            continue
+        total = sum(p["w"] * p["h"] for p in parts)
+        ordered = sorted(parts, key=lambda p: -p["w"] * p["h"])
+        if len(parts) > 2:
+            out.append(Violation(name, "wrapped", True, f"{len(parts)} parts"))
+        elif secondary_part_ok(ordered[0], ordered[1], total):
+            out.append(Violation(name, "notch", False, "one small notch"))
+        else:
+            out.append(Violation(name, "wrapped", True, "secondary part larger than a notch"))
+    return out
 
 
 def score_floor_layout(
@@ -362,15 +417,20 @@ def score_floor_layout(
     violations.extend(_coverage_violation(rects, dimensions))
     if planner_checks:
         violations.extend(_planner_size_violations(rects, unit, garage_cars, room_targets, room_max))
+        violations.extend(shape_violations(rects))
 
     score = 0.0
     _SOFT_PENALTY_BY_KIND = {
         "sliver": SLIVER_PENALTY,
         "elongated": ELONGATED_PENALTY,
         "no_egress": EGRESS_PENALTY,
+        "notch": NOTCH_PENALTY,
     }
     for v in violations:
-        score -= HARD_VIOLATION_PENALTY if v.hard else _SOFT_PENALTY_BY_KIND.get(v.kind, IMBALANCE_PENALTY)
+        if v.kind == "wrapped":
+            score -= WRAPPED_PENALTY
+        else:
+            score -= HARD_VIOLATION_PENALTY if v.hard else _SOFT_PENALTY_BY_KIND.get(v.kind, IMBALANCE_PENALTY)
 
     return LayoutScore(score=score, violations=violations)
 
