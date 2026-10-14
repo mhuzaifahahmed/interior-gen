@@ -311,3 +311,25 @@ These ship together. A larger footprint without bounded fill would dump the surp
    - added rooms marked;
    - realistic capacity dropdown;
    - `layout_path` logged.
+
+
+## Running the tests (speed tiers)
+
+The full suite had grown to ~30 min (two `tests/test_house_planner.py` tests alone were ~16 min because
+they recomputed `layout_building()` for every floor of every matrix case). Tiers:
+
+- **Per change (minutes):** `./.venv/Scripts/python.exe -m pytest -m fast -q`
+  - ~10 representative gate cases in BOTH planner modes (30x40, 40x60 south + east, 50x50 2f, 60x80 dense
+    garage, 60x80 3f, 90x40, 150x150 dense 2f, 150x200 2f, 300x300) plus the pure mask / planner / door
+    graph / scorer / quality / room-spec / planning-rule unit files (list: `_FAST_MODULES` in
+    `tests/conftest.py`). Same assertions as the full gate, so a worsened ratcheted metric still fails.
+- **Whole gate:** `./.venv/Scripts/python.exe -m pytest tests/test_mask_quality_gate.py -q`
+- **Before each commit:** `./.venv/Scripts/python.exe -m pytest -q` (full suite, never skipped).
+- **Matrix report in parallel:** `python scripts/mask_quality_report.py --scorecard --planner both --no-render --jobs 4`
+  (identical output to `--jobs 1`).
+- **Proving a speedup is output-identical:** `python scripts/mask_output_dump.py OUT.json` in a clean
+  `git worktree` of HEAD and in the working tree, then `cmp` the two files (rects + warnings for all matrix
+  floors, planner off and on, plus the capacity table).
+
+`tests/mask_quality_matrix.planner_building(case)` computes a case's `layout_building()` once per test
+session; use it (rather than calling `layout_building` per floor) in any new matrix-wide test.

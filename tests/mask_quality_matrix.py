@@ -77,3 +77,21 @@ def iter_floors():
     for case in CASES:
         for i, rooms in enumerate(case["floors"], start=1):
             yield case, i, rooms, f"{case['id']}/floor{i}"
+
+
+_PLANNER_BUILDINGS: dict = {}
+
+
+def planner_building(case):
+    """layout_building() for a matrix case, computed once per test session and
+    shared by every test that needs it (a pure speedup: the engine is
+    deterministic and these tests only read the result). Callers must have
+    settings.house_planner_enabled switched on, as they already do."""
+    built = _PLANNER_BUILDINGS.get(case["id"])
+    if built is None:
+        from app.pipeline.floor_layout_mask import layout_building
+
+        built = _PLANNER_BUILDINGS[case["id"]] = layout_building(
+            case["floors"], case["plot"], case["facing"], case["garage_cars"], len(case["floors"])
+        )
+    return built

@@ -23,6 +23,29 @@ os.environ["FRONTEND_ORIGIN"] = ""
 import uuid
 
 import pytest
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "fast: quick per-change tier (`pytest -m fast`): representative mask-gate cases + "
+        "pure mask/planner/scorer unit tests. Run the FULL suite before each commit.",
+    )
+
+
+# Pure unit-test modules for the layout engine / planner / scorer, all part of
+# the `fast` tier (the gate file marks its own representative cases).
+_FAST_MODULES = {
+    "test_floor_layout_mask", "test_house_planner", "test_door_graph", "test_mask_scorecard",
+    "test_layout_quality", "test_room_specs", "test_planning_rules", "test_mask_shape_discipline",
+    "test_big_plot_tiers", "test_circulation_phase4b", "test_layout_daylight",
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        if item.module.__name__.rsplit(".", 1)[-1] in _FAST_MODULES:
+            item.add_marker(pytest.mark.fast)
 from clerk_backend_api.security.types import TokenVerificationError, TokenVerificationErrorReason
 from fastapi.testclient import TestClient
 

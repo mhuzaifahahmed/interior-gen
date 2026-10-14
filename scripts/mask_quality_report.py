@@ -13,6 +13,9 @@ into scripts/output/quality/ (gitignored).
   --scorecard             also print the honest absolute-target scorecard
                           (app/pipeline/mask_scorecard.py) and write it to
                           scripts/output/quality/scorecard_<mode>.txt.
+  --jobs N                compute cases in N worker processes (default 1).
+                          Output is identical to --jobs 1 (cases are
+                          independent and deterministic).
   --update-baseline       write tests/data/mask_quality_baseline.json (off)
                           or tests/data/mask_quality_baseline_planner.json
                           (on). Needs a single --planner mode.
@@ -40,40 +43,60 @@ BASELINE_PATHS = {
 }
 
 
-def compute_all(planner: bool = False) -> dict:
-    """{key: (case, floor_number, rects, metrics, max_overrides)}; planner
-    mode also fills EXTRA[key] = {"remainder", "path", "plan"}."""
-    results = {}
-    EXTRA.clear()
+def _compute_case(case_id: str, planner: bool) -> dict:
+    """All floors of ONE case: {key: (case, floor_n, rects, metrics, overrides)}
+    plus EXTRA entries. Top-level so a worker process can run it."""
+    case = next(c for c in CASES if c["id"] == case_id)
     previous = settings.house_planner_enabled
     settings.house_planner_enabled = planner
+    results, extra = {}, {}
     try:
-        built = {}
+        total = len(case["floors"])
+        built = None
         if planner:
-            for c in CASES:
-                built[c["id"]] = layout_building(
-                    c["floors"], c["plot"], c["facing"], c["garage_cars"], len(c["floors"])
-                )
-        for case, floor_n, rooms, key in iter_floors():
-            total = len(case["floors"])
+            built = layout_building(
+                case["floors"], case["plot"], case["facing"], case["garage_cars"], total
+            )
+        for i, rooms in enumerate(case["floors"], start=1):
+            key = f"{case_id}/floor{i}"
             overrides = None
             if planner:
-                plan, floor_results = built[case["id"]]
-                _used, rects, _w = floor_results[floor_n - 1]
-                fplan = plan.for_floor(floor_n)
+                plan, floor_results = built
+                _used, rects, _w = floor_results[i - 1]
+                fplan = plan.for_floor(i)
                 overrides = dict(fplan.room_max) or None
-                EXTRA[key] = {"remainder": list(fplan.remainder_rooms), "path": fplan.layout_path, "plan": plan}
+                extra[key] = {"remainder": list(fplan.remainder_rooms), "path": fplan.layout_path, "plan": plan}
             else:
                 rects, _ = layout_floor_with_warnings(
                     rooms, case["plot"], garage_cars=case["garage_cars"], facing=case["facing"]
                 )
             metrics = measure_floor(
-                rects, case["plot"], total_floors=total, floor_number=floor_n,
+                rects, case["plot"], total_floors=total, floor_number=i,
                 garage_cars=case["garage_cars"], max_overrides=overrides, facing=case["facing"],
             )
-            results[key] = (case, floor_n, rects, metrics, overrides)
+            results[key] = (case, i, rects, metrics, overrides)
     finally:
         settings.house_planner_enabled = previous
+    return {"results": results, "extra": extra}
+
+
+def compute_all(planner: bool = False, jobs: int = 1) -> dict:
+    """{key: (case, floor_number, rects, metrics, max_overrides)}; planner
+    mode also fills EXTRA[key] = {"remainder", "path", "plan"}. Order is the
+    matrix order regardless of `jobs`."""
+    EXTRA.clear()
+    ids = [c["id"] for c in CASES]
+    if jobs > 1:
+        from concurrent.futures import ProcessPoolExecutor
+
+        with ProcessPoolExecutor(max_workers=jobs) as pool:
+            parts = list(pool.map(_compute_case, ids, [planner] * len(ids)))
+    else:
+        parts = [_compute_case(i, planner) for i in ids]
+    results = {}
+    for part in parts:
+        results.update(part["results"])
+        EXTRA.update(part["extra"])
     return results
 
 
@@ -194,6 +217,7 @@ def main():
     ap.add_argument("--update-baseline", action="store_true")
     ap.add_argument("--no-render", action="store_true")
     ap.add_argument("--scorecard", action="store_true")
+    ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--planner", choices=("off", "on", "both"), default="off")
     args = ap.parse_args()
 
@@ -204,7 +228,7 @@ def main():
     for mode in modes:
         planner = mode == "on"
         print(f"\n##### planner {mode.upper()} #####")
-        results = compute_all(planner)
+        results = compute_all(planner, args.jobs)
         _print_table(results)
         if args.scorecard:
             print()

@@ -21,7 +21,7 @@ from app.pipeline.room_specs import (
     max_area_for_room,
     to_plot_unit,
 )
-from tests.mask_quality_matrix import CASES, GROUND_2F, UPPER_2F, _typical
+from tests.mask_quality_matrix import CASES, GROUND_2F, UPPER_2F, _typical, planner_building
 
 FT = "ft"
 
@@ -172,9 +172,7 @@ def test_plan_round_trips_through_dict():
 
 
 def _planner_floor(case, floor_n):
-    plan, results = floor_layout_mask.layout_building(
-        case["floors"], case["plot"], case["facing"], case["garage_cars"], len(case["floors"])
-    )
+    plan, results = planner_building(case)  # computed once per session
     _used, rects, warnings = results[floor_n - 1]
     return plan.for_floor(floor_n), (rects, warnings)
 
@@ -228,7 +226,13 @@ def test_planner_without_plan_builds_its_own(monkeypatch):
 def test_planner_is_deterministic(monkeypatch):
     monkeypatch.setattr(settings, "house_planner_enabled", True)
     case = next(c for c in CASES if c["id"] == "150x200_2f_reported")
-    assert _planner_floor(case, 1)[1][0] == _planner_floor(case, 1)[1][0]
+    def fresh():
+        _p, res = floor_layout_mask.layout_building(
+            case["floors"], case["plot"], case["facing"], case["garage_cars"], len(case["floors"])
+        )
+        return res[0][1]
+
+    assert fresh() == fresh()
 
 
 def test_fill_leftovers_bounded_respects_max():

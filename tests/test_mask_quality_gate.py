@@ -3,6 +3,16 @@ matrix floor to tests/data/mask_quality_baseline.json. Calls the mask module
 directly, so it is independent of settings.house_layout_engine / conftest's
 rect pin. Update the baseline only via:
     python scripts/mask_quality_report.py --update-baseline
+
+Running the tests (speed tiers):
+  * Per change (minutes):   ./.venv/Scripts/python.exe -m pytest -m fast -q
+    ~10 representative gate cases (both planner modes) + the pure unit-test
+    files for the mask engine / planner / door graph / scorer / quality /
+    room specs / planning rules. Same assertions as the full gate, so it
+    still fails when a ratcheted metric worsens.
+  * Whole gate:             ./.venv/Scripts/python.exe -m pytest tests/test_mask_quality_gate.py -q
+  * Before each commit:     ./.venv/Scripts/python.exe -m pytest -q   (full suite)
+  * Parallel matrix report: python scripts/mask_quality_report.py --scorecard --planner both --no-render --jobs 4
 """
 import json
 import os
@@ -14,7 +24,7 @@ from app.pipeline.floor_layout_mask import layout_building, layout_floor_with_wa
 from app.pipeline.layout_metrics import measure_floor
 from app.pipeline.planning_rules import plot_band
 from app.pipeline.room_specs import EXTERIOR_WALL_THICKNESS_M, to_plot_unit
-from tests.mask_quality_matrix import iter_floors
+from tests.mask_quality_matrix import iter_floors, planner_building
 
 _BASELINE_PATH = os.path.join(os.path.dirname(__file__), "data", "mask_quality_baseline.json")
 with open(_BASELINE_PATH, encoding="utf-8") as _f:
@@ -26,6 +36,18 @@ with open(_PLANNER_BASELINE_PATH, encoding="utf-8") as _f:
     _PLANNER_BASELINE = json.load(_f)
 
 _ITEMS = list(iter_floors())
+
+# Representative subset run by `pytest -m fast` (see docstring). Covers every
+# plot band, 1-3 floors, garage/dense programs, and non-south facings.
+_FAST_CASE_IDS = {
+    "30x40_small_1f", "40x60_typical_1f_south", "50x50_2f", "60x80_dense_garage_1f",
+    "60x80_3f_south", "90x40_typical_1f", "150x150_dense_garage_2f",
+    "150x200_2f_reported", "300x300_typical_1f", "40x60_typical_1f_east",
+}
+
+
+def _fast(case):
+    return [pytest.mark.fast] if case["id"] in _FAST_CASE_IDS else []
 _COVERAGE_TOLERANCE_PCT = 0.5
 
 # Circulation fields (Phase 4b, door_graph.circulation_report); ratchet
@@ -52,7 +74,7 @@ _PHASE1_KNOWN_REGRESSIONS = {
 
 def _param(item):
     case, floor_n, rooms, key = item
-    marks = []
+    marks = _fast(case)
     if key in _PHASE1_KNOWN_REGRESSIONS:
         marks.append(pytest.mark.xfail(strict=True, reason="Phase 1 known regression -> fix in Phase 2: " + _PHASE1_KNOWN_REGRESSIONS[key]))
     return pytest.param(case, floor_n, rooms, key, id=key, marks=marks)
@@ -75,9 +97,9 @@ def test_mask_quality_does_not_regress(case, floor_n, rooms, key):
 
 
 def _planner_layout(case, floor_n, rooms):
-    plan, results = layout_building(
-        case["floors"], case["plot"], case["facing"], case["garage_cars"], len(case["floors"])
-    )
+    # The whole building is laid out once per session (see
+    # mask_quality_matrix.planner_building), not once per floor / per test.
+    plan, results = planner_building(case)
     _used, rects, _w = results[floor_n - 1]
     return measure_floor(
         rects, case["plot"], total_floors=len(case["floors"]), floor_number=floor_n,
@@ -86,7 +108,7 @@ def _planner_layout(case, floor_n, rooms):
     )
 
 
-@pytest.mark.parametrize("case,floor_n,rooms,key", [pytest.param(*i, id=i[3]) for i in _ITEMS])
+@pytest.mark.parametrize("case,floor_n,rooms,key", [pytest.param(*i, id=i[3], marks=_fast(i[0])) for i in _ITEMS])
 def test_mask_quality_planner_does_not_regress(monkeypatch, case, floor_n, rooms, key):
     monkeypatch.setattr(settings, "house_planner_enabled", True)
     assert key in _PLANNER_BASELINE, (
@@ -111,7 +133,7 @@ _PLANNER_STILL_REGRESSED: set = set()
 
 
 def _clear_param(key):
-    marks = []
+    marks = _fast({"id": key.split("/")[0]})
     if key in _PLANNER_STILL_REGRESSED:
         marks.append(pytest.mark.xfail(strict=True, reason="planner does not yet clear this Phase-1 regression"))
     return pytest.param(key, id=key, marks=marks)

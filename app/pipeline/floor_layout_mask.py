@@ -99,6 +99,7 @@ over - tracked for a later milestone, not hidden as if solved):
     honestly, not claimed as solved.
 """
 
+import copy
 import heapq
 import math
 import time
@@ -259,6 +260,12 @@ _STAIR_POCKET_TO_HALL = True
 # out: {"path", "grown", "rectified", "runs", "seconds"}.
 LAST_FLOOR_DIAGNOSTICS: dict = {}
 
+# Evaluated 2026-10 as a test/matrix speedup (see scripts/mask_output_dump.py
+# comparison in the Step-1 report): stop growing stage-1 candidates once one has
+# no hard violation and a zero ratchet vector. Changes the candidate pool, so it
+# is NOT output-identical in general - kept OFF unless proven identical.
+EARLY_STOP_ON_CLEAN = False
+
 # Planner bounded fill: the staircase is never the last-resort sink for a
 # leftover pocket when another neighbour exists (see _fill_leftovers_bounded).
 _STAIR_NOT_A_SINK = True
@@ -308,7 +315,7 @@ def _circulation_failures(scored) -> tuple:
     }))
 
 
-def _circulation_variants(stage2, options, targets, core_dimensions, garage_cars, score, diag, stair_block=None) -> list:
+def _circulation_variants(stage2, options, targets, core_dimensions, garage_cars, score, diag, stair_block=None, memo=None) -> list:
     """Phase 4b extra candidates (see _CIRCULATION_VARIANTS). Returns
     [((rooms, scored, stats), path), ...]."""
     out = []
@@ -320,7 +327,7 @@ def _circulation_variants(stage2, options, targets, core_dimensions, garage_cars
             stats: dict = {}
             diag["grown"] += 1
             cand = _grow_floor(
-                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, stats=stats,
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, memo=memo, stats=stats,
                 band_delta=band_delta, flip_egress=flip, stair_at_spine=True,
             )
             sc = score(cand)
@@ -333,7 +340,7 @@ def _circulation_variants(stage2, options, targets, core_dimensions, garage_cars
             stats = {}
             diag["grown"] += 1
             cand = _grow_floor(
-                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, stats=stats,
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, memo=memo, stats=stats,
                 band_delta=band_delta, flip_egress=flip, stair_at_spine=stair if has_stair else None,
                 connect_rooms=need,
             )
@@ -623,6 +630,7 @@ def _layout_with_plan(
 
     def run(room_list: list[dict]) -> tuple[list[dict], list]:
         diag["runs"] += 1
+        memo: dict = {}
         targets = _planner_targets(room_list, plan, unit, garage_cars)
         room_targets = {t["name"]: t["target_area"] for t in targets}
         room_max = {t["name"]: t["max_area"] for t in targets}
@@ -647,7 +655,7 @@ def _layout_with_plan(
             stats1: dict = {}
             diag["grown"] += 1
             candidate = _grow_floor(
-                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, stats=stats1,
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, memo=memo, stats=stats1,
                 band_delta=band_delta, flip_egress=flip, rectify=False,
             )
             signature = tuple(
@@ -668,6 +676,8 @@ def _layout_with_plan(
             ranked.append((-shape_free, order, variant))
             if order < _PHASE2_VARIANT_COUNT and (reference is None or shape_free > reference[0]):
                 reference = (shape_free, variant, candidate, s1, stats1)
+            if EARLY_STOP_ON_CLEAN and not any(v.hard for v in s1.violations) and not any(_ratchet_vector(s1.violations)):
+                break  # EXPERIMENT (default off): first fully clean candidate wins the search
         ranked.sort()
         stage2 = [v for _neg, _order, v in ranked[:_PLANNER_RECTIFY_TOP_K]]
         if reference is not None and reference[1] not in stage2:
@@ -679,12 +689,12 @@ def _layout_with_plan(
             diag["grown"] += 1
             diag["rectified"] += 1
             candidate = _grow_floor(
-                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, stats=stats,
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, memo=memo, stats=stats,
                 band_delta=band_delta, flip_egress=flip,
             )
             options.append((candidate, score(candidate), stats))
         paths = ["rectified"] * len(options)
-        circ_options = _circulation_variants(stage2, options, targets, core_dimensions, garage_cars, score, diag, stair_block) if (
+        circ_options = _circulation_variants(stage2, options, targets, core_dimensions, garage_cars, score, diag, stair_block, memo) if (
             _CIRCULATION_VARIANTS and _CIRCULATION_SCORING
         ) else []
         if reference is not None:
@@ -693,7 +703,7 @@ def _layout_with_plan(
             stats_r: dict = {}
             diag["grown"] += 1
             reconnected = _grow_floor(
-                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, stats=stats_r,
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, memo=memo, stats=stats_r,
                 band_delta=band_delta, flip_egress=flip, rectify="reconnect",
             )
             options.append((reconnected, score(reconnected), stats_r))
@@ -1007,22 +1017,31 @@ def _room_targets(ordered_rooms: list[dict], unit: str, garage_cars: int | None)
     return targets
 
 
-def _grow_floor(
+def _copy_state(x):
+    """Fast structural copy for the _grow_floor memo snapshots: lists, dicts,
+    sets (of immutable tuples) and tuples are rebuilt; scalars are shared.
+    Equivalent to copy.deepcopy for these types, several times faster."""
+    t = type(x)
+    if t is list:
+        return [_copy_state(i) for i in x]
+    if t is tuple:
+        return tuple([_copy_state(i) for i in x])
+    if t is dict:
+        return {k: _copy_state(v) for k, v in x.items()}
+    if t is set:
+        return set(x)
+    return x
+
+
+def _grow_filled(
     targets: list[dict], dimensions: dict, spine_width_delta: int, cross_link: bool,
-    garage_cars: int | None = None, planner: bool = False, stats: dict | None = None,
-    band_delta: int = 0, flip_egress: bool = False, rectify: bool | str = True,
-    stair_at_spine: bool | None = None, connect_rooms: tuple = (), stair_block: dict | None = None,
-) -> list[dict]:
-    # Phase 3: rectify=False also keeps the legacy row-major decomposition, so
-    # a planner candidate grown without rectification is exactly what Phase 2
-    # produced (the reference the quality gate's baseline was built from).
-    """One candidate: grid + spine + seed + grow + fill + decompose.
-    Returns room dicts in CORE coordinates (front always at low-y - see
-    layout_floor_with_warnings()'s facing transform), tiling
-    [0,length]x[0,width] exactly with no holes. The circulation spine
-    becomes its own "Hallway" room (same name the rect engine's own
-    corridor uses) so the tiling stays complete and blueprint_svg.py's
-    existing hallway-adjacency door logic keeps working unchanged."""
+    garage_cars: int | None, planner: bool, stats: dict | None,
+    band_delta: int, flip_egress: bool, stair_at_spine: bool | None, stair_block: dict | None,
+):
+    """First half of _grow_floor(): grid + spine + seed + grow + fill, up to
+    and including _ensure_minimum_presence(). Everything here is independent
+    of the rectify / connect_rooms options, which is what lets a caller
+    memoize it (see _grow_floor(memo=...)). Returns the mutable grid state."""
     length = float(dimensions.get("length") or 1)
     width = float(dimensions.get("width") or 1)
     unit = dimensions.get("unit") or "ft"
@@ -1192,6 +1211,50 @@ def _grow_floor(
     else:
         _fill_leftovers(owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells, zones, band)
     _ensure_minimum_presence(cells_by_room, min_cells, owner)
+    return (owner, cells_by_room, target_cells, min_cells, max_cells, zones, band, rows, cols,
+            cell_w, cell_h, unit, stair_i, stair_cells)
+
+def _grow_floor(
+    targets: list[dict], dimensions: dict, spine_width_delta: int, cross_link: bool,
+    garage_cars: int | None = None, planner: bool = False, stats: dict | None = None,
+    band_delta: int = 0, flip_egress: bool = False, rectify: bool | str = True,
+    stair_at_spine: bool | None = None, connect_rooms: tuple = (), stair_block: dict | None = None,
+    memo: dict | None = None,
+) -> list[dict]:
+    # Phase 3: rectify=False also keeps the legacy row-major decomposition, so
+    # a planner candidate grown without rectification is exactly what Phase 2
+    # produced (the reference the quality gate's baseline was built from).
+    """One candidate: grid + spine + seed + grow + fill + decompose.
+    Returns room dicts in CORE coordinates (front always at low-y - see
+    layout_floor_with_warnings()'s facing transform), tiling
+    [0,length]x[0,width] exactly with no holes. The circulation spine
+    becomes its own "Hallway" room (same name the rect engine's own
+    corridor uses) so the tiling stays complete and blueprint_svg.py's
+    existing hallway-adjacency door logic keeps working unchanged."""
+    # Memoized (pure speedup): every candidate that differs only in rectify /
+    # connect_rooms shares the same grown+filled grid, and the circulation-arm
+    # variants share the same rectified grid. Snapshots are deep-copied in and
+    # out so the cached state is never mutated.
+    mkey = None
+    if memo is not None and planner and not stats:
+        mkey = (spine_width_delta, cross_link, band_delta, flip_egress,
+                _STAIR_AT_SPINE if stair_at_spine is None else stair_at_spine)
+    snap = memo.get(("A", mkey)) if mkey is not None else None
+    if snap is not None:
+        (owner, cells_by_room, target_cells, min_cells, max_cells, zones, band, rows, cols,
+         cell_w, cell_h, unit, stair_i, stair_cells), fill_stats = _copy_state(snap)
+        if stats is not None:
+            stats.update(fill_stats)
+    else:
+        (owner, cells_by_room, target_cells, min_cells, max_cells, zones, band, rows, cols,
+         cell_w, cell_h, unit, stair_i, stair_cells) = _grow_filled(
+            targets, dimensions, spine_width_delta, cross_link, garage_cars, planner, stats,
+            band_delta, flip_egress, stair_at_spine, stair_block,
+        )
+        if mkey is not None:
+            memo[("A", mkey)] = _copy_state((
+                (owner, cells_by_room, target_cells, min_cells, max_cells, zones, band, rows, cols,
+                 cell_w, cell_h, unit, stair_i, stair_cells), dict(stats or {})))
     if planner and rectify == "reconnect":
         n_t = len(targets)
         if zones is not None and band > 0:
@@ -1205,10 +1268,19 @@ def _grow_floor(
             _ShapeCtx(cols, rows, cell_w, cell_h, unit, targets), stats,
         )
     elif planner and rectify:
-        _rectify_rooms(
-            owner, cells_by_room, targets, target_cells, min_cells, max_cells, zones, band,
-            _ShapeCtx(cols, rows, cell_w, cell_h, unit, targets), stats,
-        )
+        bkey = ("B", mkey) if (mkey is not None and rectify is True) else None
+        bsnap = memo.get(bkey) if bkey is not None else None
+        if bsnap is not None:
+            owner, cells_by_room, rect_stats = _copy_state(bsnap)
+            if stats is not None:
+                stats.update(rect_stats)
+        else:
+            _rectify_rooms(
+                owner, cells_by_room, targets, target_cells, min_cells, max_cells, zones, band,
+                _ShapeCtx(cols, rows, cell_w, cell_h, unit, targets), stats,
+            )
+            if bkey is not None:
+                memo[bkey] = _copy_state((owner, cells_by_room, dict(stats or {})))
     if stair_cells and stats is not None:
         stats["stair_block_intact"] = cells_by_room[stair_i] == stair_cells
     if planner and connect_rooms:
@@ -3165,10 +3237,17 @@ def _decompose_planner(cells) -> list[tuple[int, int, int, int]]:
     1+1 column-major but can be 3+ row-major); ties prefer the one with the
     bigger largest part (what the scorer judges for width), then row-major.
     Exact partition either way."""
-    row_major = _decompose_fast(cells)
+    # One pass builds both the row and the column bitmasks (same masks as
+    # two _row_masks() calls).
+    row_masks: dict[int, int] = {}
+    col_masks: dict[int, int] = {}
+    for c, r in cells:
+        row_masks[r] = row_masks.get(r, 0) | (1 << c)
+        col_masks[c] = col_masks.get(c, 0) | (1 << r)
+    row_major = _decompose_masks(row_masks)
     if len(row_major) == 1:
         return row_major
-    col_major = [(r, c, h, w) for (c, r, w, h) in _decompose_masks(_row_masks(cells, transpose=True))]
+    col_major = [(r, c, h, w) for (c, r, w, h) in _decompose_masks(col_masks)]
     best = None
     best_key = None
     for order, parts in enumerate((row_major, col_major)):
@@ -3206,6 +3285,11 @@ def _components(cells) -> int:
     return _parts_components(_decompose_fast(cells)) if cells else 0
 
 
+_SHAPE_CACHES: dict = {}
+_SHAPE_CACHE_MAX_GEOMETRIES = 16
+_SHAPE_CACHE_MAX_ENTRIES = 400_000
+
+
 class _ShapeCtx:
     """Per-candidate context for _rectify_rooms (grid geometry + room meta)."""
 
@@ -3219,7 +3303,16 @@ class _ShapeCtx:
         from app.pipeline.planning_rules import DAYLIGHT_HARD_CATEGORIES, DAYLIGHT_SOFT_CATEGORIES
 
         self.daylit = [t["category"] in DAYLIGHT_HARD_CATEGORIES + DAYLIGHT_SOFT_CATEGORIES for t in targets]
-        self._cache: dict = {}
+        # Shared across every candidate with the same grid geometry: info() and
+        # the lower bound are pure functions of (geometry, cell set), so a
+        # cell-set seen while rectifying one candidate is free on the next.
+        # Bounded - cleared wholesale when it grows past _SHAPE_CACHE_MAX_ENTRIES.
+        geom = (cols, rows, cell_w, cell_h)
+        if len(_SHAPE_CACHES) > _SHAPE_CACHE_MAX_GEOMETRIES:
+            _SHAPE_CACHES.clear()
+        self._cache: dict = _SHAPE_CACHES.setdefault(geom, {})
+        if len(self._cache) > _SHAPE_CACHE_MAX_ENTRIES:
+            self._cache.clear()
 
     def info(self, cells) -> tuple[float, list, float]:
         """(shape cost, decomposed parts, best daylight edge in real units)."""
@@ -3656,7 +3749,25 @@ _CARVE_SIZE_SLACK = 0.25  # corner carves stay within +-25% of the room's curren
 _CARVE_MAX_ASPECT = 3.0
 
 
-def _pair_partitions(
+_PAIR_PARTITION_CACHE: dict = {}
+_GIVE_BACK_CACHE: dict = {}
+_PURE_CACHE_MAX_ENTRIES = 20_000
+
+
+def _pair_partitions(union, d_bounds, o_bounds, d_size, o_size):
+    """Memoized _pair_partitions_uncached() (pure in its arguments): the same
+    two-room union is re-split many times across candidates and rectify
+    iterations. Returns a list (every caller iterates it to the end)."""
+    key = (frozenset(union), d_bounds, o_bounds, d_size, o_size)
+    hit = _PAIR_PARTITION_CACHE.get(key)
+    if hit is None:
+        if len(_PAIR_PARTITION_CACHE) >= _PURE_CACHE_MAX_ENTRIES:
+            _PAIR_PARTITION_CACHE.clear()
+        hit = _PAIR_PARTITION_CACHE[key] = list(_pair_partitions_uncached(union, d_bounds, o_bounds, d_size, o_size))
+    return hit
+
+
+def _pair_partitions_uncached(
     union: set, d_bounds: tuple[int, int], o_bounds: tuple[int, int], d_size: int, o_size: int
 ):
     """Candidate (new_d, new_o) splits of `union`, both sizes within bounds:
@@ -3751,6 +3862,17 @@ def _pair_partitions(
 
 
 def _give_back(r_cells: set, frag: frozenset, donor_rest: set, k: int, cols: int, rows: int) -> frozenset:
+    """Memoized _give_back_uncached() (pure in its arguments)."""
+    key = (frozenset(r_cells), frag, frozenset(donor_rest), k, cols, rows)
+    hit = _GIVE_BACK_CACHE.get(key)
+    if hit is None:
+        if len(_GIVE_BACK_CACHE) >= _PURE_CACHE_MAX_ENTRIES:
+            _GIVE_BACK_CACHE.clear()
+        hit = _GIVE_BACK_CACHE[key] = _give_back_uncached(r_cells, frag, donor_rest, k, cols, rows)
+    return hit
+
+
+def _give_back_uncached(r_cells: set, frag: frozenset, donor_rest: set, k: int, cols: int, rows: int) -> frozenset:
     """Picks `k` of the recipient's ORIGINAL cells to hand back to the donor
     in a swap: farthest (BFS distance through recipient + fragment) from the
     fragment first, each one touching the donor or an already-picked cell, so
