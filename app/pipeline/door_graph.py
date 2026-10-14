@@ -85,8 +85,33 @@ def compute_hallway_adjacent(rects: list[dict]) -> frozenset[int]:
     )
 
 
+def orphaned_ensuites(rects: list[dict]) -> frozenset[int]:
+    """Phase 4b: id() of every suite-tagged bathroom/powder room that shares
+    NO wall with any non-bathroom room carrying its own suite tag. Such a
+    room is an ensuite only on paper - it cannot be entered from its bedroom
+    - so for door purposes it is a COMMON bathroom: it may open onto the
+    hallway (should_suppress_direct_door's ensuite-to-hallway suppression
+    no longer applies to it). Without this, the planner's upper floors
+    produced doorless "ensuites" sitting across the corridor from their
+    bedroom."""
+    out = set()
+    for r in rects:
+        suite = r.get("suite")
+        if suite is None or classify_room_category(r.get("name") or "") not in ("bathroom", "powder"):
+            continue
+        partners = [
+            o for o in rects
+            if o is not r and o.get("suite") == suite
+            and classify_room_category(o.get("name") or "") not in ("bathroom", "powder")
+        ]
+        if not any(shared_edge_between_rooms(r, o) is not None for o in partners):
+            out.add(id(r))
+    return frozenset(out)
+
+
 def should_suppress_direct_door(
-    a: dict, b: dict, hallway_adjacent: frozenset[int] | None = None
+    a: dict, b: dict, hallway_adjacent: frozenset[int] | None = None,
+    orphan_ensuites: frozenset[int] | None = None,
 ) -> bool:
     """Real circulation corridor (see floor_layout.py's module docstring):
     when a Hallway rect exists on this floor, a direct door between two
@@ -131,7 +156,10 @@ def should_suppress_direct_door(
         # hallway door is kept (that's how rooms reach the corridor).
         other = b if a_hall else a
         if classify_room_category(other["name"]) == "bathroom" and other.get("suite") is not None:
-            return True
+            # An "ensuite" that cannot reach its own bedroom is a common
+            # bathroom in practice (orphaned_ensuites()) - it keeps its
+            # hallway door. None (default) = the original rule exactly.
+            return not (orphan_ensuites is not None and id(other) in orphan_ensuites)
         return False
     if _zone_key(a["name"]) != 2 or _zone_key(b["name"]) != 2:
         return False
@@ -154,6 +182,33 @@ def should_suppress_direct_door(
     if suite_a is not None and suite_a == suite_b:
         return False
     return True
+
+
+WET_ROOM_CATEGORIES = ("bathroom", "powder")
+BATHROOM_FORBIDDEN_NEIGHBORS = ("living", "dining", "kitchen", "family")
+
+
+def should_suppress_bathroom_public_door(a: dict, b: dict) -> bool:
+    """Phase 4b circulation rule, applied on EVERY floor (with or without a
+    hallway): a bathroom / powder room never opens straight into a living,
+    dining, kitchen or family room. It may open onto the hallway, an
+    entry/foyer, or its own suite bedroom (those doors are unaffected). Only
+    a pair carrying the SAME suite tag is exempt (an ensuite is never tagged
+    to a living room in practice, but the rule is stated by suite, not by
+    name). If this leaves a bathroom with no door at all, that is a LAYOUT
+    problem - no substitute door is invented here; the scorer's
+    reachability check (layout_quality) reports it as `unreachable`."""
+    a_cat, b_cat = classify_room_category(a.get("name") or ""), classify_room_category(b.get("name") or "")
+    if a_cat in WET_ROOM_CATEGORIES:
+        other_cat, wet, other = b_cat, a, b
+    elif b_cat in WET_ROOM_CATEGORIES:
+        other_cat, wet, other = a_cat, b, a
+    else:
+        return False
+    if other_cat not in BATHROOM_FORBIDDEN_NEIGHBORS:
+        return False
+    suite = wet.get("suite")
+    return not (suite is not None and suite == other.get("suite"))
 
 
 GARAGE_SUPPRESSED_NEIGHBORS = ("living", "kitchen", "dining")
@@ -196,6 +251,14 @@ FACING_ORDER = ("north", "south", "east", "west")
 def front_door_opening(
     rects: list[dict], facing: str | None, footprint_bbox: tuple[float, float, float, float]
 ) -> dict | None:
+    """Edge-only wrapper around front_door_room() (the historical API every
+    renderer calls). See front_door_room() for the selection rules."""
+    return front_door_room(rects, facing, footprint_bbox)[1]
+
+
+def front_door_room(
+    rects: list[dict], facing: str | None, footprint_bbox: tuple[float, float, float, float]
+) -> tuple[dict | None, dict | None]:
     """Picks the exterior boundary edge matching `facing` and returns a
     door-opening edge-dict of the SAME shape shared_edge() returns
     ({orientation, pos, start, end}), spanning whichever real room's own
@@ -218,12 +281,19 @@ def front_door_opening(
     from 0/length/width" logic whenever the footprint fills the plot (the
     normal case), so this is a behavior-preserving refactor there.
 
-    Returns None when `facing` isn't a real value - matches this module's
-    existing "no signal, no mark" restraint (e.g. `_furnish_*`'s silent
-    skip for an unrecognized room name)."""
+    Returns (None, None) when `facing` isn't a real value - matches this
+    module's existing "no signal, no mark" restraint (e.g. `_furnish_*`'s
+    silent skip for an unrecognized room name).
+
+    Phase 4b rule: the entrance is NEVER the garage. Preference: a foyer/
+    entry touching the facing edge, else a non-garage public room touching
+    it, else any other non-garage room touching it. When only the garage
+    touches the facing edge, returns (None, None) - no front door is drawn
+    on that floor and the scorer reports `entry_missing`. (The garage's own
+    vehicle door is not the entrance.)"""
     facing = (facing or "").strip().lower()
     if facing not in FACING_ORDER:
-        return None
+        return None, None
 
     fp_x0, fp_y0, fp_x1, fp_y1 = footprint_bbox
 
@@ -250,17 +320,28 @@ def front_door_opening(
     # which would wrongly offer a door opening onto space the room doesn't
     # actually occupy. A plain-rectangle room's single part is its bbox, so
     # this is byte-identical to before there.
-    candidates = [(r, p) for r in rects for p in room_parts(r) if touches(p)]
+    candidates = [
+        (r, p) for r in rects for p in room_parts(r)
+        if touches(p) and classify_room_category(r.get("name") or "") != "garage"
+    ]
     if not candidates:
-        return None
+        return None, None
 
     foyers = [(r, p) for r, p in candidates if classify_room_category(r["name"]) == "foyer"]
     public = [(r, p) for r, p in candidates if _zone_key(r["name"]) == 0]
-    pool = foyers or public or candidates
-    _room, part = max(pool, key=lambda rp: span(rp[1])[1] - span(rp[1])[0])
+    # Phase 4b: the last-resort front door prefers any room that is not a
+    # bedroom/bathroom/powder room (a hallway, a lounge, a study...) before
+    # falling back to a private room - a front door straight into a
+    # bathroom is never chosen while another room touches the facing edge.
+    not_private = [
+        (r, p) for r, p in candidates
+        if classify_room_category(r["name"]) not in ("bedroom", "bathroom", "powder")
+    ]
+    pool = foyers or public or not_private or candidates
+    room, part = max(pool, key=lambda rp: span(rp[1])[1] - span(rp[1])[0])
 
     start, end = span(part)
-    return {"orientation": orientation, "pos": pos, "start": start, "end": end}
+    return room, {"orientation": orientation, "pos": pos, "start": start, "end": end}
 
 
 def room_door_walls(rect: dict, door_edges: list[dict]) -> set[str]:
@@ -297,10 +378,12 @@ def room_door_walls(rect: dict, door_edges: list[dict]) -> set[str]:
 class DoorGraph(NamedTuple):
     """pairs: every adjacent room pair as (a, b, edge, suppressed) - the
     DXF needs the suppressed ones too (it still draws their wall).
-    front: the front-door opening edge (ground floor only) or None."""
+    front: the front-door opening edge (ground floor only) or None.
+    front_room: the room the front door opens into (Phase 4b), or None."""
 
     pairs: list
     front: dict | None
+    front_room: dict | None = None
 
     @property
     def interior(self) -> list:
@@ -327,18 +410,20 @@ def build_door_graph(
     extracted unchanged: hallway/entry gating, the `combinations` loop, the
     suppression calls and the ground-floor-only front door.
 
-    parts_aware=False uses the bbox-only shared_edge() instead of
-    shared_edge_between_rooms() (kaggle_autocad's current behaviour; identical
-    for single-part rooms). suppress_garage_doors=False skips the
-    garage->living/kitchen/dining suppression (the DXF's current behaviour -
-    TODO(Phase 4b): the DXF should apply it too, a deliberate later change).
-    include_front_door=False skips the front-door lookup."""
+    Phase 4b: every caller (PNG, DXF, Concept Layout, scorer) now uses the
+    defaults - parts-aware shared edges and garage-door suppression - so all
+    renderers agree. The bathroom rule (should_suppress_bathroom_public_door)
+    applies on every floor, with or without a hallway. parts_aware=False /
+    suppress_garage_doors=False remain only as explicit opt-outs (unused by
+    production callers). include_front_door=False skips the front-door
+    lookup."""
     dims = plot_dims or {}
     length = float(dims.get("length") or 1)
     width = float(dims.get("width") or 1)
     has_hallway = any(r.get("name") == "Hallway" for r in rects)
     has_entry = any(classify_room_category(r.get("name") or "") == "foyer" for r in rects)
     hallway_adjacent = compute_hallway_adjacent(rects)
+    orphans = orphaned_ensuites(rects) if has_hallway else frozenset()
     edge_fn = shared_edge_between_rooms if parts_aware else shared_edge
     pairs = []
     for a, b in combinations(rects, 2):
@@ -346,14 +431,186 @@ def build_door_graph(
         if edge is None:
             continue
         suppressed = False
-        if has_hallway and should_suppress_direct_door(a, b, hallway_adjacent):
+        if has_hallway and should_suppress_direct_door(a, b, hallway_adjacent, orphans):
             suppressed = True
         elif suppress_garage_doors and has_entry and should_suppress_garage_direct_door(a, b):
             suppressed = True
+        elif should_suppress_bathroom_public_door(a, b):
+            suppressed = True
         pairs.append((a, b, edge, suppressed))
 
-    front = None
+    front = front_room = None
     if include_front_door and floor_number == 1:
         fp = _footprint_bbox(rects) or (0.0, 0.0, length, width)
-        front = front_door_opening(rects, (facing or "").strip().lower(), fp)
-    return DoorGraph(pairs, front)
+        front_room, front = front_door_room(rects, (facing or "").strip().lower(), fp)
+    return DoorGraph(pairs, front, front_room)
+
+
+# ---- Phase 4b: circulation (reachability from the entry) ----
+# Rooms whose failures are NOT counted (they still tile and still carry
+# doors): the planner's open remainder rooms (ground-floor Verandah, upper
+# Terrace) and any other porch-category open area - rendering them unwalled
+# is a later phase, so judging their "reachability" now would only measure
+# an artifact of drawing them as walled rooms.
+CIRCULATION_EXCLUDED_CATEGORIES = ("porch",)
+PRIVATE_TRANSIT_CATEGORIES = ("bedroom", "bathroom", "powder")
+DEAD_END_HALL_SOFT_M = 1.5
+
+
+def _graph_root(rects: list[dict], graph: DoorGraph, floor_number: int, adj: list[set]) -> tuple[int | None, str]:
+    """(index, how) of the BFS start node. Floor 1: the front-door room.
+    Upper floors: the staircase room. Fallbacks (reported via `how`): the
+    hallway, else the room with the most doors."""
+    idx = {id(r): i for i, r in enumerate(rects)}
+    if floor_number == 1 and graph.front_room is not None and id(graph.front_room) in idx:
+        return idx[id(graph.front_room)], "front_door"
+    if floor_number != 1:
+        for i, r in enumerate(rects):
+            if classify_room_category(r.get("name") or "") == "staircase":
+                return i, "staircase"
+    for i, r in enumerate(rects):
+        if r.get("name") == "Hallway":
+            return i, "hallway_fallback"
+    if not rects:
+        return None, "empty"
+    return max(range(len(rects)), key=lambda i: (len(adj[i]), -i)), "most_connected_fallback"
+
+
+def _project_on_part(e: dict, p: dict, horizontal: bool) -> tuple[float, float] | None:
+    """Projection of a door/junction edge lying on part p's perimeter onto
+    p's long axis (x when `horizontal`, else y); None if not on p."""
+    x0, y0, x1, y1 = p["x"], p["y"], p["x"] + p["w"], p["y"] + p["h"]
+    if e["orientation"] == "horizontal":
+        if not (abs(e["pos"] - y0) < EDGE_TOL or abs(e["pos"] - y1) < EDGE_TOL):
+            return None
+        s, t = max(e["start"], x0), min(e["end"], x1)
+        if t <= s + EDGE_TOL:
+            return None
+        return (s, t) if horizontal else ((y0, y0) if abs(e["pos"] - y0) < EDGE_TOL else (y1, y1))
+    if not (abs(e["pos"] - x0) < EDGE_TOL or abs(e["pos"] - x1) < EDGE_TOL):
+        return None
+    s, t = max(e["start"], y0), min(e["end"], y1)
+    if t <= s + EDGE_TOL:
+        return None
+    return (s, t) if not horizontal else ((x0, x0) if abs(e["pos"] - x0) < EDGE_TOL else (x1, x1))
+
+
+def _dead_end_hall_length(rects: list[dict], graph: DoorGraph) -> float:
+    """Longest stretch at the end of a Hallway part (along its long axis)
+    beyond the last door / hallway junction serving it, in plot units.
+    0.0 when there is no hallway."""
+    hall = next((r for r in rects if r.get("name") == "Hallway"), None)
+    if hall is None:
+        return 0.0
+    edges = [e for a, b, e in graph.interior if a is hall or b is hall]
+    if graph.front_room is hall and graph.front is not None:
+        edges.append(graph.front)
+    parts = room_parts(hall)
+    worst = 0.0
+    for i, p in enumerate(parts):
+        horizontal = p["w"] >= p["h"]
+        lo = p["x"] if horizontal else p["y"]
+        hi = lo + (p["w"] if horizontal else p["h"])
+        served: list[tuple[float, float]] = []
+        boundary = list(edges)
+        for j, q in enumerate(parts):
+            if j != i:
+                e = shared_edge(p, q)
+                if e is not None:
+                    boundary.append(e)
+        for e in boundary:
+            iv = _project_on_part(e, p, horizontal)
+            if iv is not None:
+                served.append(iv)
+        if not served:
+            worst = max(worst, hi - lo)
+            continue
+        first = min(s for s, _e in served)
+        last = max(e for _s, e in served)
+        worst = max(worst, first - lo, hi - last)
+    return worst
+
+
+def circulation_report(
+    rects: list[dict], plot_dims: dict | None, facing: str | None, floor_number: int = 1
+) -> dict:
+    """Phase 4b reachability over the REAL door graph (build_door_graph, i.e.
+    exactly the doors every renderer draws, plus the ground-floor front door).
+
+    BFS starts at the ENTRY: floor 1 = the front-door room; upper floors =
+    the staircase room (fallbacks: hallway, then the most-connected room -
+    reported in `root_how`). The Hallway is ordinary circulation.
+
+    - unreachable: rooms with no door path from the entry (HARD).
+    - pass_through_private: rooms reachable ONLY through a bedroom/bathroom/
+      powder room that is not their own suite partner. An ensuite bathroom
+      (same suite tag) or a closet reached directly from a properly-reached
+      bedroom is fine (HARD otherwise).
+    - entry_is_garage / entry_missing (floor 1 only, HARD).
+    - dead_end_hall_len: longest hallway stretch past its last door (plot
+      units; SOFT above DEAD_END_HALL_SOFT_M).
+    Porch-category rooms (Verandah/Terrace) are traversable but never counted
+    as failures (see CIRCULATION_EXCLUDED_CATEGORIES)."""
+    graph = build_door_graph(rects, plot_dims, facing, floor_number)
+    n = len(rects)
+    idx = {id(r): i for i, r in enumerate(rects)}
+    adj: list[set] = [set() for _ in range(n)]
+    for a, b, _e in graph.interior:
+        ia, ib = idx[id(a)], idx[id(b)]
+        adj[ia].add(ib)
+        adj[ib].add(ia)
+    cats = [classify_room_category(r.get("name") or "") for r in rects]
+    names = [str(r.get("name") or "") for r in rects]
+    root, how = _graph_root(rects, graph, floor_number, adj)
+
+    entry_missing = floor_number == 1 and graph.front_room is None
+    entry_is_garage = floor_number == 1 and graph.front_room is not None and cats[idx[id(graph.front_room)]] == "garage"
+
+    counted = [i for i in range(n) if cats[i] not in CIRCULATION_EXCLUDED_CATEGORIES]
+    if root is None:
+        return {
+            "root": None, "root_how": how, "unreachable": [], "pass_through_private": [],
+            "entry_is_garage": entry_is_garage, "entry_missing": entry_missing, "dead_end_hall_len": 0.0,
+        }
+
+    full = {root}
+    queue = [root]
+    while queue:
+        u = queue.pop()
+        for v in adj[u]:
+            if v not in full:
+                full.add(v)
+                queue.append(v)
+
+    clean = {root}
+    queue = [root]
+    while queue:
+        u = queue.pop()
+        if u != root and cats[u] in PRIVATE_TRANSIT_CATEGORIES:
+            continue  # reached, but never passed through
+        for v in adj[u]:
+            if v not in clean:
+                clean.add(v)
+                queue.append(v)
+    ok = set(clean)
+    for u in clean:
+        if cats[u] != "bedroom":
+            continue
+        for v in adj[u]:
+            if v in ok:
+                continue
+            same_suite = rects[u].get("suite") is not None and rects[u].get("suite") == rects[v].get("suite")
+            if (cats[v] in ("bathroom", "powder") and same_suite) or cats[v] == "closet":
+                ok.add(v)
+
+    unreachable = [names[i] for i in counted if i not in full]
+    pass_through = [names[i] for i in counted if i in full and i not in ok]
+    return {
+        "root": names[root],
+        "root_how": how,
+        "unreachable": unreachable,
+        "pass_through_private": pass_through,
+        "entry_is_garage": entry_is_garage,
+        "entry_missing": entry_missing,
+        "dead_end_hall_len": _dead_end_hall_length(rects, graph),
+    }

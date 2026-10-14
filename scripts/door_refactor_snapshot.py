@@ -100,9 +100,14 @@ def door_decisions(rects, dimensions, facing, floor_number) -> dict:
         edge = svg._shared_edge_between_rooms(a, b)
         if edge is None:
             continue
-        if has_hallway and svg._should_suppress_direct_door(a, b, hallway_adjacent):
+        orphans = svg.orphaned_ensuites(rects) if (has_hallway and hasattr(svg, "orphaned_ensuites")) else None
+        if has_hallway and svg._should_suppress_direct_door(a, b, hallway_adjacent, *( [orphans] if orphans is not None else [])):
             continue
         if has_entry and svg._should_suppress_garage_direct_door(a, b):
+            continue
+        # Phase 4b rule (a no-op on the Phase 4a "before" snapshot's inputs
+        # only where no bathroom touches a living/dining/kitchen/family room).
+        if hasattr(svg, "_should_suppress_bathroom_public_door") and svg._should_suppress_bathroom_public_door(a, b):
             continue
         interior.append([a["name"], b["name"], {k: (_r(v) if isinstance(v, float) else v) for k, v in edge.items()}])
     fp = footprint_bbox(rects) or (0.0, 0.0, length, width)

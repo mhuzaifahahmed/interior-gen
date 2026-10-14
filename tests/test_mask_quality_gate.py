@@ -28,8 +28,13 @@ with open(_PLANNER_BASELINE_PATH, encoding="utf-8") as _f:
 _ITEMS = list(iter_floors())
 _COVERAGE_TOLERANCE_PCT = 0.5
 
-# Circulation fields filled by Phase 4; ratchet only when set in BOTH.
-_LATER_PHASE_FIELDS = ("unreachable", "pass_through_private")
+# Circulation fields (Phase 4b, door_graph.circulation_report); ratchet
+# only when set in BOTH (a baseline from before Phase 4b has them as None).
+_LATER_PHASE_FIELDS = ("unreachable", "pass_through_private", "entry_is_garage", "entry_missing")
+# Planner-on absolute targets (Phase 4b): reached on every matrix floor, so
+# they are held at 0, not just "no worse". pass_through_private is NOT at 0
+# yet (see the Phase 4b report) and is only ratcheted.
+_PLANNER_ZERO_FIELDS = ("unreachable", "entry_is_garage", "entry_missing")
 
 
 # Phase 1 fixed real spec bugs (master preferred < min, foyer max < preferred).
@@ -64,7 +69,7 @@ def test_mask_quality_does_not_regress(case, floor_n, rooms, key):
     )
     cur = measure_floor(
         rects, case["plot"], total_floors=len(case["floors"]), floor_number=floor_n,
-        garage_cars=case["garage_cars"],
+        garage_cars=case["garage_cars"], facing=case["facing"],
     )
     _assert_no_regression(case, cur, _BASELINE[key])
 
@@ -77,6 +82,7 @@ def _planner_layout(case, floor_n, rooms):
     return measure_floor(
         rects, case["plot"], total_floors=len(case["floors"]), floor_number=floor_n,
         garage_cars=case["garage_cars"], max_overrides=dict(plan.for_floor(floor_n).room_max) or None,
+        facing=case["facing"],
     )
 
 
@@ -87,7 +93,10 @@ def test_mask_quality_planner_does_not_regress(monkeypatch, case, floor_n, rooms
         f"{key} missing from planner baseline - run "
         "`python scripts/mask_quality_report.py --planner on --update-baseline`"
     )
-    _assert_no_regression(case, _planner_layout(case, floor_n, rooms), _PLANNER_BASELINE[key])
+    cur = _planner_layout(case, floor_n, rooms)
+    _assert_no_regression(case, cur, _PLANNER_BASELINE[key])
+    for field in _PLANNER_ZERO_FIELDS:
+        assert cur[field] == [], (field, cur[field])
 
 
 # The two Phase-1 regressions Phase 2 was meant to clear, judged with the

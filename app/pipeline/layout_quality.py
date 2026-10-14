@@ -236,6 +236,8 @@ def score_floor_layout(
     planner_checks: bool = False,
     room_targets: dict | None = None,
     room_max: dict | None = None,
+    facing: str | None = None,
+    floor_number: int = 1,
 ) -> LayoutScore:
     """Scores one floor's already-computed rectangles (floor_layout.py's
     output shape - [{"name","x","y","w","h"}, ...]) for real-world
@@ -246,7 +248,15 @@ def score_floor_layout(
     and flag-off mask scoring are unchanged) adds: HARD `oversized` (area >
     1.10 x max), HARD `hierarchy_inverted` (largest living < largest dining),
     SOFT `over_target` (area > 1.10 x target). `room_targets`/`room_max`
-    (name -> area) override room_specs' target/max for named rooms."""
+    (name -> area) override room_specs' target/max for named rooms.
+
+    Phase 4b: with `planner_checks` AND a `facing`, also scores circulation
+    over the real door graph (door_graph.circulation_report): HARD
+    `unreachable`, `pass_through_private`, `entry_is_garage`,
+    `entry_missing`; SOFT `dead_end_hall` (a hallway stretch longer than
+    1.5 m past its last door). `facing` is in the rects' own coordinates
+    (the mask engine scores core coordinates, where the front is always
+    "north"). Without `facing` nothing changes."""
     unit = dimensions.get("unit") or "ft"
     violations: list[Violation] = []
 
@@ -418,9 +428,41 @@ def score_floor_layout(
     if planner_checks:
         violations.extend(_planner_size_violations(rects, unit, garage_cars, room_targets, room_max))
         violations.extend(shape_violations(rects))
+        if facing is not None:
+            violations.extend(circulation_violations(rects, dimensions, facing, floor_number))
 
     score = -sum(violation_penalty(v) for v in violations)
     return LayoutScore(score=score, violations=violations)
+
+
+CIRCULATION_HARD_KINDS = ("unreachable", "pass_through_private", "entry_is_garage", "entry_missing")
+CIRCULATION_KINDS = CIRCULATION_HARD_KINDS + ("dead_end_hall",)
+# Below one gate-tracked hard violation (HARD_VIOLATION_PENALTY) on purpose:
+# the mask engine picks circulation-correct candidates through an explicit
+# per-floor safety net (floor_layout_mask._layout_with_plan), never by
+# letting this penalty outbid a ratcheted metric.
+CIRCULATION_PENALTY = 200.0
+
+
+def circulation_violations(rects: list[dict], dimensions: dict, facing: str, floor_number: int = 1) -> list[Violation]:
+    """Phase 4b circulation violations (see score_floor_layout). Lazy import:
+    door_graph imports floor_layout, which imports this module."""
+    from app.pipeline.door_graph import DEAD_END_HALL_SOFT_M, circulation_report
+
+    unit = dimensions.get("unit") or "ft"
+    rep = circulation_report(rects, dimensions, facing, floor_number)
+    out: list[Violation] = []
+    for name in rep["unreachable"]:
+        out.append(Violation(name, "unreachable", True, f"no door path from {rep['root']}"))
+    for name in rep["pass_through_private"]:
+        out.append(Violation(name, "pass_through_private", True, f"reachable from {rep['root']} only through a bedroom/bathroom"))
+    if rep["entry_is_garage"]:
+        out.append(Violation("__floor__", "entry_is_garage", True, "front door opens into the garage"))
+    if rep["entry_missing"]:
+        out.append(Violation("__floor__", "entry_missing", True, "no non-garage room on the facing edge for the front door"))
+    if rep["dead_end_hall_len"] > to_plot_unit(DEAD_END_HALL_SOFT_M, unit) + 1e-6:
+        out.append(Violation("Hallway", "dead_end_hall", False, f"{rep['dead_end_hall_len']:.1f} past the last door"))
+    return out
 
 
 _SOFT_PENALTY_BY_KIND = {
@@ -438,6 +480,8 @@ def violation_penalty(v: Violation) -> float:
         return WRAPPED_PENALTY
     if v.kind in ("bedroom_aspect", "stair_oversized"):
         return SHAPE_CAP_PENALTY if v.hard else IMBALANCE_PENALTY
+    if v.kind in CIRCULATION_HARD_KINDS:
+        return CIRCULATION_PENALTY
     return HARD_VIOLATION_PENALTY if v.hard else _SOFT_PENALTY_BY_KIND.get(v.kind, IMBALANCE_PENALTY)
 
 

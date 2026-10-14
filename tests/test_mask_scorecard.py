@@ -78,11 +78,38 @@ def test_parts_and_stair_checks():
     assert not score_floor(rects, PLOT, "south", FLOORS, 1)["stair"]["pass"]
 
 
-def test_clean_requires_every_check_and_circulation_is_not_faked():
+def test_clean_requires_every_check_and_circulation_is_measured():
     res = score_floor(_house(), PLOT, "south", FLOORS, 1)
-    assert res["circulation"] == CIRCULATION_NOT_MEASURED
+    circ = res["circulation"]
+    assert circ["measured"] is True
+    # South facing: the front door opens into the Living Room (bottom edge);
+    # Bedroom 1 is reached only through... the Living Room (public) - fine.
+    assert circ["entry_is_garage"] is False and circ["entry_missing"] is False
     assert res["clean"] == all(res[c]["pass"] for c in SCORED_CHECKS)
+    assert res["clean_all"] == (res["clean"] and circ["pass"])
     text = format_scorecard({"x/floor1": res}, "t", {1: {"bedrooms": 0, "bathrooms": 0}})
-    assert CIRCULATION_NOT_MEASURED in text
+    assert CIRCULATION_NOT_MEASURED not in text
+    assert "6. Circulation" in text and "incl. circulation" in text
     assert "max bedrooms 0" in text
     assert "floors fully clean" in text
+
+
+def test_circulation_check_reports_a_pass_through_bedroom():
+    # Bedroom 2 is reachable only through Bedroom 1 (no hallway touches it).
+    rects = [
+        _r("Living Room", 4, 6, 32, 20),
+        _r("Bedroom 1", 4, 26, 16, 26),
+        _r("Bedroom 2", 20, 26, 16, 26),
+    ]
+    floors = [[{"name": n} for n in ("Living Room", "Bedroom 1", "Bedroom 2")]]
+    res = score_floor(rects, PLOT, "north", floors, 1)
+    # Living touches both bedrooms here, so they are fine; now cut Bedroom 2 off.
+    rects[2] = _r("Bedroom 2", 20, 26, 16, 26)
+    rects[0] = _r("Living Room", 4, 6, 16, 20)
+    rects.append(_r("Kitchen", 20, 6, 16, 20))
+    res = score_floor(rects, PLOT, "north", floors, 1)
+    assert res["circulation"]["pass"] is True  # kitchen is public, Bedroom 2 via kitchen
+    rects[3] = _r("Study Bedroom", 20, 6, 16, 20)  # a bedroom in front of Bedroom 2
+    res = score_floor(rects, PLOT, "north", floors, 1)
+    assert "Bedroom 2" in res["circulation"]["pass_through_private"]
+    assert not res["circulation"]["pass"]

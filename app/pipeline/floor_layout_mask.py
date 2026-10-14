@@ -114,6 +114,8 @@ from app.pipeline.floor_layout import (
 )
 from app.config import settings
 from app.pipeline.layout_quality import (
+    CIRCULATION_HARD_KINDS,
+    CIRCULATION_KINDS,
     NOTCH_PENALTY,
     WRAPPED_PENALTY,
     Violation,
@@ -127,6 +129,7 @@ from app.pipeline.room_specs import (
     garage_dimensions,
     max_area_for_room,
     min_area_for_room,
+    min_depth_for_room,
     min_width_for_room,
     preferred_area_for_room,
     target_area_for_room,
@@ -213,6 +216,43 @@ _GATE_SEPARATE_KINDS = ("oversized", "hierarchy_inverted", "no_daylight", "small
 # dropping a bonus room cannot fix a long bedroom or a big stair, it would
 # only shrink the house.
 _SCORE_ONLY_KINDS = ("wrapped", "bedroom_aspect", "stair_oversized")
+# Phase 4b: circulation (door-graph reachability) is scored on every planner
+# candidate but - like the shape kinds above - never decides gate
+# eligibility, the Phase-2 reference, or bonus-room drops. It steers the
+# FINAL pick only through _pick_circulation_safe(): among the gate-eligible
+# candidates that are no worse than the plain best-score pick on every
+# ratcheted metric, the one with the fewest circulation failures wins.
+_CIRCULATION_KINDS = CIRCULATION_KINDS
+_SCORE_ONLY_KINDS = _SCORE_ONLY_KINDS + CIRCULATION_KINDS
+# Kill switch for the planner path's circulation scoring (True = Phase 4b).
+_CIRCULATION_SCORING = True
+# Phase 4b (planner path only): the Entry/foyer is pre-claimed as a small
+# block on the FRONT row (right after the garage block, else at its spread
+# position) so the front door always lands in the foyer - never in the
+# garage, never in a living room because the foyer drifted inward.
+_FOYER_ON_FACING_EDGE = False  # tried as a change to every candidate: 11 planner-gate regressions (see Phase 4b report) - off
+# Phase 4b (planner path only): the staircase seeds at the FRONT end of the
+# circulation spine (beside it, against the public band) instead of the far
+# back corner - so it is reached from the hallway/public rooms, never only
+# through a bedroom.
+_STAIR_AT_SPINE = False  # as a change to every candidate: 4 planner-gate regressions; used via _CIRCULATION_VARIANTS instead
+# Phase 4b: circulation repair is offered as EXTRA candidates (the original
+# candidates are untouched, so the plain best-score pick is unchanged and the
+# per-floor safety net can only ever swap in a circulation-better candidate
+# that is no worse on every ratcheted metric): (a) each stage-2 variant
+# regrown with the staircase seeded at the spine's front end; (b) any
+# candidate that still fails circulation regrown with straight hallway ARMS
+# carved from the spine to each room that has no clean door path.
+_CIRCULATION_VARIANTS = True
+_ARM_MAX_CELLS = 14  # longest arm (cells) carved toward one room
+# Phase 4b step B (planner path only): the staircase is a FIXED block from
+# the building plan - pre-claimed before growth, identical on every floor,
+# never grown or shrunk by any later step.
+# (Switch: house_planner.STAIR_FIXED_BLOCK - sizing and placement share it.)
+_SINK_BESIDE_STAIR = True
+_STAIR_BLOCK_SIDE = "right"  # "right" / "left" of the spine
+_STAIR_BLOCK_END = "front"  # "front" (against the public band) / "back"
+_STAIR_POCKET_TO_HALL = True
 
 # Diagnostics for the report/timing script (planner path only; NOT part of
 # any return value). Updated by _layout_with_plan for the floor it just laid
@@ -241,6 +281,96 @@ def _worst_over_ratio(rooms: list[dict], room_max: dict) -> float:
         area = sum(p["w"] * p["h"] for p in (r.get("parts") or [r]))
         worst = max(worst, area / mx)
     return worst
+
+
+def _score_without_circulation(scored) -> float:
+    """The candidate's score as it was before Phase 4b (circulation penalties
+    added back) - so the plain best-score pick is exactly the old pick."""
+    return scored.score + sum(violation_penalty(v) for v in scored.violations if v.kind in _CIRCULATION_KINDS)
+
+
+def _ratchet_vector(violations: list) -> tuple[int, ...]:
+    """Everything the quality gate / scorecard ratchet per floor: the gate
+    vector plus the score-only shape kinds (bedroom aspect, stair cap,
+    wrapped) - a circulation-driven pick may not worsen any of them."""
+    extra = tuple(
+        sum(1 for v in violations if v.hard and v.kind == k)
+        for k in ("bedroom_aspect", "stair_oversized", "wrapped")
+    )
+    return _gate_vector(violations) + extra
+
+
+def _circulation_failures(scored) -> tuple:
+    """Room names with a hard circulation failure (unreachable / pass-through)."""
+    return tuple(sorted({
+        v.room for v in scored.violations
+        if v.hard and v.kind in ("unreachable", "pass_through_private") and v.room != "__floor__"
+    }))
+
+
+def _circulation_variants(stage2, options, targets, core_dimensions, garage_cars, score, diag, stair_block=None) -> list:
+    """Phase 4b extra candidates (see _CIRCULATION_VARIANTS). Returns
+    [((rooms, scored, stats), path), ...]."""
+    out = []
+    has_stair = any(t["category"] == "staircase" for t in targets)
+    for variant, (base_rooms, base_scored, _st) in zip(stage2, options):
+        width_delta, cross_link, band_delta, flip = variant
+        tries = [(base_rooms, base_scored, False)]
+        if has_stair and not _STAIR_AT_SPINE:
+            stats: dict = {}
+            diag["grown"] += 1
+            cand = _grow_floor(
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, stats=stats,
+                band_delta=band_delta, flip_egress=flip, stair_at_spine=True,
+            )
+            sc = score(cand)
+            out.append(((cand, sc, stats), "circ_stair"))
+            tries.append((cand, sc, True))
+        for _rooms, sc, stair in tries:
+            need = _circulation_failures(sc)
+            if not need:
+                continue
+            stats = {}
+            diag["grown"] += 1
+            cand = _grow_floor(
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, stats=stats,
+                band_delta=band_delta, flip_egress=flip, stair_at_spine=stair if has_stair else None,
+                connect_rooms=need,
+            )
+            out.append(((cand, score(cand), stats), "circ_arms" + ("+stair" if stair else "")))
+    return out
+
+
+def _pick_circulation_safe(eligible: list, room_max: dict, n_base: int | None = None):
+    """Per-floor safety net for the Phase 4b circulation preference.
+    `eligible` = [((rooms, scored, stats), path), ...] in candidate order.
+    1. pick0 = the highest score ignoring circulation (first wins on a tie) -
+       exactly the pick the engine made before circulation was scored.
+    2. Safe set = candidates no worse than pick0 on every ratcheted count
+       (_ratchet_vector) and on the worst over-max ratio.
+    3. Among the safe set: fewest circulation HARD failures, then fewest
+       soft dead-end halls, then the higher plain score, then candidate
+       order. pick0 is always in the safe set, so when circulation does not
+       differ the result is identical to the old pick."""
+    base = [_score_without_circulation(o[0][1]) for o in eligible]
+    n0 = len(eligible) if n_base is None else max(1, min(n_base, len(eligible)))
+    i0 = max(range(n0), key=lambda i: (base[i], -i))
+    v0 = _ratchet_vector(eligible[i0][0][1].violations)
+    w0 = _worst_over_ratio(eligible[i0][0][0], room_max)
+    safe = [
+        i for i in range(len(eligible))
+        if all(x <= y for x, y in zip(_ratchet_vector(eligible[i][0][1].violations), v0))
+        and _worst_over_ratio(eligible[i][0][0], room_max) <= w0 + 1e-9
+    ]
+
+    def key(i):
+        vs = eligible[i][0][1].violations
+        hard = sum(1 for v in vs if v.hard and v.kind in CIRCULATION_HARD_KINDS)
+        soft = sum(1 for v in vs if not v.hard and v.kind in _CIRCULATION_KINDS)
+        return (hard, soft, -base[i], i)
+
+    best = min(safe, key=key)
+    return eligible[best]
 
 
 def _gate_vector(violations: list) -> tuple[int, ...]:
@@ -392,6 +522,75 @@ def layout_floor_with_warnings(
 # ---- Phase 2: planner path (Settings.house_planner_enabled) ----
 
 
+def _planner_targets(room_list: list[dict], plan, unit: str, garage_cars) -> list[dict]:
+    """Per-room targets for the planner path (plan overrides on top of
+    room_specs); shared by _layout_with_plan and _place_stair_block."""
+    targets = _room_targets(_order_rooms(room_list), unit, garage_cars)
+    for t in targets:
+        mx = plan.room_max.get(t["name"]) or t["max_area"]
+        t["max_area"] = max(mx, t["min_area"])
+        tgt = plan.room_targets.get(t["name"])
+        if tgt is None:
+            tgt = target_area_for_room(t["name"], unit, garage_cars)
+        t["target_area"] = min(max(tgt, t["min_area"]), t["max_area"])
+        if plan.stair_block and t["category"] == "staircase":
+            # Phase 4b step B: pinned to the fixed block (min = target = max).
+            t["min_area"] = t["target_area"] = t["max_area"] = plan.stair_block["w"] * plan.stair_block["h"]
+    return targets
+
+
+def _grid(dimensions: dict) -> tuple[int, int, float, float]:
+    """(cols, rows, cell_w, cell_h) - the exact grid _grow_floor uses."""
+    length = float(dimensions.get("length") or 1)
+    width = float(dimensions.get("width") or 1)
+    cell_size = max(max(length, width, 1.0) / _TARGET_CELLS_LONG_SIDE, 0.01)
+    cols = _clamp(round(length / cell_size), _MIN_CELLS_PER_AXIS, _MAX_CELLS_PER_AXIS)
+    rows = _clamp(round(width / cell_size), _MIN_CELLS_PER_AXIS, _MAX_CELLS_PER_AXIS)
+    return cols, rows, length / cols, width / rows
+
+
+def _place_stair_block(plan, floors_used: list[list[dict]], facing: str, garage_cars) -> dict | None:
+    """Phase 4b step B: position the building's fixed staircase block (size
+    from house_planner.stair_block_size, via plan.stair_area) in CORE
+    footprint coordinates, the same on every floor: immediately right of the
+    planner spine's base-width column (the spine every floor reserves at the
+    centre - see _reserve_spine), starting at the ground floor's front-band
+    depth, so on the ground floor it borders the public band AND the spine,
+    and on upper floors (no band, spine from the front) it borders the
+    spine. Snapped to whole grid cells (same grid on every floor - it depends
+    only on the footprint). None for a single-floor building or no stair."""
+    if not plan.stair_area or plan.total_floors <= 1 or not floors_used:
+        return None
+    if not any(classify_room_category(str(r.get("name") or "")) == "staircase" for f in floors_used for r in f):
+        return None
+    from app.pipeline.house_planner import stair_block_size
+
+    unit = plan.unit
+    if facing in ("east", "west"):
+        core = {"length": plan.footprint_width, "width": plan.footprint_length, "unit": unit}
+    else:
+        core = {"length": plan.footprint_length, "width": plan.footprint_width, "unit": unit}
+    cols, rows, cell_w, cell_h = _grid(core)
+    sw, sd = stair_block_size(unit)
+    w_c = _clamp(math.ceil(sw / cell_w - 1e-9), 1, cols)
+    d_c = _clamp(math.ceil(sd / cell_h - 1e-9), 1, rows)
+    targets = _planner_targets(floors_used[0], plan.floors[0], unit, garage_cars)
+    public_idx = [i for i, t in enumerate(targets) if _zone_key(t["name"]) == 0]
+    band = _public_band_rows(targets, public_idx, cols, rows, cell_w * cell_h, cell_h, unit, "target_area")
+    if band > 0:
+        min_c = [max(1, round(t["min_area"] / (cell_w * cell_h))) for t in targets]
+        max_c = [max(min_c[i], round(targets[i]["max_area"] / (cell_w * cell_h))) for i in range(len(targets))]
+        band = _planner_band_cap(band, public_idx, max_c, targets, cols, cell_h, unit)
+    hw = min(_planner_hallway_width_cells(0, cell_w, unit, 0), max(1, cols - 2))
+    cx0 = max(0, (cols - hw) // 2)
+    if _STAIR_BLOCK_SIDE == "left":
+        c0 = _clamp(cx0 - w_c, 0, max(0, cols - w_c))
+    else:
+        c0 = _clamp(cx0 + hw, 0, max(0, cols - w_c))
+    r0 = _clamp(rows - d_c if _STAIR_BLOCK_END == "back" else band, 0, max(0, rows - d_c))
+    return {"x": c0 * cell_w, "y": r0 * cell_h, "w": w_c * cell_w, "h": d_c * cell_h}
+
+
 def _layout_with_plan(
     rooms: list[dict], dimensions: dict, garage_cars: int | None, facing: str, plan
 ) -> tuple[list[dict], list]:
@@ -412,6 +611,7 @@ def _layout_with_plan(
         plan = plan_building([rooms], dimensions, facing, garage_cars, 1, add_bonus=False).floors[0]
     names = {str(r.get("name") or "") for r in rooms}
     rooms = list(rooms) + [dict(a) for a in plan.added_rooms if a["name"] not in names]
+    stair_block = plan.stair_block
 
     fp_length, fp_width = plan.footprint_length, plan.footprint_width
     if facing in ("east", "west"):
@@ -423,14 +623,7 @@ def _layout_with_plan(
 
     def run(room_list: list[dict]) -> tuple[list[dict], list]:
         diag["runs"] += 1
-        targets = _room_targets(_order_rooms(room_list), unit, garage_cars)
-        for t in targets:
-            mx = plan.room_max.get(t["name"]) or t["max_area"]
-            t["max_area"] = max(mx, t["min_area"])
-            tgt = plan.room_targets.get(t["name"])
-            if tgt is None:
-                tgt = target_area_for_room(t["name"], unit, garage_cars)
-            t["target_area"] = min(max(tgt, t["min_area"]), t["max_area"])
+        targets = _planner_targets(room_list, plan, unit, garage_cars)
         room_targets = {t["name"]: t["target_area"] for t in targets}
         room_max = {t["name"]: t["max_area"] for t in targets}
         daylight_fp = {"x0": 0.0, "y0": 0.0, "x1": core_dimensions["length"], "y1": core_dimensions["width"]}
@@ -439,6 +632,7 @@ def _layout_with_plan(
             return score_floor_layout(
                 candidate, core_dimensions, garage_cars, daylight_footprint=daylight_fp,
                 planner_checks=True, room_targets=room_targets, room_max=room_max,
+                facing="north" if _CIRCULATION_SCORING else None, floor_number=plan.floor_number,
             )
 
         # Phase 3: widened best-of-N, two stages. Stage 1 grows every variant
@@ -453,7 +647,7 @@ def _layout_with_plan(
             stats1: dict = {}
             diag["grown"] += 1
             candidate = _grow_floor(
-                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats1,
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, stats=stats1,
                 band_delta=band_delta, flip_egress=flip, rectify=False,
             )
             signature = tuple(
@@ -485,18 +679,21 @@ def _layout_with_plan(
             diag["grown"] += 1
             diag["rectified"] += 1
             candidate = _grow_floor(
-                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats,
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, stats=stats,
                 band_delta=band_delta, flip_egress=flip,
             )
             options.append((candidate, score(candidate), stats))
         paths = ["rectified"] * len(options)
+        circ_options = _circulation_variants(stage2, options, targets, core_dimensions, garage_cars, score, diag, stair_block) if (
+            _CIRCULATION_VARIANTS and _CIRCULATION_SCORING
+        ) else []
         if reference is not None:
             # The Phase-2 pick with only its stranded pieces reconnected.
             width_delta, cross_link, band_delta, flip = reference[1]
             stats_r: dict = {}
             diag["grown"] += 1
             reconnected = _grow_floor(
-                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stats=stats_r,
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, stats=stats_r,
                 band_delta=band_delta, flip_egress=flip, rectify="reconnect",
             )
             options.append((reconnected, score(reconnected), stats_r))
@@ -520,18 +717,22 @@ def _layout_with_plan(
                 eligible = [(options[-2], paths[-2])] if ok[-2] else [(options[-1], paths[-1])]
         else:
             eligible = list(zip(options, paths))
+        n_base = len(eligible)
+        if circ_options:
+            if reference is not None:
+                circ_options = [
+                    (o, p) for o, p in circ_options
+                    if all(x <= y for x, y in zip(_gate_vector(o[1].violations), ref_vec))
+                    and _worst_over_ratio(o[0], room_max) <= ref_worst + 1e-9
+                ]
+            eligible = eligible + circ_options
         best_rooms: list[dict] | None = None
-        best_score: float | None = None
         best_warnings: list = []
         best_stats: dict = {}
         best_path = ""
-        for (candidate, scored, stats), path in eligible:
-            if best_score is None or scored.score > best_score:
-                best_score = scored.score
-                best_rooms = candidate
-                best_warnings = list(scored.violations)
-                best_stats = stats
-                best_path = path
+        if eligible:
+            (best_rooms, scored, best_stats), best_path = _pick_circulation_safe(eligible, room_max, n_base)
+            best_warnings = list(scored.violations)
         diag["path"] = best_path
         if best_stats.get("overflow_cells") or best_stats.get("hallway_unaligned_cells"):
             best_warnings.append(
@@ -626,6 +827,16 @@ def layout_building(
             floors_rooms, dimensions, facing, garage_cars, total_floors,
             min_front_setback=min_front_setback, exclude_bonus=exclude or None,
         )
+        if plan.stair_area:
+            norm_facing = (facing or "north").strip().lower()
+            norm_facing = norm_facing if norm_facing in _VALID_FACINGS else "north"
+            used_all = []
+            for index, rooms in enumerate(floors_rooms):
+                names = {str(r.get("name") or "") for r in rooms}
+                used_all.append(list(rooms) + [dict(a) for a in plan.floors[index].added_rooms if a["name"] not in names])
+            plan.stair_block = _place_stair_block(plan, used_all, norm_facing, garage_cars)
+            for fp in plan.floors:
+                fp.stair_block = dict(plan.stair_block) if plan.stair_block else None
         results = []
         dropped_any = False
         for index, rooms in enumerate(floors_rooms):
@@ -800,6 +1011,7 @@ def _grow_floor(
     targets: list[dict], dimensions: dict, spine_width_delta: int, cross_link: bool,
     garage_cars: int | None = None, planner: bool = False, stats: dict | None = None,
     band_delta: int = 0, flip_egress: bool = False, rectify: bool | str = True,
+    stair_at_spine: bool | None = None, connect_rooms: tuple = (), stair_block: dict | None = None,
 ) -> list[dict]:
     # Phase 3: rectify=False also keeps the legacy row-major decomposition, so
     # a planner candidate grown without rectification is exactly what Phase 2
@@ -862,9 +1074,29 @@ def _grow_floor(
             if (rows - band) * cols - len(spine_cells) <= back_max:
                 break
 
+    # Phase 4b step B: the staircase's fixed block (planner path). The spine
+    # yields to it (a widened spine never covers it); the stair's min =
+    # target = max = the block, so nothing grows or shrinks it.
+    stair_i = None
+    stair_cells: set[tuple[int, int]] = set()
+    if planner and stair_block:
+        stair_i = next((i for i, t in enumerate(targets) if t["category"] == "staircase"), None)
+        if stair_i is not None:
+            c0 = _clamp(round(stair_block["x"] / cell_w), 0, cols - 1)
+            r0 = _clamp(round(stair_block["y"] / cell_h), 0, rows - 1)
+            w_c = max(1, round(stair_block["w"] / cell_w))
+            d_c = max(1, round(stair_block["h"] / cell_h))
+            stair_cells = {
+                (c, r) for r in range(r0, min(rows, r0 + d_c)) for c in range(c0, min(cols, c0 + w_c))
+            }
+            spine_cells = spine_cells - stair_cells
+            target_cells[stair_i] = min_cells[stair_i] = max_cells[stair_i] = len(stair_cells)
+
     owner = [[-1 for _ in range(cols)] for _ in range(rows)]
     for (c, r) in spine_cells:
         owner[r][c] = -2
+    for (c, r) in stair_cells:
+        owner[r][c] = stair_i
 
     if planner:
         # Phase 2: the plan's targets are relative intent; rescale them so each
@@ -895,9 +1127,32 @@ def _grow_floor(
         depth_cap = band if band > 0 else rows
         garage_d_cells = _clamp(max(1, round(gd / cell_h)), 1, depth_cap)
 
+    # Phase 4b (planner only): the foyer's front-row block - real min width
+    # along the facing edge, deep enough for its target area / min depth.
+    foyer_i = None
+    foyer_w_cells = foyer_d_cells = 0
+    if planner and _FOYER_ON_FACING_EDGE and band > 0 and cell_w > 0 and cell_h > 0:
+        foyer_i = next((i for i in public_idx if targets[i]["category"] == "foyer"), None)
+        if foyer_i is not None:
+            foyer_w_cells = _clamp(math.ceil(min_width_for_room(targets[foyer_i]["name"], unit) / cell_w - 1e-9), 1, cols)
+            depth_min = math.ceil(min_depth_for_room(targets[foyer_i]["name"], unit) / cell_h - 1e-9)
+            depth_tgt = math.ceil(target_cells[foyer_i] / foyer_w_cells)
+            foyer_d_cells = _clamp(max(depth_min, depth_tgt), 1, band)
+
     seeds = _seed_rooms(
-        targets, public_idx, circulation_idx, private_idx, cols, rows, spine_cells, min_cells, band,
+        targets, public_idx, [i for i in circulation_idx if i != stair_i], private_idx, cols, rows,
+        spine_cells | stair_cells, min_cells, band,
         garage_i, garage_w_cells, flip_egress, far_sinks=planner and _FAR_REMAINDER_SEEDS,
+        sink_anchor=(
+            (
+                (min(c for c, _r in stair_cells) - 1) if _STAIR_BLOCK_SIDE == "left"
+                else (max(c for c, _r in stair_cells) + 1),
+                min(r for _c, r in stair_cells),
+            )
+            if stair_cells and _SINK_BESIDE_STAIR else None
+        ),
+        foyer_i=foyer_i, foyer_w_cells=foyer_w_cells,
+        stair_at_spine=planner and (_STAIR_AT_SPINE if stair_at_spine is None else stair_at_spine),
     )
 
     cells_by_room: list[set[tuple[int, int]]] = [set() for _ in targets]
@@ -905,22 +1160,29 @@ def _grow_floor(
         if seed is not None:
             cells_by_room[i].add(seed)
             owner[seed[1]][seed[0]] = i
+    if stair_i is not None and stair_cells:
+        cells_by_room[stair_i] = set(stair_cells)
 
     # Pre-claim the garage's real width x depth rectangle at its front-corner
     # seed (Phase D4) so it keeps a car-fitting shape instead of being
     # out-competed for frontage by the general round-robin growth.
     if garage_i is not None and seeds[garage_i] is not None and garage_w_cells > 0:
         _preclaim_garage(owner, cells_by_room, garage_i, seeds[garage_i], garage_w_cells, garage_d_cells, cols, rows)
+    if foyer_i is not None and seeds[foyer_i] is not None:
+        _preclaim_garage(owner, cells_by_room, foyer_i, seeds[foyer_i], foyer_w_cells, foyer_d_cells, cols, rows)
+        # Growth stops at the block (the bounded fill may still add up to max).
+        target_cells[foyer_i] = max(min(target_cells[foyer_i], len(cells_by_room[foyer_i])), 1)
 
     _grow_rooms(owner, cells_by_room, seeds, cols, rows, target_cells, min_cells, max_cells, zones, band)
     if planner:
         _fill_leftovers_bounded(
             owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells, zones, band,
-            stats if stats is not None else {},
+            stats if stats is not None else {}, fixed={stair_i} if stair_cells else None,
         )
         _rebalance_over_max(
             owner, cells_by_room, target_cells, max_cells, cols, rows, zones, band,
-            {garage_i} if garage_i is not None else set(), stats if stats is not None else {},
+            ({garage_i} if garage_i is not None else set()) | ({stair_i} if stair_cells else set()),
+            stats if stats is not None else {},
             [
                 0.0 if t["category"] in ("garage", "staircase", "hallway") else min_width_for_room(t["name"], unit)
                 for t in targets
@@ -946,6 +1208,13 @@ def _grow_floor(
         _rectify_rooms(
             owner, cells_by_room, targets, target_cells, min_cells, max_cells, zones, band,
             _ShapeCtx(cols, rows, cell_w, cell_h, unit, targets), stats,
+        )
+    if stair_cells and stats is not None:
+        stats["stair_block_intact"] = cells_by_room[stair_i] == stair_cells
+    if planner and connect_rooms:
+        _carve_access_arms(
+            owner, cells_by_room, targets, connect_rooms, min_cells, zones, band, cols, rows,
+            cell_w, cell_h, unit, stats if stats is not None else {},
         )
     if planner and stats is not None:
         stats["overflow_rooms"] = [targets[int(i)]["name"] for i in stats.get("overflow_rooms", [])]
@@ -975,6 +1244,149 @@ def _grow_floor(
             rooms_out.append(hallway)
 
     return rooms_out
+
+
+def _carve_access_arms(
+    owner: list[list[int]],
+    cells_by_room: list[set[tuple[int, int]]],
+    targets: list[dict],
+    names: tuple,
+    min_cells: list[int],
+    zones: list[int] | None,
+    band: int,
+    cols: int,
+    rows: int,
+    cell_w: float,
+    cell_h: float,
+    unit: str,
+    stats: dict,
+) -> None:
+    """Phase 4b circulation repair (planner path, extra candidates only):
+    for each named room with no clean door path, carve ONE straight hallway
+    arm (real corridor width) from the room's own wall to the spine, through
+    other back-zone rooms. A strip is legal only if every donor keeps at
+    least its min cells and stays one connected piece, and it never takes
+    cells from the garage, staircase, foyer, a public-band room or the room
+    itself. The cheapest legal strip (fewest cells) wins; a room with no
+    legal strip is left alone (the scorer still reports it). Bedrooms are
+    connected first; an ensuite whose own bedroom it already touches is
+    skipped (it is reached through that bedroom). Cells become spine (-2),
+    so the Hallway room absorbs the arm and exact tiling holds."""
+    name_to_i = {t["name"]: i for i, t in enumerate(targets)}
+    order = sorted(
+        (name_to_i[n] for n in names if n in name_to_i),
+        key=lambda i: (targets[i]["category"] != "bedroom", targets[i]["name"]),
+    )
+    fixed = {i for i, t in enumerate(targets) if t["category"] in ("garage", "staircase", "foyer", "hallway")}
+    cell_area = max(cell_w * cell_h, 1e-9)
+    floor_cells = [
+        max(min_cells[i], math.ceil(0.985 * float(targets[i].get("min_area") or 0.0) / cell_area))
+        for i in range(len(targets))
+    ]
+    ctx = _ShapeCtx(cols, rows, cell_w, cell_h, unit, targets)
+    hw_x = _planner_hallway_width_cells(0, cell_w, unit, 0)  # width of a vertical arm (cells along x)
+    hw_y = _planner_hallway_width_cells(0, cell_h, unit, 0)  # width of a horizontal arm (cells along y)
+    stats.setdefault("arm_cells", 0)
+    stats.setdefault("arms", [])
+
+    def touches(i: int, j: int) -> bool:
+        cnt = 0
+        for (c, r) in cells_by_room[i]:
+            for dc, dr in _DIRS:
+                nc, nr = c + dc, r + dr
+                if 0 <= nc < cols and 0 <= nr < rows and owner[nr][nc] == j:
+                    cnt += 1
+                    if cnt >= 2:
+                        return True
+        return False
+
+    for t in order:
+        cells = cells_by_room[t]
+        if not cells:
+            continue
+        cat = targets[t]["category"]
+        suite = targets[t].get("suite")
+        if cat in ("bathroom", "powder") and suite is not None and any(
+            targets[j].get("suite") == suite and j != t and targets[j]["category"] == "bedroom" and touches(t, j)
+            for j in range(len(targets))
+        ):
+            continue
+        best = None
+        for (dc, dr) in _DIRS:
+            horizontal = dr == 0
+            width = hw_y if horizontal else hw_x
+            # Start lines: the room's own cells whose neighbour in direction
+            # (dc, dr) is not the room; group runs of `width` consecutive
+            # lines across the travel axis.
+            starts = sorted({(c + dc, r + dr) for (c, r) in cells if (c + dc, r + dr) not in cells})
+            for (sc, sr) in starts:
+                lane = [(sc, sr + k) if horizontal else (sc + k, sr) for k in range(width)]
+                if not all((x - dc, y - dr) in cells for x, y in lane):
+                    continue
+                strip: list[tuple[int, int]] = []
+                reached = False
+                ok = True
+                cur = lane
+                for _step in range(_ARM_MAX_CELLS):
+                    if not all(0 <= x < cols and 0 <= y < rows for x, y in cur):
+                        ok = False
+                        break
+                    if any(owner[y][x] == -2 for x, y in cur) or (
+                        zones is not None and band > 0
+                        and any(y < band and owner[y][x] >= 0 and zones[owner[y][x]] == 0 for x, y in cur)
+                    ):
+                        # Reached the spine, or (a floor with no spine / a room
+                        # far from it) the public band: the arm becomes Hallway
+                        # opening onto that public room.
+                        reached = True
+                        break
+                    for x, y in cur:
+                        o = owner[y][x]
+                        if o < 0 or o == t or o in fixed or (zones is not None and band > 0 and (zones[o] == 0 or y < band)):
+                            ok = False
+                            break
+                    if not ok:
+                        break
+                    strip.extend(cur)
+                    cur = [(x + dc, y + dr) for x, y in cur]
+                if not (ok and reached and strip):
+                    continue
+                if best is not None and len(strip) > best[1][1] + 6:
+                    continue
+                by_donor: dict[int, set] = {}
+                for x, y in strip:
+                    by_donor.setdefault(owner[y][x], set()).add((x, y))
+                legal = True
+                harm = 0.0
+                for d, taken in by_donor.items():
+                    rest = cells_by_room[d] - taken
+                    if len(rest) < floor_cells[d] or _components(rest) != 1:
+                        legal = False
+                        break
+                    b_cost, b_parts, b_day = ctx.info(cells_by_room[d])
+                    a_cost, a_parts, a_day = ctx.info(rest)
+                    # Never cost a donor its usable width or its window wall
+                    # (the same guarantees _rectify_rooms keeps).
+                    if ctx.usable(d, b_parts) and not ctx.usable(d, a_parts):
+                        legal = False
+                        break
+                    if ctx.daylit[d] and b_day >= ctx.need_daylight - 1e-6 and a_day < ctx.need_daylight - 1e-6:
+                        legal = False
+                        break
+                    harm += a_cost - b_cost
+                if legal:
+                    key = (harm, len(strip))
+                    if best is None or key < best[1]:
+                        best = (strip, key)
+        if best is None:
+            continue
+        best = best[0]
+        for x, y in best:
+            d = owner[y][x]
+            cells_by_room[d].discard((x, y))
+            owner[y][x] = -2
+        stats["arm_cells"] += len(best)
+        stats["arms"].append(targets[t]["name"])
 
 
 def _cells_to_room(
@@ -1134,6 +1546,10 @@ def _seed_rooms(
     garage_w_cells: int = 0,
     flip_egress: bool = False,
     far_sinks: bool = False,
+    foyer_i: int | None = None,
+    foyer_w_cells: int = 0,
+    stair_at_spine: bool = False,
+    sink_anchor: tuple[int, int] | None = None,
 ) -> list[tuple[int, int] | None]:
     """One anchor cell per room, matching floor_layout.py's own front-to-
     back convention (front = low-y). Bedroom/living rooms seed ON the
@@ -1219,6 +1635,16 @@ def _seed_rooms(
     has_garage_reserve = garage_i is not None and garage_i in public_idx and garage_w_cells > 0
     spread_start = garage_w_cells if has_garage_reserve else 0
     other_public = [i for i in public_idx if not (has_garage_reserve and i == garage_i)]
+    if foyer_i is not None and foyer_i in other_public and foyer_w_cells > 0:
+        # Phase 4b: the foyer takes the front-row slot right after the garage
+        # (its block is pre-claimed by _grow_floor); the other public rooms
+        # spread over the frontage beyond it.
+        cell = _first_free_near(spread_start, 0, cols, rows, occupied)
+        if cell is not None:
+            seeds[foyer_i] = cell
+            occupied.add(cell)
+        other_public = [i for i in other_public if i != foyer_i]
+        spread_start = min(cols - 1, spread_start + foyer_w_cells)
     n_other = len(other_public)
     span = max(1, cols - spread_start)
     if has_garage_reserve:
@@ -1321,6 +1747,17 @@ def _seed_rooms(
     for i in private_other:
         if i in sinks:
             continue
+        if sink_anchor is not None and targets[i]["category"] == "porch":
+            # Phase 4b step B: the remainder sink (Terrace / Verandah) seeds
+            # right beside the fixed stair block, on its far side from the
+            # spine - the pocket the stair+spine leave there is exactly
+            # where the floor's leftover area belongs (it used to inflate
+            # the staircase to 158-572 sq ft, or a lounge/bedroom).
+            cell = _first_free_near(sink_anchor[0], sink_anchor[1], cols, rows, occupied)
+            if cell is not None:
+                seeds[i] = cell
+                occupied.add(cell)
+                continue
         suite = targets[i].get("suite")
         # Phase D2: a wet-service room seeds directly behind this floor's
         # kitchen (the first private row, rows[band], at the kitchen's own
@@ -1361,12 +1798,27 @@ def _seed_rooms(
     # still free - out of the way of the entrance and every already-seeded
     # private room above.
     for i in circulation_idx:
-        cell = _first_free_near(cols - 1, rows - 1, cols, rows, occupied)
+        if stair_at_spine:
+            cell = _first_free_near(*_stair_anchor(spine_cells, cols, rows, band), cols, rows, occupied)
+        else:
+            cell = _first_free_near(cols - 1, rows - 1, cols, rows, occupied)
         if cell is not None:
             seeds[i] = cell
             occupied.add(cell)
 
     return seeds
+
+
+def _stair_anchor(spine_cells: set, cols: int, rows: int, band: int) -> tuple[int, int]:
+    """Phase 4b: the staircase's anchor cell - immediately right of the
+    spine's front end (the first spine row, against the public band), so the
+    stair touches the hallway AND sits at the public/private boundary. With
+    no spine: the right edge of the first private row."""
+    if spine_cells:
+        r0 = min(r for _c, r in spine_cells)
+        c1 = max(c for c, r in spine_cells if r == r0)
+        return (min(cols - 1, c1 + 1), r0)
+    return (cols - 1, _clamp(band, 0, rows - 1))
 
 
 def _first_free_near(col: int, row: int, cols: int, rows: int, occupied: set[tuple[int, int]]) -> tuple[int, int] | None:
@@ -2252,6 +2704,7 @@ def _fill_leftovers_bounded(
     zones: list[int] | None,
     band: int,
     stats: dict,
+    fixed: set | None = None,
 ) -> None:
     """Planner-path leftover fill (Phase 2) - BOUNDED by every room's
     max_cells, unlike _fill_leftovers() (whose whole-region dump is a root
@@ -2285,6 +2738,12 @@ def _fill_leftovers_bounded(
         if found is None:
             return
         region, adjacent, touches_spine = found
+        fixed_only = False
+        if fixed:
+            # Phase 4b step B: a fixed block (the staircase) never receives a
+            # leftover cell - not even as the last resort.
+            fixed_only = bool(adjacent) and adjacent <= set(fixed)
+            adjacent = {i for i in adjacent if i not in fixed}
         candidates = adjacent
         if adjacent and zones is not None and band > 0:
             rmax = max(r for _, r in region)
@@ -2293,9 +2752,20 @@ def _fill_leftovers_bounded(
                 zone_ok = {i for i in adjacent if zones[i] == 0}
             elif rmin >= band:
                 zone_ok = {i for i in adjacent if zones[i] != 0}
+                if fixed and not zone_ok and touches_spine:
+                    # Back-zone pocket whose only back-zone neighbour is the
+                    # fixed stair: it becomes circulation (a landing/hall),
+                    # never spills across the band into a public room.
+                    fixed_only = True
             else:
                 zone_ok = adjacent
             candidates = zone_ok or adjacent
+        if fixed_only and touches_spine and _STAIR_POCKET_TO_HALL:
+            for (c, r) in region:
+                owner[r][c] = -2
+                spine_cells.add((c, r))
+            stats["stair_pocket_to_hall_cells"] = stats.get("stair_pocket_to_hall_cells", 0) + len(region)
+            continue
 
         if candidates:
             headroom = [i for i in candidates if len(cells_by_room[i]) < max_cells[i]]
@@ -2343,7 +2813,7 @@ def _fill_leftovers_bounded(
             stats["hallway_aligned_cells" if aligned else "hallway_unaligned_cells"] += len(region)
             continue
 
-        fallback = [j for j, cs in enumerate(cells_by_room) if cs]
+        fallback = [j for j, cs in enumerate(cells_by_room) if cs and not (fixed and j in fixed)]
         if not fallback:
             return
         if _STAIR_NOT_A_SINK:

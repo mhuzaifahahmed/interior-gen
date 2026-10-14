@@ -113,14 +113,12 @@ def render_floor_blueprint_dxf(
     # Ground floor only (2026-09-29) - see blueprint_svg.render_floor_
     # blueprint()'s matching gate for why; keeps the PNG and the DXF in
     # agreement about there being no front entrance on upper floors.
-    # Door decisions come from door_graph.build_door_graph() (Phase 4a pure
-    # refactor). TODO(Phase 4b): the DXF currently does NOT apply the
-    # garage->living/kitchen/dining door suppression the PNG does
-    # (suppress_garage_doors=False preserves that); making it match is a
-    # deliberate later behaviour change, not part of this refactor.
-    door_graph = build_door_graph(
-        rects, dimensions, facing, floor_number, suppress_garage_doors=False
-    )
+    # Door decisions come from door_graph.build_door_graph() - the SAME door
+    # set the PNG draws (Phase 4b: the garage->living/kitchen/dining
+    # suppression and the bathroom-never-into-living rule now apply here
+    # too). Door gaps are still centred at the shared-wall midpoint here vs
+    # the PNG's 30% position (a cosmetic placement difference only).
+    door_graph = build_door_graph(rects, dimensions, facing, floor_number)
     front_door_edge = door_graph.front
 
     doc = ezdxf.new(dxfversion="R2010")

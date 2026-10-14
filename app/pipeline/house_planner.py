@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from app.pipeline import planning_rules as rules
 from app.pipeline.floor_layout import _zone_key
 from app.pipeline.room_specs import (
+    staircase_dimensions,
     EXTERIOR_WALL_THICKNESS_M,
     classify_room_category,
     max_area_for_room,
@@ -88,6 +89,10 @@ class FloorPlan:
     # Diagnostic (set by floor_layout_mask after layout): which candidate
     # tier won - "rectified" / "reference_reconnect" / "reference_raw".
     layout_path: str = ""
+    # Phase 4b step B: the staircase's FIXED block {"x","y","w","h"} in the
+    # engine's CORE footprint coordinates (front edge at y=0; east/west
+    # facings transposed), identical on every floor; None = no fixed stair.
+    stair_block: dict | None = None
 
 
 @dataclass
@@ -108,6 +113,11 @@ class BuildingPlan:
     porch_area: float = 0.0  # ground-floor Verandah share of footprint_area
     built_area_cap: float | None = None  # estate cap on footprint x floors (L/XL)
     total_floors: int = 1
+    # Phase 4b step B: see FloorPlan.stair_block. Sized here (stair_block_
+    # size), POSITIONED by floor_layout_mask.layout_building next to the
+    # spine it will reserve (the spine/band geometry lives in the engine).
+    stair_block: dict | None = None
+    stair_area: float = 0.0
 
     def for_floor(self, floor_number: int) -> FloorPlan:
         for fp in self.floors:
@@ -345,6 +355,23 @@ def _apply_hierarchy(entries, alloc, maxs, floor_area: float, unit: str) -> floa
     return freed
 
 
+# Phase 4b step B: the staircase is a FIXED block - the run (room_specs
+# staircase_dimensions: width x depth) plus a landing allowance at the top
+# of the run - reserved once and identical on every floor. Nothing ever
+# grows it (bounded fill, rebalance, rectify, steal all skip it), so it can
+# never become the 158-572 sq ft sink it used to be.
+STAIR_LANDING_ALLOWANCE_M = 0.3
+# Kill switch for the fixed stair block (house_planner sizing + engine
+# placement read the same flag).
+STAIR_FIXED_BLOCK = False
+
+
+def stair_block_size(unit: str) -> tuple[float, float]:
+    """(width, depth) of the fixed staircase block in the plot unit."""
+    w, d = staircase_dimensions(unit)
+    return w, d + to_plot_unit(STAIR_LANDING_ALLOWANCE_M, unit)
+
+
 def _entry(name: str, unit: str, garage_cars, tier: str = "standard") -> dict:
     mn = min_area_for_room(name, unit, garage_cars)
     pref = max(preferred_area_for_room(name, unit, garage_cars), mn)
@@ -360,10 +387,15 @@ def _entry(name: str, unit: str, garage_cars, tier: str = "standard") -> dict:
 def _allocate_floor(
     rooms: list[dict], floor_number: int, total_floors: int, footprint_area: float, unit: str,
     garage_cars, add_bonus: bool, exclude_bonus: set | None = None, tier: str = "standard",
-    porch_area: float = 0.0,
+    porch_area: float = 0.0, stair_area: float = 0.0,
 ) -> FloorPlan:
     names = [str(r.get("name") or "") for r in rooms]
     entries = [_entry(n, unit, garage_cars, tier) for n in names]
+    if stair_area > 0:
+        # Phase 4b step B: the staircase is pinned to its fixed block.
+        for e in entries:
+            if e["category"] == "staircase":
+                e["min"] = e["pref"] = e["target"] = e["max"] = stair_area
     circ = rules.circulation_fraction(_private_count(rooms))
     # The ground-floor Verandah (porch_area) is open area, not enclosed:
     # circulation and room allocation work on the enclosed part only.
@@ -402,6 +434,10 @@ def _allocate_floor(
         # through this override map. Standard tier: room_specs' own numbers.
         for e in entries:
             room_max[e["name"]] = e["max"]
+    if stair_area > 0:
+        for e in entries:
+            if e["category"] == "staircase":
+                room_max[e["name"]] = stair_area
     has_porch_room = any(e["category"] == "porch" for e in entries)
     if floor_number == 1 and porch_area > 0 and not has_porch_room:
         porch = rules.GROUND_FLOOR_EXCESS_FALLBACK
@@ -545,16 +581,23 @@ def plan_building(
     else:
         fp_length, fp_width = fp_depth, fp_cross
 
+    stair_area = 0.0
+    if STAIR_FIXED_BLOCK and total_floors > 1 and any(
+        classify_room_category(str(r.get("name") or "")) == "staircase" for rooms in floors_rooms for r in rooms
+    ):
+        sw, sd = stair_block_size(unit)
+        stair_area = sw * sd
     plan = BuildingPlan(
         unit=unit, footprint_length=fp_length, footprint_width=fp_width, yards=yards, band=band.name,
         net_plot_area=net_area, footprint_area=area, program_min=program_min,
         program_ceiling=program_ceiling, envelope_area=envelope_area, infeasible=infeasible,
         tier=tier, porch_area=porch_area, built_area_cap=cap_total, total_floors=total_floors,
+        stair_area=stair_area,
     )
     for i, rooms in enumerate(floors_rooms):
         fp = _allocate_floor(rooms, i + 1, total_floors, area, unit, garage_cars, add_bonus,
                              (exclude_bonus or {}).get(i + 1), tier,
-                             porch_area if i == 0 else 0.0)
+                             porch_area if i == 0 else 0.0, stair_area)
         fp.footprint_length, fp.footprint_width, fp.yards = fp_length, fp_width, yards
         plan.floors.append(fp)
     return plan
@@ -576,6 +619,7 @@ def plan_to_dict(plan: BuildingPlan) -> dict:
         "tier": plan.tier,
         "porch_area": plan.porch_area,
         "built_area_cap": plan.built_area_cap,
+        "stair_block": dict(plan.stair_block) if plan.stair_block else None,
         "floors": [
             {
                 "floor_number": f.floor_number,
@@ -604,6 +648,7 @@ def floor_plan_from_dict(data: dict | None, floor_number: int) -> FloorPlan | No
             added_rooms=[dict(a) for a in floor.get("added_rooms") or []],
             remainder_rooms=list(floor.get("remainder_rooms") or []),
             layout_path=str(floor.get("layout_path") or ""),
+            stair_block=dict(data["stair_block"]) if data.get("stair_block") else None,
         )
     except (KeyError, TypeError, ValueError, StopIteration):
         return None

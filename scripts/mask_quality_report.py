@@ -69,7 +69,7 @@ def compute_all(planner: bool = False) -> dict:
                 )
             metrics = measure_floor(
                 rects, case["plot"], total_floors=total, floor_number=floor_n,
-                garage_cars=case["garage_cars"], max_overrides=overrides,
+                garage_cars=case["garage_cars"], max_overrides=overrides, facing=case["facing"],
             )
             results[key] = (case, floor_n, rects, metrics, overrides)
     finally:

@@ -67,9 +67,11 @@ from app.pipeline.door_graph import (
     build_door_graph,
     compute_hallway_adjacent,
     front_door_opening,
+    orphaned_ensuites,
     room_door_walls,
     shared_edge,
     shared_edge_between_rooms,
+    should_suppress_bathroom_public_door,
     should_suppress_direct_door,
     should_suppress_garage_direct_door,
 )
@@ -831,6 +833,7 @@ _shared_edge_between_rooms = shared_edge_between_rooms
 _compute_hallway_adjacent = compute_hallway_adjacent
 _should_suppress_direct_door = should_suppress_direct_door
 _should_suppress_garage_direct_door = should_suppress_garage_direct_door
+_should_suppress_bathroom_public_door = should_suppress_bathroom_public_door
 _front_door_opening = front_door_opening
 _room_door_walls = room_door_walls
 

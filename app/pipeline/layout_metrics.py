@@ -8,6 +8,7 @@ from app.pipeline.room_specs import (
     classify_room_category,
     max_area_for_room,
     min_area_for_room,
+    to_plot_unit,
 )
 
 _NO_MAX_CATEGORIES = ("hallway", "staircase", "garage")
@@ -44,8 +45,12 @@ def measure_floor(
     floor_number: int = 1,
     garage_cars: int | None = None,
     max_overrides: dict | None = None,
+    facing: str | None = None,
 ) -> dict:
-    """`max_overrides` (name -> max area) replaces room_specs' max for the
+    """`facing` (Phase 4b) enables the circulation metrics (reachability
+    from the entry over the real door graph - door_graph.circulation_report);
+    without it they stay None, exactly as before.
+    `max_overrides` (name -> max area) replaces room_specs' max for the
     named rooms - used only for planner-added remainder rooms (an upper-floor
     Terrace sized to the leftover area). None (default) = unchanged."""
     unit = plot_dims.get("unit") or "ft"
@@ -134,7 +139,24 @@ def measure_floor(
         ),
         "bedroom_aspect_fail": bedroom_aspect_fail,
         "stair_over_cap": stair_fail,
-        "unreachable": None,
-        "pass_through_private": None,
-        "hall_dead_end_len": None,
+        **_circulation(rects, plot_dims, facing, floor_number, unit),
+    }
+
+
+def _circulation(rects, plot_dims, facing, floor_number, unit) -> dict:
+    if facing is None:
+        return {"unreachable": None, "pass_through_private": None, "entry_is_garage": None,
+                "entry_missing": None, "dead_end_hall_len": None}
+    from app.pipeline.door_graph import circulation_report
+
+    rep = circulation_report(rects, plot_dims, facing, floor_number)
+    metre = to_plot_unit(1.0, unit)
+    return {
+        "unreachable": rep["unreachable"],
+        "pass_through_private": rep["pass_through_private"],
+        # Lists (not booleans) so the gate's len()-based ratchet applies.
+        "entry_is_garage": ["__floor__"] if rep["entry_is_garage"] else [],
+        "entry_missing": ["__floor__"] if rep["entry_missing"] else [],
+        "dead_end_hall_len": round(rep["dead_end_hall_len"] / metre, 2),  # metres
+        "circulation_root": f"{rep['root']} ({rep['root_how']})",
     }

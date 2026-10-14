@@ -21,6 +21,9 @@ from app.pipeline.room_specs import (
 )
 
 CIRCULATION_NOT_MEASURED = "NOT MEASURED YET (Phase 4)"
+# Phase 4b: circulation is measured (door_graph.circulation_report) and
+# scored as its own check. Kept OUT of the legacy-6 / all-8 totals so those
+# numbers stay comparable with earlier phases; a third total includes it.
 
 # Check ids, in report order. "circulation" is printed but never scored.
 # LEGACY_CHECKS are the six Phase 2/3 checks (the "X/210" number); the big-
@@ -107,7 +110,7 @@ def score_floor(
     length, width = float(plot["length"]), float(plot["width"])
     total = len(floors_rooms)
     m = measure_floor(rects, plot, total_floors=total, floor_number=floor_number,
-                      garage_cars=garage_cars, max_overrides=max_overrides)
+                      garage_cars=garage_cars, max_overrides=max_overrides, facing=facing)
 
     exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
     net_area = max(length - 2 * exterior, 0.0) * max(width - 2 * exterior, 0.0)
@@ -202,8 +205,22 @@ def score_floor(
     res["aspect"] = {"pass": not m["bedroom_aspect_fail"], "offenders": list(m["bedroom_aspect_fail"])}
     stair_detail = [f"{r['name']}={_area(r):.0f}" for r in rects if str(r.get("name") or "") in m["stair_over_cap"]]
     res["stair_cap"] = {"pass": not m["stair_over_cap"], "offenders": stair_detail}
-    res["circulation"] = CIRCULATION_NOT_MEASURED
+    if m.get("unreachable") is None:
+        res["circulation"] = {"pass": True, "measured": False}
+    else:
+        bad = {
+            "unreachable": list(m["unreachable"]),
+            "pass_through_private": list(m["pass_through_private"]),
+            "entry_is_garage": bool(m["entry_is_garage"]),
+            "entry_missing": bool(m["entry_missing"]),
+        }
+        res["circulation"] = {
+            "pass": not (bad["unreachable"] or bad["pass_through_private"] or bad["entry_is_garage"] or bad["entry_missing"]),
+            "measured": True, **bad,
+            "dead_end_hall_m": m["dead_end_hall_len"], "root": m.get("circulation_root"),
+        }
     res["clean"] = all(res[c]["pass"] for c in SCORED_CHECKS)
+    res["clean_all"] = res["clean"] and res["circulation"]["pass"]
     res["clean_legacy"] = all(res[c]["pass"] for c in LEGACY_CHECKS)
     return res
 
@@ -272,7 +289,35 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None, pa
             else:
                 detail = "staircase on a single-floor house"
             lines.append(f"    FAIL {k}: {detail}")
-    lines.append(f"6. Circulation (reachability): {CIRCULATION_NOT_MEASURED}")
+    measured = [k for k in keys if results[k].get("circulation", {}).get("measured")]
+    if not measured:
+        lines.append(f"6. Circulation (reachability): {CIRCULATION_NOT_MEASURED}")
+    else:
+        failing = [k for k in measured if not results[k]["circulation"]["pass"]]
+        lines.append(f"6. Circulation (reachable from entry; no pass-through bedroom/bath; entry not garage/missing; "
+                     f"porch/verandah/terrace excluded): {len(measured) - len(failing)}/{len(keys)} floors pass")
+        for k in failing:
+            c = results[k]["circulation"]
+            bits = []
+            if c["unreachable"]:
+                bits.append("unreachable " + ",".join(c["unreachable"]))
+            if c["pass_through_private"]:
+                bits.append("pass-through " + ",".join(c["pass_through_private"]))
+            if c["entry_is_garage"]:
+                bits.append("ENTRY IS GARAGE")
+            if c["entry_missing"]:
+                bits.append("entry missing (only the garage touches the facing edge)")
+            lines.append(f"    FAIL {k}: {'; '.join(bits)} [from {c['root']}]")
+        dead = [(k, results[k]["circulation"]["dead_end_hall_m"]) for k in measured
+                if (results[k]["circulation"]["dead_end_hall_m"] or 0) > 1.5]
+        lines.append(f"   (soft, informational) dead-end hallway arm > 1.5 m: {len(dead)} floors"
+                     + ("" if not dead else ": " + ", ".join(f"{k}={v:.1f}m" for k, v in dead)))
+        unr = sum(len(results[k]["circulation"]["unreachable"]) for k in measured)
+        pt = sum(len(results[k]["circulation"]["pass_through_private"]) for k in measured)
+        eg = sum(1 for k in measured if results[k]["circulation"]["entry_is_garage"])
+        em = sum(1 for k in measured if results[k]["circulation"]["entry_missing"])
+        lines.append(f"   totals: unreachable rooms {unr}, pass-through rooms {pt}, "
+                     f"entry-is-garage floors {eg}, entry-missing floors {em}")
     lines.append("")
     lines.append("Coverage detail (big plots; FLAG = coverage < 12%):")
     for k in keys:
@@ -307,4 +352,10 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None, pa
     lines.append(f"OVERALL (all {len(SCORED_CHECKS)} checks incl. new aspect/stair cap): "
                  f"{total_pass + new_pass} of {len(keys) * len(SCORED_CHECKS)} floor-checks pass; "
                  f"{len(clean)} of {len(keys)} floors fully clean (pass ALL scored checks)")
+    if any(results[k].get("circulation", {}).get("measured") for k in keys):
+        circ_pass = sum(1 for k in keys if results[k]["circulation"]["pass"])
+        clean_all = [k for k in keys if results[k].get("clean_all")]
+        lines.append(f"OVERALL (all {len(SCORED_CHECKS) + 1} checks incl. circulation): "
+                     f"{total_pass + new_pass + circ_pass} of {len(keys) * (len(SCORED_CHECKS) + 1)} floor-checks pass; "
+                     f"{len(clean_all)} of {len(keys)} floors fully clean")
     return "\n".join(lines)

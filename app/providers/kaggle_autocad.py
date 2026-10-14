@@ -269,13 +269,9 @@ def _door_specs_for_floor(
     # the Computed Layout's (a bathroom door narrower than a bedroom's, etc).
     facing_normalized = (facing or "").strip().lower()
 
-    # Door decisions come from door_graph.build_door_graph() (Phase 4a pure
-    # refactor). parts_aware=False preserves this module's CURRENT use of the
-    # bbox-only shared_edge() (identical for single-part rooms).
-    # TODO(Phase 4b): consider the parts-aware edge like the PNG does.
-    door_graph = build_door_graph(
-        rects, dimensions, facing_normalized, floor_number, parts_aware=False
-    )
+    # Door decisions come from door_graph.build_door_graph() - the same
+    # parts-aware door set the PNG blueprint draws (Phase 4b).
+    door_graph = build_door_graph(rects, dimensions, facing_normalized, floor_number)
 
     specs: list[dict] = []
     for a, b, edge in door_graph.interior:
