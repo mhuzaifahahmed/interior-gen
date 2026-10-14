@@ -253,14 +253,17 @@ def test_metrics_and_scorecard_report_aspect_and_stair():
 
 
 def test_scorecard_remainder_names_and_tier_bath_cap():
-    # A 95 sq ft bath fails the standard 80 cap but passes the estate cap
-    # (planner mode on an XL plot only).
-    rects = [{"name": "Bathroom 1", "x": 100, "y": 100, "w": 9.5, "h": 10}]
+    # A 95 sq ft MASTER bath fails the standard 80 cap but passes the estate
+    # cap (planner mode on an XL plot only). Step 4: the raised cap is for the
+    # master ensuite only - a plain bathroom keeps 80 in every mode.
+    rects = [{"name": "Master Bathroom", "x": 100, "y": 100, "w": 9.5, "h": 10}]
     plot = _plot(300, 300)
-    floors = [[{"name": "Bathroom 1"}]]
+    floors = [[{"name": "Master Bathroom"}]]
     off = score_floor(rects, plot, "south", floors, 1)
     on = score_floor(rects, plot, "south", floors, 1, planner=True)
     assert off["sizes"]["big_baths"] and not on["sizes"]["big_baths"]
+    plain = [{"name": "Bathroom 1", "x": 100, "y": 100, "w": 9.5, "h": 10}]
+    assert score_floor(plain, plot, "south", [[{"name": "Bathroom 1"}]], 1, planner=True)["sizes"]["big_baths"]
     # remainder_names decides what is excluded, not every override key.
     rects2 = [{"name": "Living Room", "x": 0, "y": 0, "w": 30, "h": 30}]
     res = score_floor(rects2, plot, "south", [[{"name": "Living Room"}]], 1,

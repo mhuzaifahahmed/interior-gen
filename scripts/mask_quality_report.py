@@ -181,6 +181,18 @@ def _scorecard(results, label, planner):
     if planner:
         text += "\n\n" + _built_area_table(results)
     text += "\n\n" + format_violation_histogram(scored, label)
+    if planner:
+        # Step 4 item 4: the same floors under the ORIGINAL thresholds too.
+        from app.pipeline.mask_scorecard import format_dual_scorecard
+
+        original = {}
+        for key, (case, floor_n, rects, _m, overrides) in results.items():
+            original[key] = score_floor(
+                rects, case["plot"], case["facing"], case["floors"], floor_n,
+                case["garage_cars"], overrides,
+                remainder_names=(EXTRA.get(key) or {}).get("remainder"), planner=True, thresholds="original",
+            )
+        text += "\n\n" + format_dual_scorecard(original, scored, label)
     print(text)
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(os.path.join(OUT_DIR, f"scorecard_{label}.txt"), "w", encoding="utf-8") as f:

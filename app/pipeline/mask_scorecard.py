@@ -34,7 +34,7 @@ SCORED_CHECKS = LEGACY_CHECKS + NEW_CHECKS
 CHECK_TITLES = {
     "coverage": "1. Footprint scales with plot (coverage within [~0.5x band target, band max])",
     "yards": "2. Balanced yards on small/medium plots (sides <= 2x, front/rear sane)",
-    "sizes": "3. No oversized rooms (<=1.10x max; stair/garage <=1.5x), living>=dining, bath<=80sqft, dining<=180sqft",
+    "sizes": "3. No oversized rooms (<=1.10x max; stair/garage <=1.5x), living>=dining, bath<=80sqft (tier cap for master ensuites in planner mode), dining<=180sqft",
     "hard": "4. Zero hard violations (incl. daylight, narrow, door_too_narrow)",
     "parts": "5. Parts per room <= 2 (informational until Phase 3, still scored)",
     "stair": "7. Single-floor houses have no staircase",
@@ -87,6 +87,25 @@ def building_ceiling(
     return pmin, ceiling
 
 
+def is_master_ensuite(rect: dict, rects: list[dict]) -> bool:
+    """A bathroom that is a master ensuite: named master/ensuite, or sharing
+    its `suite` tag with a master bedroom. Only such a bathroom gets the
+    tier-raised bath cap in the scorecard (Step 4 item 4)."""
+    name = str(rect.get("name") or "").lower()
+    if classify_room_category(name) != "bathroom":
+        return False
+    if "master" in name or "ensuite" in name or "en-suite" in name or "en suite" in name:
+        return True
+    suite = rect.get("suite")
+    if suite is None:
+        return False
+    return any(
+        r is not rect and r.get("suite") == suite and "master" in str(r.get("name") or "").lower()
+        and classify_room_category(str(r.get("name") or "")) == "bedroom"
+        for r in rects
+    )
+
+
 def score_floor(
     rects: list[dict],
     plot: dict,
@@ -97,6 +116,7 @@ def score_floor(
     max_overrides: dict | None = None,
     remainder_names: list | None = None,
     planner: bool = False,
+    thresholds: str = "tier",
 ) -> dict:
     """Scores one rendered floor. `floors_rooms` is the REQUESTED program for
     every floor (used for the program ceiling); `max_overrides` maps room
@@ -105,7 +125,17 @@ def score_floor(
     Verandah) whose size is intentionally the leftover - listed, not counted
     as oversized; None = every override key (the Phase 2/3 behaviour).
     `planner` = score with the planner's tier-aware ceiling/caps (the
-    flag-off report passes False and is unchanged)."""
+    flag-off report passes False and is unchanged).
+    `thresholds` (planner only, Step 4 item 4): "tier" (default) = tier-
+    aware thresholds, where the raised tier bath cap applies ONLY to a master
+    ensuite (is_master_ensuite) and every other bathroom keeps 80 sq ft;
+    "original" = the Phase 2 thresholds: 80 sq ft bath cap everywhere,
+    standard-tier maxima (plan overrides kept only for remainder rooms) and
+    the standard-tier coverage ceiling without the estate cap."""
+    original = planner and thresholds == "original"
+    if original and max_overrides:
+        keep = set(remainder_names if remainder_names is not None else max_overrides)
+        max_overrides = {n: v for n, v in max_overrides.items() if n in keep} or None
     unit = plot.get("unit") or "ft"
     length, width = float(plot["length"]), float(plot["width"])
     total = len(floors_rooms)
@@ -115,14 +145,14 @@ def score_floor(
     exterior = to_plot_unit(EXTERIOR_WALL_THICKNESS_M, unit)
     net_area = max(length - 2 * exterior, 0.0) * max(width - 2 * exterior, 0.0)
     band = rules.plot_band(net_area, unit)
-    tier = rules.size_tier(band.name) if planner else "standard"
+    tier = rules.size_tier(band.name) if planner and not original else "standard"
     adjust = rules.floor_count_coverage_adjust(total)
     fp_l = length - m["yard_left"] - m["yard_right"]
     fp_w = width - m["yard_top"] - m["yard_bottom"]
     fp_area = max(fp_l, 0.0) * max(fp_w, 0.0)
     cov = fp_area / net_area if net_area else 0.0
     _pmin, ceiling = building_ceiling(
-        floors_rooms, unit, garage_cars, tier, band.name if planner else None
+        floors_rooms, unit, garage_cars, tier, band.name if planner and not original else None
     )
     ceiling_cov = ceiling / net_area if net_area else 0.0
     low = 0.5 * band.target_cov * adjust
@@ -160,7 +190,8 @@ def score_floor(
 
     # Sizes.
     overrides = set(remainder_names if remainder_names is not None else (max_overrides or {}).keys())
-    bath_cap = rules.BATH_CAP_SQFT_BY_TIER.get(tier, 80.0)
+    tier_bath_cap = rules.BATH_CAP_SQFT_BY_TIER.get(tier, 80.0)
+    base_bath_cap = rules.BATH_CAP_SQFT_BY_TIER["standard"]
     oversized = [n for n in m["oversized"] if n not in overrides]
     big_baths, big_dining, big_pinned = [], [], []
     floor_area = fp_area
@@ -169,6 +200,7 @@ def score_floor(
         name = str(r.get("name") or "")
         cat = classify_room_category(name)
         a = _area(r)
+        bath_cap = tier_bath_cap if is_master_ensuite(r, rects) else base_bath_cap
         if cat == "bathroom" and a > _sqft(bath_cap, unit) * _CAP_TOL:
             big_baths.append(f"{name}={a:.0f}")
         if cat in ("staircase", "garage"):
@@ -269,6 +301,48 @@ def suite_guard_count(paths: dict) -> int:
     return len(workaround_path_floors(paths)["suite_guard"])
 
 
+def summary_counts(results: dict) -> dict:
+    """Pass counts per check plus the three totals and clean-floor counts
+    for a {key: score_floor() result} map."""
+    keys = list(results)
+    out = {c: sum(1 for k in keys if results[k][c]["pass"]) for c in SCORED_CHECKS}
+    out["circulation"] = sum(1 for k in keys if results[k]["circulation"]["pass"])
+    out["legacy"] = sum(out[c] for c in LEGACY_CHECKS)
+    out["all8"] = sum(out[c] for c in SCORED_CHECKS)
+    out["all9"] = out["all8"] + out["circulation"]
+    out["clean_legacy"] = sum(1 for k in keys if results[k]["clean_legacy"])
+    out["clean"] = sum(1 for k in keys if results[k]["clean"])
+    out["clean_all"] = sum(1 for k in keys if results[k]["clean_all"])
+    out["floors"] = len(keys)
+    return out
+
+
+def format_dual_scorecard(original: dict, tier: dict, label: str) -> str:
+    """Step 4 item 4: the planner scorecard under (A) ORIGINAL thresholds and
+    (B) tier-aware thresholds (raised bath cap for master ensuites only),
+    same checks, same floors, side by side."""
+    a, b = summary_counts(original), summary_counts(tier)
+    n = a["floors"]
+    rows = [(CHECK_TITLES[c].split(" (")[0], a[c], b[c]) for c in SCORED_CHECKS]
+    rows.append(("6. Circulation", a["circulation"], b["circulation"]))
+    lines = [
+        f"=== DUAL-THRESHOLD SCORECARD [{label}] ===",
+        "(A) ORIGINAL: bath cap 80 sq ft everywhere, standard-tier maxima, standard coverage ceiling (no estate cap)",
+        "(B) TIER-AWARE: tier maxima + ceiling incl. estate cap; raised bath cap (90/100) ONLY for master ensuites, other baths 80",
+        f"{'check':<52}{'(A) original':>14}{'(B) tier-aware':>16}",
+    ]
+    for title, x, y in rows:
+        lines.append(f"{title[:51]:<52}{f'{x}/{n}':>14}{f'{y}/{n}':>16}")
+    totals = (
+        ("legacy 6 checks (floor-checks)", "legacy", n * len(LEGACY_CHECKS)),
+        ("all 9 checks incl. circulation (floor-checks)", "all9", n * (len(SCORED_CHECKS) + 1)),
+        ("fully clean floors (all 9)", "clean_all", n),
+    )
+    for title, key, denom in totals:
+        lines.append(f"{title:<52}{f'{a[key]}/{denom}':>14}{f'{b[key]}/{denom}':>16}")
+    return "\n".join(lines)
+
+
 def format_narrow_bedrooms(results: dict) -> str:
     """Step 4: one line - bedrooms failing the aspect check (> BEDROOM_ASPECT_
     HARD:1) or carrying a hard `narrow` (layout_metrics' `narrow_bedrooms`),
@@ -310,7 +384,7 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None, pa
                 if r["inverted"]:
                     bits.append(f"living {r['living']} < dining {r['dining']}")
                 if r["big_baths"]:
-                    bits.append("bath>80 " + ",".join(r["big_baths"]))
+                    bits.append("bath>cap " + ",".join(r["big_baths"]))
                 if r["big_dining"]:
                     bits.append("dining>180 " + ",".join(r["big_dining"]))
                 if r["big_pinned"]:
