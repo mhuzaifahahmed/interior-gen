@@ -285,12 +285,12 @@ def front_door_room(
     module's existing "no signal, no mark" restraint (e.g. `_furnish_*`'s
     silent skip for an unrecognized room name).
 
-    Phase 4b rule: the entrance is NEVER the garage. Preference: a foyer/
-    entry touching the facing edge, else a non-garage public room touching
-    it, else any other non-garage room touching it. When only the garage
-    touches the facing edge, returns (None, None) - no front door is drawn
-    on that floor and the scorer reports `entry_missing`. (The garage's own
-    vehicle door is not the entrance.)"""
+    Step 3 rule (supersedes Phase 4b's "any non-bedroom room" fallback):
+    only rooms in FRONT_DOOR_PRIORITY may take the entrance, first tier that
+    touches the facing edge wins (largest span within the tier). The garage
+    is never the entrance. When no listed room touches the facing edge,
+    returns (None, None) - no front door is drawn on that floor and the
+    scorer reports `entry_missing`."""
     facing = (facing or "").strip().lower()
     if facing not in FACING_ORDER:
         return None, None
@@ -327,21 +327,42 @@ def front_door_room(
     if not candidates:
         return None, None
 
-    foyers = [(r, p) for r, p in candidates if classify_room_category(r["name"]) == "foyer"]
-    public = [(r, p) for r, p in candidates if _zone_key(r["name"]) == 0]
-    # Phase 4b: the last-resort front door prefers any room that is not a
-    # bedroom/bathroom/powder room (a hallway, a lounge, a study...) before
-    # falling back to a private room - a front door straight into a
-    # bathroom is never chosen while another room touches the facing edge.
-    not_private = [
-        (r, p) for r, p in candidates
-        if classify_room_category(r["name"]) not in ("bedroom", "bathroom", "powder")
-    ]
-    pool = foyers or public or not_private or candidates
-    room, part = max(pool, key=lambda rp: span(rp[1])[1] - span(rp[1])[0])
+    # Step 3 (user decision): the front door may only open into a PUBLIC room,
+    # in this priority: foyer/entry -> living -> lounge/hall(way) -> dining.
+    # Kitchen, utility/laundry, store/storage, garage, staircase, study,
+    # bedrooms and bathrooms are never the entrance. When none of the listed
+    # rooms touches the facing edge there is NO front door (the scorer reports
+    # `entry_missing`) - an entrance is never invented elsewhere.
+    for tier in range(len(FRONT_DOOR_PRIORITY)):
+        pool = [(r, p) for r, p in candidates if front_door_tier(r.get("name") or "") == tier]
+        if pool:
+            room, part = max(pool, key=lambda rp: span(rp[1])[1] - span(rp[1])[0])
+            start, end = span(part)
+            return room, {"orientation": orientation, "pos": pos, "start": start, "end": end}
+    return None, None
 
-    start, end = span(part)
-    return room, {"orientation": orientation, "pos": pos, "start": start, "end": end}
+
+FRONT_DOOR_PRIORITY = ("foyer", "living", "lounge_hall", "dining")
+_LOUNGE_HALL_WORDS = ("lounge", "sitting", "family", "hall")
+
+
+def front_door_tier(name: str) -> int | None:
+    """Index into FRONT_DOOR_PRIORITY for a room name, or None when the room
+    may never take the front door. Lounge/sitting/family room/hall(way) are
+    matched by name (a "Family Lounge" or "Sitting Area" classifies as
+    "living" but ranks after a real living room); "Hallway" by category."""
+    cat = classify_room_category(name)
+    low = name.lower()
+    if cat == "foyer":
+        return 0
+    lounge_hall = cat == "hallway" or any(w in low for w in _LOUNGE_HALL_WORDS)
+    if cat == "living" and not lounge_hall:
+        return 1
+    if lounge_hall and cat in ("living", "hallway", "default", "family"):
+        return 2
+    if cat == "dining":
+        return 3
+    return None
 
 
 def room_door_walls(rect: dict, door_edges: list[dict]) -> set[str]:
@@ -571,6 +592,7 @@ def circulation_report(
         return {
             "root": None, "root_how": how, "unreachable": [], "pass_through_private": [],
             "entry_is_garage": entry_is_garage, "entry_missing": entry_missing, "dead_end_hall_len": 0.0,
+            "front_door_room": None,
         }
 
     full = {root}
@@ -613,4 +635,5 @@ def circulation_report(
         "entry_is_garage": entry_is_garage,
         "entry_missing": entry_missing,
         "dead_end_hall_len": _dead_end_hall_length(rects, graph),
+        "front_door_room": names[idx[id(graph.front_room)]] if graph.front_room is not None else None,
     }

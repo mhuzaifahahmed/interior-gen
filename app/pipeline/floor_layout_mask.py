@@ -345,6 +345,17 @@ def _circulation_variants(stage2, options, targets, core_dimensions, garage_cars
                 connect_rooms=need,
             )
             out.append(((cand, score(cand), stats), "circ_arms" + ("+stair" if stair else "")))
+        if _KEEP_SUITE_CONTACT and any(v.kind == "orphaned_ensuite" for _r, sc, _s in tries for v in sc.violations):
+            # Step 3: the same variant rectified with the suite-contact guard
+            # (see _KEEP_SUITE_CONTACT) - an extra candidate only.
+            stats = {}
+            diag["grown"] += 1
+            diag["rectified"] += 1
+            cand = _grow_floor(
+                targets, core_dimensions, width_delta, cross_link, garage_cars, planner=True, stair_block=stair_block, memo=memo, stats=stats,
+                band_delta=band_delta, flip_egress=flip, keep_suites=True,
+            )
+            out.append(((cand, score(cand), stats), "suite_guard"))
     return out
 
 
@@ -1219,7 +1230,7 @@ def _grow_floor(
     garage_cars: int | None = None, planner: bool = False, stats: dict | None = None,
     band_delta: int = 0, flip_egress: bool = False, rectify: bool | str = True,
     stair_at_spine: bool | None = None, connect_rooms: tuple = (), stair_block: dict | None = None,
-    memo: dict | None = None,
+    memo: dict | None = None, keep_suites: bool = False,
 ) -> list[dict]:
     # Phase 3: rectify=False also keeps the legacy row-major decomposition, so
     # a planner candidate grown without rectification is exactly what Phase 2
@@ -1268,7 +1279,7 @@ def _grow_floor(
             _ShapeCtx(cols, rows, cell_w, cell_h, unit, targets), stats,
         )
     elif planner and rectify:
-        bkey = ("B", mkey) if (mkey is not None and rectify is True) else None
+        bkey = ("B", mkey, keep_suites) if (mkey is not None and rectify is True) else None
         bsnap = memo.get(bkey) if bkey is not None else None
         if bsnap is not None:
             owner, cells_by_room, rect_stats = _copy_state(bsnap)
@@ -1277,7 +1288,7 @@ def _grow_floor(
         else:
             _rectify_rooms(
                 owner, cells_by_room, targets, target_cells, min_cells, max_cells, zones, band,
-                _ShapeCtx(cols, rows, cell_w, cell_h, unit, targets), stats,
+                _ShapeCtx(cols, rows, cell_w, cell_h, unit, targets), stats, keep_suites=keep_suites,
             )
             if bkey is not None:
                 memo[bkey] = _copy_state((owner, cells_by_room, dict(stats or {})))
@@ -3377,6 +3388,51 @@ def _over(i: int, size: int, max_cells: list[int]) -> float:
     return _OVER_MAX_WEIGHT * max(0, size - max_cells[i])
 
 
+# Step 3 (planner path only - rectify never runs flag-off): with keep_suites a
+# shape move may not break the wall contact between an ensuite bathroom and
+# its own bedroom. Measured (2026-10-14 trace): on every planner-on orphaned
+# ensuite the pair was seeded adjacent and still touched after growth/fill/
+# rebalance; contact was lost only inside this shape step. Applied to EVERY
+# candidate it cost +1 hard violation on 2 gate floors, so it is offered only
+# as EXTRA candidates (_circulation_variants, path "suite_guard") that the
+# per-floor safety net may pick when no ratcheted metric gets worse. Kill switch.
+_KEEP_SUITE_CONTACT = True
+
+
+def _suite_contact_guard(targets: list[dict], cells_by_room: list[set]):
+    """Returns breaks(changes) -> True when applying `changes` ({room index:
+    new cell set}) would leave a bedroom/bathroom suite pair that currently
+    shares a wall with no shared wall at all. Pairs already apart are not
+    protected (a move may never be blocked by a contact that does not exist)."""
+    pairs = []
+    by_suite: dict = {}
+    for i, t in enumerate(targets):
+        if t.get("suite") is not None:
+            by_suite.setdefault(t["suite"], []).append(i)
+    for idx in by_suite.values():
+        baths = [i for i in idx if targets[i]["category"] in ("bathroom", "powder")]
+        beds = [i for i in idx if targets[i]["category"] not in ("bathroom", "powder")]
+        pairs += [(a, b) for a in beds for b in baths]
+    if not pairs:
+        return lambda _changes: False
+
+    def touch(a: set, b: set) -> bool:
+        small, big = (a, b) if len(a) <= len(b) else (b, a)
+        return any((c + dc, r + dr) in big for (c, r) in small for dc, dr in _DIRS)
+
+    def breaks(changes: dict) -> bool:
+        for a, b in pairs:
+            if a not in changes and b not in changes:
+                continue
+            if not touch(cells_by_room[a], cells_by_room[b]):
+                continue
+            if not touch(changes.get(a, cells_by_room[a]), changes.get(b, cells_by_room[b])):
+                return True
+        return False
+
+    return breaks
+
+
 def _rectify_rooms(
     owner: list[list[int]],
     cells_by_room: list[set[tuple[int, int]]],
@@ -3388,6 +3444,7 @@ def _rectify_rooms(
     band: int,
     ctx: _ShapeCtx,
     stats: dict | None = None,
+    keep_suites: bool = False,
 ) -> None:
     """Phase 3 shape discipline (planner path only), run after growth / bounded
     fill / over-max rebalance and before decomposition.
@@ -3435,6 +3492,11 @@ def _rectify_rooms(
 
     def over(i: int, size: int) -> float:
         return _OVER_MAX_WEIGHT * max(0, size - max_cells[i])
+
+    breaks_suite = (
+        _suite_contact_guard(targets, cells_by_room) if (keep_suites and _KEEP_SUITE_CONTACT)
+        else (lambda _ch: False)
+    )
 
     moves = 0
     # A donor whose own cells and every neighbour's cells are unchanged since
@@ -3535,6 +3597,8 @@ def _rectify_rooms(
                     )
                     if delta >= -1e-9:
                         continue
+                    if breaks_suite({d: (d_cells - frag) | give_back, rcv: r_after}):
+                        continue
                     # Prefer the biggest improvement, then a plain move over a
                     # swap, then a recipient under target, then the most
                     # headroom; deterministic tie-break.
@@ -3552,7 +3616,8 @@ def _rectify_rooms(
             pair = None
             if best is None and (d_cost >= 10.0 or d_over > 0):
                 pair = _best_pair_resplit(
-                    d, owner, cells_by_room, targets, floor_cells, max_cells, row_lo, row_hi, ctx, no_receive
+                    d, owner, cells_by_room, targets, floor_cells, max_cells, row_lo, row_hi, ctx, no_receive,
+                    breaks_suite,
                 )
             if pair is not None:
                 _delta, other, new_d, new_o = pair
@@ -3672,6 +3737,7 @@ def _best_pair_resplit(
     row_hi: list[int],
     ctx: "_ShapeCtx",
     no_receive: set[int],
+    breaks_suite=None,
 ):
     """Best re-partition of room `d` and one adjacent room - by one straight
     cut across their combined cells, or by carving one of them as a rectangle
@@ -3733,6 +3799,8 @@ def _best_pair_resplit(
             if ctx.daylit[d] and d_day >= need and nd_day < need:
                 continue
             if ctx.daylit[o] and o_day >= need and no_day < need:
+                continue
+            if breaks_suite is not None and breaks_suite({d: new_d, o: new_o}):
                 continue
             drift = abs(len(new_d) - len(d_cells))
             key = (delta, drift, o, min(new_d))

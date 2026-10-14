@@ -321,6 +321,22 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None, pa
         em = sum(1 for k in measured if results[k]["circulation"]["entry_missing"])
         lines.append(f"   totals: unreachable rooms {unr}, pass-through rooms {pt}, "
                      f"entry-is-garage floors {eg}, entry-missing floors {em}")
+    fb = [(k, results[k]["metrics"]) for k in keys if results[k]["metrics"].get("front_door_fallback") is not None]
+    if fb:
+        hit = [(k, m["front_door_room"]) for k, m in fb if m["front_door_fallback"]]
+        cats: dict[str, int] = {}
+        for _k, name in hit:
+            c = classify_room_category(name or "")
+            cats[c] = cats.get(c, 0) + 1
+        lines.append(f"   (ratcheted) front door via fallback (not the foyer/entry): {len(hit)}/{len(keys)} floors"
+                     + ("" if not hit else " by room category " + ", ".join(f"{c} {n}" for c, n in sorted(cats.items()))
+                        + ": " + "; ".join(f"{k}={n}" for k, n in hit)))
+    orphan = [(k, results[k]["metrics"].get("orphaned_ensuites")) for k in keys]
+    if any(v is not None for _k, v in orphan):
+        hit = [(k, v) for k, v in orphan if v]
+        lines.append(f"   (soft, ratcheted) orphaned ensuites (ensuite sharing no wall with its own bedroom; "
+                     f"opens onto the hallway instead): {sum(len(v) for _k, v in hit)} rooms on {len(hit)}/{len(keys)} floors"
+                     + ("" if not hit else ": " + "; ".join(f"{k}={','.join(v)}" for k, v in hit)))
     lines.append("")
     lines.append("Coverage detail (big plots; FLAG = coverage < 12%):")
     for k in keys:

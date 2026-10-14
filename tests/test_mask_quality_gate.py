@@ -163,12 +163,19 @@ def _assert_no_regression(case, cur, base):
     assert len(cur["undersized"]) <= len(base["undersized"]), cur["undersized"]
     # Big-plot pass metrics (no prior baseline): ratcheted from the first
     # baseline that records them.
-    for field in ("bedroom_aspect_fail", "stair_over_cap"):
+    # Step 3 (door rules): orphaned ensuites, ratcheted from the first
+    # baseline that records them.
+    for field in ("bedroom_aspect_fail", "stair_over_cap", "orphaned_ensuites"):
         if field in base:
             assert len(cur[field]) <= len(base[field]), (field, cur[field], base[field])
     for field in _LATER_PHASE_FIELDS:
         if cur[field] is not None and base.get(field) is not None:
             assert len(cur[field]) <= len(base[field]), field
+    # Step 3: the front door may not move from the foyer to a fallback room
+    # (ratcheted from the first baseline that records it; None above floor 1).
+    if cur.get("front_door_fallback") is not None and base.get("front_door_fallback") is not None:
+        assert cur["front_door_fallback"] <= base["front_door_fallback"], (
+            "front_door_fallback", cur["front_door_room"], base.get("front_door_room"))
 
     # Coverage must not exceed the plot band's max (NET plot area). Only the
     # UPPER bound is enforced - today's mask coverage is far below target on

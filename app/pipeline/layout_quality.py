@@ -436,12 +436,21 @@ def score_floor_layout(
 
 
 CIRCULATION_HARD_KINDS = ("unreachable", "pass_through_private", "entry_is_garage", "entry_missing")
-CIRCULATION_KINDS = CIRCULATION_HARD_KINDS + ("dead_end_hall",)
+# Step 3: `orphaned_ensuite` (SOFT) - a suite-tagged bathroom that shares no
+# wall with its own bedroom. door_graph treats it as a common bathroom so it
+# stays reachable (it opens onto the hallway), but it is still a real defect
+# ("ensuite" only on paper), so it is counted here, never hidden.
+CIRCULATION_KINDS = CIRCULATION_HARD_KINDS + ("dead_end_hall", "orphaned_ensuite")
 # Below one gate-tracked hard violation (HARD_VIOLATION_PENALTY) on purpose:
 # the mask engine picks circulation-correct candidates through an explicit
 # per-floor safety net (floor_layout_mask._layout_with_plan), never by
 # letting this penalty outbid a ratcheted metric.
 CIRCULATION_PENALTY = 200.0
+# Soft and capped: far below one circulation/shape-cap/gated hard violation
+# (200 / 60 / 1000), so it can never outweigh one. Being a circulation kind,
+# the mask engine adds it back for the plain best-score pick and stage-1
+# ranking; it only breaks ties in _pick_circulation_safe.
+ORPHANED_ENSUITE_PENALTY = 20.0
 
 
 def circulation_violations(rects: list[dict], dimensions: dict, facing: str, floor_number: int = 1) -> list[Violation]:
@@ -462,7 +471,20 @@ def circulation_violations(rects: list[dict], dimensions: dict, facing: str, flo
         out.append(Violation("__floor__", "entry_missing", True, "no non-garage room on the facing edge for the front door"))
     if rep["dead_end_hall_len"] > to_plot_unit(DEAD_END_HALL_SOFT_M, unit) + 1e-6:
         out.append(Violation("Hallway", "dead_end_hall", False, f"{rep['dead_end_hall_len']:.1f} past the last door"))
+    for name in orphaned_ensuite_names(rects):
+        out.append(Violation(name, "orphaned_ensuite", False, "ensuite shares no wall with its own bedroom"))
     return out
+
+
+def orphaned_ensuite_names(rects: list[dict]) -> list[str]:
+    """Names of suite-tagged bathrooms/powder rooms sharing no wall with any
+    non-bathroom room of their own suite (door_graph.orphaned_ensuites,
+    which the door rules use). Counted on every floor, hallway or not.
+    Lazy import (door_graph imports floor_layout, which imports this)."""
+    from app.pipeline.door_graph import orphaned_ensuites
+
+    ids = orphaned_ensuites(rects)
+    return [str(r.get("name") or "") for r in rects if id(r) in ids]
 
 
 _SOFT_PENALTY_BY_KIND = {
@@ -470,6 +492,7 @@ _SOFT_PENALTY_BY_KIND = {
     "elongated": ELONGATED_PENALTY,
     "no_egress": EGRESS_PENALTY,
     "notch": NOTCH_PENALTY,
+    "orphaned_ensuite": ORPHANED_ENSUITE_PENALTY,
 }
 
 

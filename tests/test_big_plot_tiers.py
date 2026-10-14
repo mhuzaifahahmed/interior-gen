@@ -246,8 +246,9 @@ def test_metrics_and_scorecard_report_aspect_and_stair():
     assert not res["aspect"]["pass"] and not res["stair_cap"]["pass"]
     assert not res["clean"]
     text = format_scorecard({"x/floor1": res}, "t", None, {"x/floor1": "reference_raw"})
-    assert "floors using the Phase 2 fallback: 1/1" in text
-    assert "raw reference 1" in text
+    # Wording since a3d5fc8 (every path kind counted and summed).
+    assert "Floors using the Phase 2 fallback (reference_reconnect, reference_raw): 1/1" in text
+    assert "reference_raw 1" in text and "[sum 1]" in text
     assert "6 legacy checks" in text
 
 

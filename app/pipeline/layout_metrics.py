@@ -2,7 +2,13 @@
 Measurement only - no I/O, never changes layout behavior. Consumed by
 scripts/mask_quality_report.py and tests/test_mask_quality_gate.py."""
 
-from app.pipeline.layout_quality import bedroom_aspect, daylight_failures, score_floor_layout, stair_over_cap
+from app.pipeline.layout_quality import (
+    bedroom_aspect,
+    daylight_failures,
+    orphaned_ensuite_names,
+    score_floor_layout,
+    stair_over_cap,
+)
 from app.pipeline.planning_rules import BEDROOM_ASPECT_HARD
 from app.pipeline.room_specs import (
     classify_room_category,
@@ -139,6 +145,9 @@ def measure_floor(
         ),
         "bedroom_aspect_fail": bedroom_aspect_fail,
         "stair_over_cap": stair_fail,
+        # Step 3: suite-tagged bathrooms sharing no wall with their own
+        # bedroom (soft; door_graph lets them open onto the hallway).
+        "orphaned_ensuites": orphaned_ensuite_names(rects),
         **_circulation(rects, plot_dims, facing, floor_number, unit),
     }
 
@@ -146,12 +155,19 @@ def measure_floor(
 def _circulation(rects, plot_dims, facing, floor_number, unit) -> dict:
     if facing is None:
         return {"unreachable": None, "pass_through_private": None, "entry_is_garage": None,
-                "entry_missing": None, "dead_end_hall_len": None}
-    from app.pipeline.door_graph import circulation_report
+                "entry_missing": None, "dead_end_hall_len": None,
+                "front_door_fallback": None, "front_door_room": None}
+    from app.pipeline.door_graph import circulation_report, front_door_tier
 
     rep = circulation_report(rects, plot_dims, facing, floor_number)
     metre = to_plot_unit(1.0, unit)
+    front = rep.get("front_door_room")
     return {
+        # Step 3: 1 when the ground-floor front door opens into a room other
+        # than the foyer/entry (a fallback tier), else 0; None above floor 1.
+        # A floor with no front door at all is `entry_missing`, not counted here.
+        "front_door_fallback": None if floor_number != 1 else int(front is not None and front_door_tier(front) != 0),
+        "front_door_room": front,
         "unreachable": rep["unreachable"],
         "pass_through_private": rep["pass_through_private"],
         # Lists (not booleans) so the gate's len()-based ratchet applies.

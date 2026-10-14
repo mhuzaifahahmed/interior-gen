@@ -184,10 +184,13 @@ def _frac(px: float, py: float) -> list[float]:
 def _interior_door_spec(edge: dict, x0c: float, y0c: float, scale: float, nominal_len_px: float) -> dict | None:
     """Replicates blueprint_svg._draw_door()'s leaf+arc geometry in canvas
     space (see that function). Returns a draw-ready spec in canvas fractions,
-    or None if the shared wall is too short for a legible door."""
+    or None only for a zero-length wall. Step 3 (one layout, one door list):
+    the old "< 6 px -> no door" cutoff dropped 5 of 690 door_graph doors on
+    the quality matrix at this smaller 1024 px canvas, doors the PNG and DXF
+    draw - a small mark is drawn instead (same min(door, 0.7 x wall) rule)."""
     seg_len_px = (edge["end"] - edge["start"]) * scale
     leaf = min(nominal_len_px, seg_len_px * 0.7)
-    if leaf < 6:
+    if leaf <= 0:
         return None
     mid_units = edge["start"] + (edge["end"] - edge["start"]) * _DOOR_POSITION_FRACTION
     gap_start_units = mid_units - (leaf / scale) / 2

@@ -157,3 +157,53 @@ def test_build_door_graph_flags_preserve_per_caller_behaviour():
     assert pair(without, "Garage", "Kitchen")[0][3] is False
     # same pair list either way (DXF still draws the wall)
     assert len(with_garage.pairs) == len(without.pairs)
+
+
+# ---- Step 3: front-door priority list, orphaned-ensuite soft violation ----
+
+def test_front_door_tier_priority_and_exclusions():
+    assert dg.front_door_tier("Entry") == 0 and dg.front_door_tier("Foyer") == 0
+    assert dg.front_door_tier("Living Room") == 1 and dg.front_door_tier("Drawing Room") == 1
+    for n in ("Lounge", "Family Lounge", "Family Room", "Sitting Area", "Hallway", "Hall"):
+        assert dg.front_door_tier(n) == 2, n
+    assert dg.front_door_tier("Dining Room") == 3
+    for n in ("Kitchen", "Laundry", "Utility", "Store", "Storage", "Garage", "Staircase", "Study",
+              "Bedroom 1", "Master Bathroom", "Powder Room", "Verandah"):
+        assert dg.front_door_tier(n) is None, n
+
+
+def test_front_door_follows_the_priority_not_the_span():
+    fp = (0.0, 0.0, 40.0, 30.0)
+    # Kitchen has the longest span on the north edge but is never the entrance.
+    rects = [R("Kitchen", 0, 0, 25, 10), R("Dining Room", 25, 0, 5, 10), R("Lounge", 30, 0, 10, 10),
+             R("Bedroom 1", 0, 10, 40, 20)]
+    room, _edge = dg.front_door_room(rects, "north", fp)
+    assert room["name"] == "Lounge"
+    rects[2]["name"] = "Living Room"
+    assert dg.front_door_room(rects, "north", fp)[0]["name"] == "Living Room"
+
+
+def test_front_door_missing_when_only_excluded_rooms_touch_the_edge():
+    fp = (0.0, 0.0, 40.0, 30.0)
+    rects = [R("Kitchen", 0, 0, 20, 10), R("Bedroom 1", 20, 0, 20, 10), R("Living Room", 0, 10, 40, 20)]
+    assert dg.front_door_room(rects, "north", fp) == (None, None)
+    rep = dg.circulation_report(rects, DIMS, "north", 1)
+    assert rep["entry_missing"] and rep["front_door_room"] is None
+
+
+def test_orphaned_ensuite_is_a_soft_planner_violation():
+    from app.pipeline.layout_metrics import measure_floor
+    from app.pipeline.layout_quality import ORPHANED_ENSUITE_PENALTY, score_floor_layout, violation_penalty
+
+    rects = [
+        R("Hallway", 0, 12, 40, 3),
+        R("Master Bedroom", 0, 15, 20, 15, suite=0), R("Bedroom 2", 20, 15, 20, 15),
+        R("Master Bathroom", 0, 0, 8, 12, suite=0), R("Living Room", 8, 0, 32, 12),
+    ]
+    assert measure_floor(rects, DIMS, facing="north")["orphaned_ensuites"] == ["Master Bathroom"]
+    off = score_floor_layout(rects, DIMS)
+    assert not any(v.kind == "orphaned_ensuite" for v in off.violations)  # flag-off scoring unchanged
+    on = score_floor_layout(rects, DIMS, planner_checks=True, facing="north")
+    hits = [v for v in on.violations if v.kind == "orphaned_ensuite"]
+    assert len(hits) == 1 and not hits[0].hard and violation_penalty(hits[0]) == ORPHANED_ENSUITE_PENALTY
+    assert ORPHANED_ENSUITE_PENALTY < 60.0  # below every gated / capped hard penalty

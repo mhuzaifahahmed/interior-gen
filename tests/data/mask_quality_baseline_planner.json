@@ -26,6 +26,8 @@
   "dining_area": 173.5,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 2,
   "hard_kinds": [
    "door_too_narrow",
@@ -35,6 +37,9 @@
   "living_area": 502.5,
   "max_parts": 3,
   "max_secondary_fraction": 0.293,
+  "orphaned_ensuites": [
+   "Bathroom 2"
+  ],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 2",
@@ -55,12 +60,12 @@
  },
  "150x150_dense_garage_2f/floor2": {
   "area_ratio_to_max": {
-   "Bathroom 2": 0.733,
-   "Bedroom 2": 0.683,
-   "Master Bathroom": 0.977,
-   "Master Bedroom": 0.914,
+   "Bathroom 2": 0.641,
+   "Bedroom 2": 0.975,
+   "Master Bathroom": 0.855,
+   "Master Bedroom": 0.724,
    "Sitting Area": 2.393,
-   "Terrace": 0.225
+   "Terrace": 0.238
   },
   "bedroom_aspect_fail": [],
   "circulation_root": "Staircase (staircase)",
@@ -72,6 +77,8 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": null,
+  "front_door_room": null,
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -79,17 +86,15 @@
   "hierarchy_inverted": false,
   "living_area": 1339.9,
   "max_parts": 2,
-  "max_secondary_fraction": 0.113,
+  "max_secondary_fraction": 0.134,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Sitting Area"
   ],
-  "pass_through_private": [
-   "Bedroom 2",
-   "Bathroom 2"
-  ],
+  "pass_through_private": [],
   "single_floor_stair": false,
-  "soft_count": 7,
+  "soft_count": 9,
   "stair_over_cap": [],
   "undersized": [],
   "unreachable": [],
@@ -114,12 +119,15 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 1,
+  "front_door_room": "Hallway",
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 0.0,
   "max_parts": 1,
   "max_secondary_fraction": 0.0,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -159,6 +167,8 @@
   "dining_area": 198.6,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -167,6 +177,7 @@
   "living_area": 451.4,
   "max_parts": 4,
   "max_secondary_fraction": 0.546,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -201,6 +212,8 @@
   "dining_area": 212.3,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 3,
   "hard_kinds": [
    "door_too_narrow",
@@ -210,6 +223,7 @@
   "living_area": 429.3,
   "max_parts": 5,
   "max_secondary_fraction": 0.634,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -240,12 +254,15 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": null,
+  "front_door_room": null,
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 682.5,
   "max_parts": 2,
   "max_secondary_fraction": 0.137,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -277,12 +294,15 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 1,
+  "front_door_room": "Hallway",
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 0.0,
   "max_parts": 1,
   "max_secondary_fraction": 0.0,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -320,6 +340,8 @@
   "dining_area": 203.1,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -328,6 +350,7 @@
   "living_area": 594.8,
   "max_parts": 2,
   "max_secondary_fraction": 0.245,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -361,6 +384,8 @@
   "dining_area": 131.6,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 2,
   "hard_kinds": [
    "narrow"
@@ -369,6 +394,7 @@
   "living_area": 171.2,
   "max_parts": 2,
   "max_secondary_fraction": 0.179,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -401,6 +427,8 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 1,
+  "front_door_room": "Hallway",
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -409,6 +437,7 @@
   "living_area": 0.0,
   "max_parts": 1,
   "max_secondary_fraction": 0.0,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 2"
@@ -446,12 +475,15 @@
   "dining_area": 175.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 204.1,
   "max_parts": 2,
   "max_secondary_fraction": 0.143,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -487,6 +519,8 @@
   "dining_area": 179.3,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 1,
   "hard_kinds": [
    "door_too_narrow"
@@ -495,6 +529,7 @@
   "living_area": 328.8,
   "max_parts": 2,
   "max_secondary_fraction": 0.183,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 2",
@@ -533,6 +568,8 @@
   "dining_area": 179.3,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 1,
   "hard_kinds": [
    "door_too_narrow"
@@ -541,6 +578,7 @@
   "living_area": 328.8,
   "max_parts": 2,
   "max_secondary_fraction": 0.183,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 2",
@@ -579,12 +617,15 @@
   "dining_area": 175.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 204.1,
   "max_parts": 2,
   "max_secondary_fraction": 0.143,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -620,6 +661,8 @@
   "dining_area": 127.3,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 3,
   "hard_kinds": [
    "narrow"
@@ -628,6 +671,9 @@
   "living_area": 172.3,
   "max_parts": 2,
   "max_secondary_fraction": 0.182,
+  "orphaned_ensuites": [
+   "Bathroom 2"
+  ],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [
@@ -662,6 +708,8 @@
   "dining_area": 175.8,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -670,6 +718,7 @@
   "living_area": 190.2,
   "max_parts": 3,
   "max_secondary_fraction": 0.042,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 1"
@@ -705,6 +754,8 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": null,
+  "front_door_room": null,
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -713,6 +764,10 @@
   "living_area": 273.4,
   "max_parts": 4,
   "max_secondary_fraction": 0.0,
+  "orphaned_ensuites": [
+   "Master Bathroom",
+   "Bathroom 2"
+  ],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -751,6 +806,8 @@
   "dining_area": 160.4,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 2,
   "hard_kinds": [
    "narrow"
@@ -759,6 +816,7 @@
   "living_area": 344.8,
   "max_parts": 2,
   "max_secondary_fraction": 0.272,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -795,6 +853,8 @@
   "dining_area": 160.7,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 2,
   "hard_kinds": [
    "narrow"
@@ -803,6 +863,7 @@
   "living_area": 345.4,
   "max_parts": 2,
   "max_secondary_fraction": 0.272,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -835,12 +896,15 @@
   "dining_area": 106.3,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 243.4,
   "max_parts": 5,
   "max_secondary_fraction": 0.578,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 1",
@@ -877,6 +941,8 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": null,
+  "front_door_room": null,
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -885,6 +951,9 @@
   "living_area": 353.3,
   "max_parts": 2,
   "max_secondary_fraction": 0.07,
+  "orphaned_ensuites": [
+   "Bathroom 2"
+  ],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -900,14 +969,12 @@
  },
  "60x80_3f_east/floor3": {
   "area_ratio_to_max": {
-   "Bathroom 4": 0.885,
-   "Bedroom 4": 0.591,
+   "Bathroom 4": 0.944,
+   "Bedroom 4": 0.775,
    "Sitting Area": 1.134,
-   "Terrace": 0.303
+   "Terrace": 0.27
   },
-  "bedroom_aspect_fail": [
-   "Bedroom 4"
-  ],
+  "bedroom_aspect_fail": [],
   "circulation_root": "Staircase (staircase)",
   "coverage_gap_fraction": 0.0,
   "coverage_pct": 22.65,
@@ -917,21 +984,22 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
-  "hard_count": 2,
-  "hard_kinds": [
-   "narrow"
-  ],
+  "front_door_fallback": null,
+  "front_door_room": null,
+  "hard_count": 0,
+  "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 453.7,
   "max_parts": 2,
-  "max_secondary_fraction": 0.203,
+  "max_secondary_fraction": 0.2,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Sitting Area"
   ],
   "pass_through_private": [],
   "single_floor_stair": false,
-  "soft_count": 7,
+  "soft_count": 8,
   "stair_over_cap": [],
   "undersized": [],
   "unreachable": [],
@@ -959,6 +1027,8 @@
   "dining_area": 158.1,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -967,6 +1037,7 @@
   "living_area": 196.0,
   "max_parts": 3,
   "max_secondary_fraction": 0.447,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 1",
@@ -985,9 +1056,9 @@
  },
  "60x80_3f_north/floor2": {
   "area_ratio_to_max": {
-   "Bathroom 2": 0.864,
+   "Bathroom 2": 0.768,
    "Bedroom 2": 0.641,
-   "Master Bathroom": 0.864,
+   "Master Bathroom": 0.823,
    "Master Bedroom": 0.463,
    "Sitting Area": 0.71
   },
@@ -997,16 +1068,21 @@
   "coverage_pct": 22.65,
   "daylight_fail_hard": [],
   "daylight_fail_soft": [],
-  "dead_end_hall_len": 0.0,
+  "dead_end_hall_len": 0.83,
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": null,
+  "front_door_room": null,
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 284.1,
-  "max_parts": 3,
+  "max_parts": 4,
   "max_secondary_fraction": 0.0,
+  "orphaned_ensuites": [
+   "Master Bathroom"
+  ],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -1039,6 +1115,8 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": null,
+  "front_door_room": null,
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -1047,6 +1125,7 @@
   "living_area": 426.6,
   "max_parts": 2,
   "max_secondary_fraction": 0.108,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -1079,6 +1158,8 @@
   "dining_area": 158.1,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -1087,6 +1168,7 @@
   "living_area": 196.0,
   "max_parts": 3,
   "max_secondary_fraction": 0.447,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 1",
@@ -1105,9 +1187,9 @@
  },
  "60x80_3f_south/floor2": {
   "area_ratio_to_max": {
-   "Bathroom 2": 0.864,
+   "Bathroom 2": 0.768,
    "Bedroom 2": 0.641,
-   "Master Bathroom": 0.864,
+   "Master Bathroom": 0.823,
    "Master Bedroom": 0.463,
    "Sitting Area": 0.71
   },
@@ -1117,16 +1199,21 @@
   "coverage_pct": 22.65,
   "daylight_fail_hard": [],
   "daylight_fail_soft": [],
-  "dead_end_hall_len": 0.0,
+  "dead_end_hall_len": 0.83,
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": null,
+  "front_door_room": null,
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 284.1,
-  "max_parts": 3,
+  "max_parts": 4,
   "max_secondary_fraction": 0.0,
+  "orphaned_ensuites": [
+   "Master Bathroom"
+  ],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -1159,6 +1246,8 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": null,
+  "front_door_room": null,
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -1167,6 +1256,7 @@
   "living_area": 426.6,
   "max_parts": 2,
   "max_secondary_fraction": 0.108,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -1199,12 +1289,15 @@
   "dining_area": 106.3,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 243.4,
   "max_parts": 5,
   "max_secondary_fraction": 0.578,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 1",
@@ -1241,6 +1334,8 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": null,
+  "front_door_room": null,
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -1249,6 +1344,9 @@
   "living_area": 353.3,
   "max_parts": 2,
   "max_secondary_fraction": 0.07,
+  "orphaned_ensuites": [
+   "Bathroom 2"
+  ],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
@@ -1264,14 +1362,12 @@
  },
  "60x80_3f_west/floor3": {
   "area_ratio_to_max": {
-   "Bathroom 4": 0.885,
-   "Bedroom 4": 0.591,
+   "Bathroom 4": 0.944,
+   "Bedroom 4": 0.775,
    "Sitting Area": 1.134,
-   "Terrace": 0.303
+   "Terrace": 0.27
   },
-  "bedroom_aspect_fail": [
-   "Bedroom 4"
-  ],
+  "bedroom_aspect_fail": [],
   "circulation_root": "Staircase (staircase)",
   "coverage_gap_fraction": 0.0,
   "coverage_pct": 22.65,
@@ -1281,21 +1377,22 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
-  "hard_count": 2,
-  "hard_kinds": [
-   "narrow"
-  ],
+  "front_door_fallback": null,
+  "front_door_room": null,
+  "hard_count": 0,
+  "hard_kinds": [],
   "hierarchy_inverted": false,
   "living_area": 453.7,
   "max_parts": 2,
-  "max_secondary_fraction": 0.203,
+  "max_secondary_fraction": 0.2,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Sitting Area"
   ],
   "pass_through_private": [],
   "single_floor_stair": false,
-  "soft_count": 7,
+  "soft_count": 8,
   "stair_over_cap": [],
   "undersized": [],
   "unreachable": [],
@@ -1332,6 +1429,8 @@
   "dining_area": 175.2,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 1,
+  "front_door_room": "Living Room",
   "hard_count": 2,
   "hard_kinds": [
    "narrow"
@@ -1340,6 +1439,9 @@
   "living_area": 399.5,
   "max_parts": 3,
   "max_secondary_fraction": 0.415,
+  "orphaned_ensuites": [
+   "Master Bathroom"
+  ],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 2"
@@ -1380,6 +1482,8 @@
   "dining_area": 281.8,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 1,
+  "front_door_room": "Living Room",
   "hard_count": 3,
   "hard_kinds": [
    "door_too_narrow",
@@ -1390,6 +1494,7 @@
   "living_area": 259.1,
   "max_parts": 2,
   "max_secondary_fraction": 0.318,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Dining Room"
@@ -1423,6 +1528,8 @@
   "dining_area": 0.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 1,
+  "front_door_room": "Living Room",
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -1431,6 +1538,7 @@
   "living_area": 179.5,
   "max_parts": 1,
   "max_secondary_fraction": 0.0,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [
    "Bedroom 1"
@@ -1470,6 +1578,8 @@
   "dining_area": 180.0,
   "entry_is_garage": [],
   "entry_missing": [],
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
   "hard_count": 1,
   "hard_kinds": [
    "narrow"
@@ -1478,6 +1588,7 @@
   "living_area": 400.0,
   "max_parts": 2,
   "max_secondary_fraction": 0.091,
+  "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],

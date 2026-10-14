@@ -235,7 +235,10 @@ def _draw_gapped_wall(
     cut (gap_width was None, or the segment was too short for one) - the
     caller uses this to decide whether/where to draw a door or window
     symbol."""
-    if gap_width is None or (end - start) <= gap_width + 0.3:
+    # Step 3: plain "does the gap fit" (the caller already shrinks a door on
+    # a short wall to 0.7 x its length - see _draw_interior_wall); the old
+    # extra 0.3-unit margin silently dropped real doors.
+    if gap_width is None or gap_width <= 0 or (end - start) < gap_width:
         _draw_wall_segment(msp, orientation, pos, start, end, thickness)
         return None
 
@@ -248,6 +251,14 @@ def _draw_gapped_wall(
 
 def _draw_interior_wall(msp, edge: dict, wall_thickness: float, door_width: float | None) -> None:
     orientation, pos, start, end = edge["orientation"], edge["pos"], edge["start"], edge["end"]
+    if door_width is not None and (end - start) <= door_width + 0.3:
+        # Step 3 (one layout, one door list): a wall too short for the full
+        # door used to get NO door here while the PNG and the Concept Layout
+        # drew one (28 of 690 doors on the quality matrix, some a room's only
+        # door). Use the PNG's own sizing rule, min(door, 0.7 x wall), so the
+        # DXF draws every door door_graph decided on. Walls that fit the full
+        # door are unchanged.
+        door_width = min(door_width, 0.7 * (end - start))
     gap = _draw_gapped_wall(msp, orientation, pos, start, end, wall_thickness, door_width)
     if gap is not None:
         _draw_door_symbol(msp, orientation, pos, gap[0], gap[1])
