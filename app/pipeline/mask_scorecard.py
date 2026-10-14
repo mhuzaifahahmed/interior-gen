@@ -269,6 +269,18 @@ def suite_guard_count(paths: dict) -> int:
     return len(workaround_path_floors(paths)["suite_guard"])
 
 
+def format_narrow_bedrooms(results: dict) -> str:
+    """Step 4: one line - bedrooms failing the aspect check (> BEDROOM_ASPECT_
+    HARD:1) or carrying a hard `narrow` (layout_metrics' `narrow_bedrooms`),
+    with the floor keys. Ratcheted (may not increase) by the quality gate,
+    although the check itself stays non-hard."""
+    hit = [(k, results[k]["metrics"].get("narrow_bedrooms") or []) for k in results]
+    hit = [(k, v) for k, v in hit if v]
+    return (f"   (ratcheted, non-hard) narrow bedrooms (aspect > {rules.BEDROOM_ASPECT_HARD}:1 or hard `narrow`): "
+            f"{sum(len(v) for _k, v in hit)} rooms on {len(hit)}/{len(results)} floors"
+            + ("" if not hit else ": " + "; ".join(f"{k}={','.join(v)}" for k, v in hit)))
+
+
 def format_scorecard(results: dict, label: str, capacity: dict | None = None, paths: dict | None = None) -> str:
     """results: {key: score_floor() dict}. `paths` ({key: layout_path},
     planner mode) adds the Phase-3 fallback-rate line. Returns the
@@ -358,6 +370,7 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None, pa
         lines.append(f"   (soft, ratcheted) orphaned ensuites (ensuite sharing no wall with its own bedroom; "
                      f"opens onto the hallway instead): {sum(len(v) for _k, v in hit)} rooms on {len(hit)}/{len(keys)} floors"
                      + ("" if not hit else ": " + "; ".join(f"{k}={','.join(v)}" for k, v in hit)))
+    lines.append(format_narrow_bedrooms(results))
     lines.append("")
     lines.append("Coverage detail (big plots; FLAG = coverage < 12%):")
     for k in keys:

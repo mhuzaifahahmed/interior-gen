@@ -35,6 +35,13 @@ _PLANNER_BASELINE_PATH = os.path.join(os.path.dirname(__file__), "data", "mask_q
 with open(_PLANNER_BASELINE_PATH, encoding="utf-8") as _f:
     _PLANNER_BASELINE = json.load(_f)
 
+# Step 4: flag-off narrow-bedroom ratchet values (first measurement, Step 4 /
+# HEAD c1140ba layouts). Kept apart from mask_quality_baseline.json so that
+# frozen flag-off baseline does not change. {floor key: [bedroom names]}.
+_NARROW_FLAG_OFF_PATH = os.path.join(os.path.dirname(__file__), "data", "mask_narrow_bedrooms_flag_off.json")
+with open(_NARROW_FLAG_OFF_PATH, encoding="utf-8") as _f:
+    _NARROW_FLAG_OFF = json.load(_f)
+
 _ITEMS = list(iter_floors())
 
 # Representative subset run by `pytest -m fast` (see docstring). Covers every
@@ -94,6 +101,8 @@ def test_mask_quality_does_not_regress(case, floor_n, rooms, key):
         garage_cars=case["garage_cars"], facing=case["facing"],
     )
     _assert_no_regression(case, cur, _BASELINE[key])
+    assert len(cur["narrow_bedrooms"]) <= len(_NARROW_FLAG_OFF[key]), (
+        "narrow_bedrooms", cur["narrow_bedrooms"], _NARROW_FLAG_OFF[key])
 
 
 def _planner_layout(case, floor_n, rooms):
@@ -165,7 +174,10 @@ def _assert_no_regression(case, cur, base):
     # baseline that records them.
     # Step 3 (door rules): orphaned ensuites, ratcheted from the first
     # baseline that records them.
-    for field in ("bedroom_aspect_fail", "stair_over_cap", "orphaned_ensuites"):
+    # Step 4: narrow bedrooms (aspect > 2.5:1 or hard `narrow`), ratcheted
+    # although the check stays non-hard; planner baseline records it, the
+    # flag-off values live in _NARROW_FLAG_OFF (that baseline is frozen).
+    for field in ("bedroom_aspect_fail", "stair_over_cap", "orphaned_ensuites", "narrow_bedrooms"):
         if field in base:
             assert len(cur[field]) <= len(base[field]), (field, cur[field], base[field])
     for field in _LATER_PHASE_FIELDS:

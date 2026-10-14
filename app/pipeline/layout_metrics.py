@@ -109,6 +109,12 @@ def measure_floor(
         str(r.get("name") or "") for r in rects
         if classify_room_category(str(r.get("name") or "")) == "bedroom" and bedroom_aspect(r) > BEDROOM_ASPECT_HARD
     ]
+    # Step 4: bedrooms failing the aspect check OR carrying a hard `narrow`
+    # (layout_quality.narrow_bedroom_names, computed here from the rects so
+    # it also works without planner checks).
+    narrow_bedrooms = sorted(set(bedroom_aspect_fail) | {
+        v.room for v in hard if v.kind == "narrow" and classify_room_category(v.room) == "bedroom"
+    })
     stair_fail = [
         str(r.get("name") or "") for r in rects
         if classify_room_category(str(r.get("name") or "")) == "staircase" and stair_over_cap(r, unit)
@@ -146,6 +152,7 @@ def measure_floor(
             and any(classify_room_category(str(r.get("name") or "")) == "staircase" for r in rects)
         ),
         "bedroom_aspect_fail": bedroom_aspect_fail,
+        "narrow_bedrooms": narrow_bedrooms,
         "stair_over_cap": stair_fail,
         # Step 3: suite-tagged bathrooms sharing no wall with their own
         # bedroom (soft; door_graph lets them open onto the hallway).

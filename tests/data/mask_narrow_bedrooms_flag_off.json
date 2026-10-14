@@ -1,0 +1,118 @@
+{
+ "150x150_dense_garage_2f/floor1": [
+  "Bedroom 2",
+  "Bedroom 3",
+  "Bedroom 4"
+ ],
+ "150x150_dense_garage_2f/floor2": [
+  "Bedroom 2",
+  "Master Bedroom"
+ ],
+ "150x150_sparse_1f/floor1": [
+  "Bedroom 1",
+  "Bedroom 2"
+ ],
+ "150x150_typical_1f/floor1": [
+  "Bedroom 2",
+  "Bedroom 3"
+ ],
+ "150x200_2f_reported/floor1": [],
+ "150x200_2f_reported/floor2": [],
+ "300x300_sparse_1f/floor1": [
+  "Bedroom 1",
+  "Bedroom 2"
+ ],
+ "300x300_typical_1f/floor1": [
+  "Bedroom 2",
+  "Bedroom 3"
+ ],
+ "30x40_small_1f/floor1": [
+  "Bedroom 1"
+ ],
+ "30x40_sparse_1f/floor1": [
+  "Bedroom 1",
+  "Bedroom 2"
+ ],
+ "40x60_typical_1f_east/floor1": [
+  "Bedroom 2",
+  "Bedroom 3"
+ ],
+ "40x60_typical_1f_north/floor1": [
+  "Bedroom 2",
+  "Bedroom 3",
+  "Master Bedroom"
+ ],
+ "40x60_typical_1f_south/floor1": [
+  "Bedroom 2",
+  "Bedroom 3",
+  "Master Bedroom"
+ ],
+ "40x60_typical_1f_west/floor1": [
+  "Bedroom 2",
+  "Bedroom 3"
+ ],
+ "40x60_typical_garage_1f/floor1": [
+  "Bedroom 2",
+  "Master Bedroom"
+ ],
+ "50x50_2f/floor1": [
+  "Bedroom 1"
+ ],
+ "50x50_2f/floor2": [
+  "Bedroom 2",
+  "Master Bedroom"
+ ],
+ "50x50_typical_1f/floor1": [
+  "Bedroom 2",
+  "Bedroom 3",
+  "Master Bedroom"
+ ],
+ "56x56_typical_1f/floor1": [
+  "Bedroom 2",
+  "Bedroom 3"
+ ],
+ "60x80_3f_east/floor1": [
+  "Bedroom 1"
+ ],
+ "60x80_3f_east/floor2": [
+  "Bedroom 2",
+  "Master Bedroom"
+ ],
+ "60x80_3f_east/floor3": [],
+ "60x80_3f_north/floor1": [
+  "Bedroom 1"
+ ],
+ "60x80_3f_north/floor2": [
+  "Master Bedroom"
+ ],
+ "60x80_3f_north/floor3": [],
+ "60x80_3f_south/floor1": [
+  "Bedroom 1"
+ ],
+ "60x80_3f_south/floor2": [
+  "Master Bedroom"
+ ],
+ "60x80_3f_south/floor3": [],
+ "60x80_3f_west/floor1": [
+  "Bedroom 1"
+ ],
+ "60x80_3f_west/floor2": [
+  "Bedroom 2",
+  "Master Bedroom"
+ ],
+ "60x80_3f_west/floor3": [],
+ "60x80_dense_garage_1f/floor1": [
+  "Bedroom 2",
+  "Bedroom 3",
+  "Master Bedroom"
+ ],
+ "60x80_typical_1f/floor1": [
+  "Bedroom 2",
+  "Bedroom 3",
+  "Master Bedroom"
+ ],
+ "90x40_sparse_1f/floor1": [
+  "Bedroom 1"
+ ],
+ "90x40_typical_1f/floor1": []
+}

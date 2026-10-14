@@ -540,6 +540,22 @@ def bedroom_aspect(rect: dict) -> float:
     return max(big["w"], big["h"]) / max(min(big["w"], big["h"]), 1e-9)
 
 
+NARROW_BEDROOM_KINDS = ("narrow", "bedroom_aspect")
+
+
+def narrow_bedroom_names(violations: list) -> list[str]:
+    """Step 4: bedrooms (incl. master) that fail the aspect check (largest
+    part long/short > BEDROOM_ASPECT_HARD, the HARD `bedroom_aspect`) OR
+    carry a HARD `narrow` violation (largest part narrower than the
+    bedroom minimum). Sorted, each room once. The `bedroom_aspect` half only
+    exists under planner_checks - layout_metrics.measure_floor computes the
+    same set from the rects for the flag-off report."""
+    return sorted({
+        v.room for v in violations
+        if v.hard and v.kind in NARROW_BEDROOM_KINDS and classify_room_category(v.room) == "bedroom"
+    })
+
+
 def stair_over_cap(rect: dict, unit: str) -> bool:
     """True when a staircase exceeds STAIR_MAX_AREA_FACTOR x its minimum."""
     name = str(rect.get("name") or "")

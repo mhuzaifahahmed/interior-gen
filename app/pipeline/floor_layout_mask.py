@@ -120,6 +120,7 @@ from app.pipeline.layout_quality import (
     NOTCH_PENALTY,
     WRAPPED_PENALTY,
     Violation,
+    narrow_bedroom_names,
     score_floor_layout,
     violation_penalty,
     secondary_part_ok,
@@ -274,6 +275,32 @@ _STAIR_NOT_A_SINK = True
 _FAR_REMAINDER_SEEDS = False  # tried: fixed the 150x200 upper-floor stair sink but moved the excess into bedrooms (8 gate regressions) - kept off
 
 
+# Step 4 item 1 (planner path only): the number of NARROW BEDROOMS (bedrooms
+# failing the aspect check or carrying a hard `narrow`, layout_quality.
+# narrow_bedroom_names) is a first-class term in candidate selection:
+#   - stage-1 ranking: NARROW_BEDROOM_STAGE1 = "extra" (default) also
+#     rectifies the stage-1 candidate with the fewest narrow bedrooms when
+#     every top-K candidate has more (an EXTRA stage-2 candidate; the top-K
+#     pool itself is unchanged). "lex" ranks by (narrow bedrooms, score) and
+#     "weight" subtracts NARROW_BEDROOM_RANK_PENALTY per narrow bedroom - both
+#     measured (Step 4) to change NO layout on the 35-floor matrix and to
+#     lose the one floor the final pick fixes; None = off.
+#   - final pick (_pick_circulation_safe): among the SAFE set (no worse than
+#     the plain best pick on every ratcheted count and the worst over-max
+#     ratio), fewest circulation hard failures first, then fewest narrow
+#     bedrooms, then the old order.
+# Measured effect (Step 4): 12 -> 11 narrow bedrooms over 35 floors; on the
+# other 11 floors the safe set holds no candidate with fewer (the pool's
+# narrow-free candidates are worse on a ratcheted metric, or there are none).
+NARROW_BEDROOM_STAGE1: str | None = "extra"
+NARROW_BEDROOM_RANK_PENALTY = 500.0
+NARROW_BEDROOM_FINAL_PICK = True
+
+
+def _narrow_bedrooms(scored) -> int:
+    return len(narrow_bedroom_names(scored.violations))
+
+
 def _worst_over_ratio(rooms: list[dict], room_max: dict) -> float:
     """Largest area / max over habitable rooms (stair/garage/hallway excluded)
     - an oversized room may not get MORE oversized than in the reference."""
@@ -385,6 +412,8 @@ def _pick_circulation_safe(eligible: list, room_max: dict, n_base: int | None = 
         vs = eligible[i][0][1].violations
         hard = sum(1 for v in vs if v.hard and v.kind in CIRCULATION_HARD_KINDS)
         soft = sum(1 for v in vs if not v.hard and v.kind in _CIRCULATION_KINDS)
+        if NARROW_BEDROOM_FINAL_PICK:
+            return (hard, len(narrow_bedroom_names(vs)), soft, -base[i], i)
         return (hard, soft, -base[i], i)
 
     best = min(safe, key=key)
@@ -659,6 +688,7 @@ def _layout_with_plan(
         # violations (rectification changes shapes); stage 2 rectifies and
         # fully scores only the best _PLANNER_RECTIFY_TOP_K.
         ranked = []
+        nb_by_variant: dict = {}
         seen_layouts: set = set()
         reference = None  # the Phase-2 pick: best original variant, unrectified
         for order, variant in enumerate(_PLANNER_CANDIDATES):
@@ -684,13 +714,28 @@ def _layout_with_plan(
             shape_free = s1.score + sum(
                 violation_penalty(v) for v in s1.violations if v.kind in _SCORE_ONLY_KINDS + ("notch",)
             )
-            ranked.append((-shape_free, order, variant))
+            nb = _narrow_bedrooms(s1)
+            nb_by_variant[variant] = nb
+            if NARROW_BEDROOM_STAGE1 == "lex":
+                ranked.append((nb, -shape_free, order, variant))
+            elif NARROW_BEDROOM_STAGE1 == "weight":
+                ranked.append((0, -shape_free + NARROW_BEDROOM_RANK_PENALTY * nb, order, variant))
+            else:
+                ranked.append((0, -shape_free, order, variant))
             if order < _PHASE2_VARIANT_COUNT and (reference is None or shape_free > reference[0]):
                 reference = (shape_free, variant, candidate, s1, stats1)
             if EARLY_STOP_ON_CLEAN and not any(v.hard for v in s1.violations) and not any(_ratchet_vector(s1.violations)):
                 break  # EXPERIMENT (default off): first fully clean candidate wins the search
         ranked.sort()
-        stage2 = [v for _neg, _order, v in ranked[:_PLANNER_RECTIFY_TOP_K]]
+        stage2 = [entry[-1] for entry in ranked[:_PLANNER_RECTIFY_TOP_K]]
+        if NARROW_BEDROOM_STAGE1 == "extra" and nb_by_variant:
+            # The stage-1 candidate with the fewest narrow bedrooms (ties: the
+            # better shape-free score) is rectified too when every top-K
+            # candidate has more - an EXTRA stage-2 candidate, never a
+            # replacement, so the usual pool is unchanged.
+            best_nb = min(ranked, key=lambda e: (nb_by_variant[e[-1]], e[1], e[2]))[-1]
+            if best_nb not in stage2 and nb_by_variant[best_nb] < min(nb_by_variant[v] for v in stage2):
+                stage2.append(best_nb)
         if reference is not None and reference[1] not in stage2:
             stage2.append(reference[1])
         options = []

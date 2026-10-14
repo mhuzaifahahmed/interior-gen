@@ -39,6 +39,7 @@ _FAST_MODULES = {
     "test_floor_layout_mask", "test_house_planner", "test_door_graph", "test_mask_scorecard",
     "test_layout_quality", "test_room_specs", "test_planning_rules", "test_mask_shape_discipline",
     "test_big_plot_tiers", "test_circulation_phase4b", "test_layout_daylight",
+    "test_step4_numbers",
 }
 
 
