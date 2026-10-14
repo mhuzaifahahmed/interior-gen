@@ -15,6 +15,7 @@ parameterised so each caller keeps its CURRENT behaviour exactly (see the
 from itertools import combinations
 from typing import NamedTuple
 
+from app.pipeline import planning_rules
 from app.pipeline.floor_layout import _zone_key, footprint_bbox as _footprint_bbox, room_parts
 from app.pipeline.room_specs import classify_room_category
 
@@ -286,7 +287,7 @@ def front_door_room(
     silent skip for an unrecognized room name).
 
     Step 3 rule (supersedes Phase 4b's "any non-bedroom room" fallback):
-    only rooms in FRONT_DOOR_PRIORITY may take the entrance, first tier that
+    only rooms in planning_rules.FRONT_DOOR_PRIORITY_TIERS may take the entrance, first tier that
     touches the facing edge wins (largest span within the tier). The garage
     is never the entrance. When no listed room touches the facing edge,
     returns (None, None) - no front door is drawn on that floor and the
@@ -333,7 +334,7 @@ def front_door_room(
     # bedrooms and bathrooms are never the entrance. When none of the listed
     # rooms touches the facing edge there is NO front door (the scorer reports
     # `entry_missing`) - an entrance is never invented elsewhere.
-    for tier in range(len(FRONT_DOOR_PRIORITY)):
+    for tier in range(len(planning_rules.FRONT_DOOR_PRIORITY_TIERS)):
         pool = [(r, p) for r, p in candidates if front_door_tier(r.get("name") or "") == tier]
         if pool:
             room, part = max(pool, key=lambda rp: span(rp[1])[1] - span(rp[1])[0])
@@ -342,26 +343,25 @@ def front_door_room(
     return None, None
 
 
-FRONT_DOOR_PRIORITY = ("foyer", "living", "lounge_hall", "dining")
-_LOUNGE_HALL_WORDS = ("lounge", "sitting", "family", "hall")
-
-
 def front_door_tier(name: str) -> int | None:
-    """Index into FRONT_DOOR_PRIORITY for a room name, or None when the room
-    may never take the front door. Lounge/sitting/family room/hall(way) are
-    matched by name (a "Family Lounge" or "Sitting Area" classifies as
-    "living" but ranks after a real living room); "Hallway" by category."""
+    """Index into planning_rules.FRONT_DOOR_PRIORITY_TIERS for a room name, or
+    None when the room may never take the front door. All of the policy
+    (tier order, which categories each tier accepts, the lounge/hall name
+    words, the excluded categories) is DATA in planning_rules; this function
+    only applies it."""
     cat = classify_room_category(name)
+    if cat in planning_rules.FRONT_DOOR_EXCLUDED_CATEGORIES:
+        return None
     low = name.lower()
-    if cat == "foyer":
-        return 0
-    lounge_hall = cat == "hallway" or any(w in low for w in _LOUNGE_HALL_WORDS)
-    if cat == "living" and not lounge_hall:
-        return 1
-    if lounge_hall and cat in ("living", "hallway", "default", "family"):
-        return 2
-    if cat == "dining":
-        return 3
+    lounge_hall = cat in planning_rules.LOUNGE_HALL_CATEGORIES or any(
+        w in low for w in planning_rules.LOUNGE_HALL_NAME_WORDS
+    )
+    for idx, tier in enumerate(planning_rules.FRONT_DOOR_PRIORITY_TIERS):
+        if cat not in tier.categories:
+            continue
+        if tier.lounge_hall is not None and tier.lounge_hall != lounge_hall:
+            continue
+        return idx
     return None
 
 

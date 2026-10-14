@@ -280,3 +280,48 @@ def target_area_sqm(category: str) -> float:
     via_multiplier = minimum * room_specs.ROOM_MAX_MULTIPLIER.get(cat, room_specs.ROOM_MAX_MULTIPLIER["default"])
     maximum = min(via_multiplier, room_specs.ABSOLUTE_MAX_AREA_SQM.get(cat, via_multiplier))
     return target_from_bounds(preferred, max(maximum, preferred))
+
+
+# ---- Front-door room policy (Step 3, moved here as data in Step 3b) ----
+# door_graph.front_door_room() only APPLIES these; edit the policy here.
+
+
+@dataclass(frozen=True)
+class FrontDoorTier:
+    """One priority tier for the room that takes the front entrance.
+
+    categories   room_specs.classify_room_category() values the tier accepts.
+    lounge_hall  None = ignore the lounge/hall test; True = the room must be
+                 lounge/hall-like (category in LOUNGE_HALL_CATEGORIES, or its
+                 name contains one of LOUNGE_HALL_NAME_WORDS); False = it must
+                 NOT be (so a plain "Living Room" is tier 1 but "Family
+                 Lounge" / "Sitting Area" / "Hallway" fall to the next tier).
+    """
+
+    name: str
+    categories: tuple[str, ...]
+    lounge_hall: bool | None = None
+
+
+# Priority order, first tier whose room touches the facing edge wins:
+# foyer/entry -> living -> lounge/sitting/family/hall(way) -> dining.
+FRONT_DOOR_PRIORITY_TIERS: tuple[FrontDoorTier, ...] = (
+    FrontDoorTier("foyer", ("foyer",)),
+    FrontDoorTier("living", ("living",), lounge_hall=False),
+    FrontDoorTier("lounge_hall", ("living", "hallway", "default", "family"), lounge_hall=True),
+    FrontDoorTier("dining", ("dining",)),
+)
+LOUNGE_HALL_CATEGORIES: tuple[str, ...] = ("hallway",)
+LOUNGE_HALL_NAME_WORDS: tuple[str, ...] = ("lounge", "sitting", "family", "hall")
+
+# Categories that may NEVER take the front door, whatever the tiers say:
+# kitchens/pantry, utility(laundry)/storage/mechanical/closet, garage,
+# staircase, study, porch/courtyard (outdoor), prayer, bedrooms, bathrooms and
+# powder rooms. The den/media-room category ("family") is deliberately NOT
+# here: it is only accepted through the lounge_hall tier, i.e. when the room
+# is actually NAMED family/lounge/sitting/hall.
+FRONT_DOOR_EXCLUDED_CATEGORIES: tuple[str, ...] = (
+    "kitchen", "dirty_kitchen", "pantry", "laundry", "storage", "mechanical", "closet",
+    "garage", "staircase", "study", "porch", "courtyard", "prayer",
+    "bedroom", "bathroom", "powder",
+)

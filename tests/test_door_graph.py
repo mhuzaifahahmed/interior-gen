@@ -207,3 +207,39 @@ def test_orphaned_ensuite_is_a_soft_planner_violation():
     hits = [v for v in on.violations if v.kind == "orphaned_ensuite"]
     assert len(hits) == 1 and not hits[0].hard and violation_penalty(hits[0]) == ORPHANED_ENSUITE_PENALTY
     assert ORPHANED_ENSUITE_PENALTY < 60.0  # below every gated / capped hard penalty
+
+
+def test_front_door_policy_is_data_in_planning_rules(monkeypatch):
+    """The tier order and the exclusion list live in planning_rules; changing
+    the data changes the behaviour (door_graph hard-codes neither)."""
+    from app.pipeline import planning_rules as pr
+
+    rects = [
+        {"name": "Living Room", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0},
+        {"name": "Dining Room", "x": 10.0, "y": 0.0, "w": 14.0, "h": 10.0},
+    ]
+    fp = (0.0, 0.0, 24.0, 10.0)
+    room, _edge = dg.front_door_room(rects, "north", fp)
+    assert room["name"] == "Living Room"  # default: living outranks dining
+
+    # Reverse the tiers: dining first -> the entrance moves to the Dining Room.
+    monkeypatch.setattr(pr, "FRONT_DOOR_PRIORITY_TIERS", tuple(reversed(pr.FRONT_DOOR_PRIORITY_TIERS)))
+    assert dg.front_door_tier("Dining Room") == 0
+    room, _edge = dg.front_door_room(rects, "north", fp)
+    assert room["name"] == "Dining Room"
+    monkeypatch.undo()
+
+    # Exclude a category: living is no longer eligible -> dining takes the door.
+    monkeypatch.setattr(pr, "FRONT_DOOR_EXCLUDED_CATEGORIES", pr.FRONT_DOOR_EXCLUDED_CATEGORIES + ("living",))
+    assert dg.front_door_tier("Living Room") is None
+    room, _edge = dg.front_door_room(rects, "north", fp)
+    assert room["name"] == "Dining Room"
+    monkeypatch.undo()
+
+    # Excluding nothing makes a Kitchen eligible only if a tier accepts its
+    # category - none does, so it stays out (exclusion list is belt-and-braces).
+    monkeypatch.setattr(pr, "FRONT_DOOR_EXCLUDED_CATEGORIES", ())
+    assert dg.front_door_tier("Kitchen") is None
+    monkeypatch.setattr(pr, "FRONT_DOOR_PRIORITY_TIERS",
+                        pr.FRONT_DOOR_PRIORITY_TIERS + (pr.FrontDoorTier("kitchen", ("kitchen",)),))
+    assert dg.front_door_tier("Kitchen") == len(pr.FRONT_DOOR_PRIORITY_TIERS) - 1
