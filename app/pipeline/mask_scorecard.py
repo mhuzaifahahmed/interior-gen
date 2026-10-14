@@ -424,3 +424,161 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None, pa
                      f"{total_pass + new_pass + circ_pass} of {len(keys) * (len(SCORED_CHECKS) + 1)} floor-checks pass; "
                      f"{len(clean_all)} of {len(keys)} floors fully clean")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Violation histogram + top blockers (Step 3b). Report only - never a gate.
+# ---------------------------------------------------------------------------
+# Every reason a floor is not clean, as (type, room-or-None) events:
+#   HARD  = a layout_quality / metrics hard violation (the measure_floor
+#           "hard_detail" kinds, no_daylight, oversized, hierarchy_inverted,
+#           bedroom_aspect, stair_oversized, and the four circulation kinds)
+#   CHECK = a scorecard-only check that is not a "violation" (coverage, yards,
+#           too_many_parts, bath/dining/pinned size caps, single_floor_stair)
+# Together they are exactly the failures behind result["clean_all"], so "clean"
+# below always means the scorecard's own clean_all (all 8 scored checks plus
+# circulation) - not a looser private definition.
+FLOOR_LEVEL = "(floor)"
+
+
+def failure_events(res: dict) -> list[dict]:
+    """[{type, room, hard}] for one score_floor() result. room is None for a
+    floor-level event. Empty for a clean_all floor."""
+    m = res["metrics"]
+    ev: list[dict] = []
+
+    def add(kind, room, hard=True):
+        ev.append({"type": kind, "room": room, "hard": hard})
+
+    if not res["coverage"]["pass"]:
+        add("coverage", None, False)
+    if not res["yards"]["pass"]:
+        add("yards", None, False)
+    s = res["sizes"]
+    for n in s["oversized"]:
+        add("oversized", n)
+    if s["inverted"]:
+        add("hierarchy_inverted", None)
+    for item in s["big_baths"]:
+        add("bath_over_cap", item.split("=")[0], False)
+    for item in s["big_dining"]:
+        add("dining_over_cap", item.split("=")[0], False)
+    for item in s["big_pinned"]:
+        add("pinned_over_1.5x", item.split("=")[0], False)
+    detail = m.get("hard_detail")
+    if detail is None:  # metrics without per-room detail (older callers)
+        detail = [[k, None] for k in m["hard_kinds"]]
+    for kind, room in detail:
+        add(kind, room)
+    for n in m["daylight_fail_hard"]:
+        add("no_daylight", n)
+    for item in res["parts"]["offenders"]:
+        add("too_many_parts", item.split("=")[0], False)
+    if not res["stair"]["pass"]:
+        add("single_floor_stair", None, False)
+    for n in res["aspect"]["offenders"]:
+        add("bedroom_aspect", n)
+    for item in res["stair_cap"]["offenders"]:
+        add("stair_oversized", item.split("=")[0])
+    circ = res.get("circulation") or {}
+    if circ.get("measured"):
+        for n in circ["unreachable"]:
+            add("unreachable", n)
+        for n in circ["pass_through_private"]:
+            add("pass_through_private", n)
+        if circ["entry_is_garage"]:
+            add("entry_is_garage", None)
+        if circ["entry_missing"]:
+            add("entry_missing", None)
+    return ev
+
+
+def violation_histogram(results: dict) -> dict:
+    """{key: score_floor() dict} -> histogram over the NOT fully clean
+    (clean_all) floors:
+      {"non_clean": [keys], "types": {type: {"total", "floors": [keys],
+        "only_floors": [keys whose ONLY failure type is this one],
+        "by_category": {category: count}, "hard": bool}}}
+    A floor is NEWLY CLEAN if type T were eliminated when T is the only
+    failure type on that floor (every other check already passes)."""
+    non_clean = [k for k, r in results.items() if not r.get("clean_all", r["clean"])]
+    types: dict[str, dict] = {}
+    kind_sets: dict[str, set] = {}
+    for k in non_clean:
+        events = failure_events(results[k])
+        kinds = {e["type"] for e in events}
+        for e in events:
+            t = types.setdefault(e["type"], {"total": 0, "floors": [], "only_floors": [],
+                                             "by_category": {}, "hard": e["hard"]})
+            t["total"] += 1
+            cat = classify_room_category(e["room"]) if e["room"] else FLOOR_LEVEL
+            t["by_category"][cat] = t["by_category"].get(cat, 0) + 1
+            if k not in t["floors"]:
+                t["floors"].append(k)
+        if len(kinds) == 1:
+            types[next(iter(kinds))]["only_floors"].append(k)
+        kind_sets[k] = kinds
+    return {"non_clean": non_clean, "types": types, "kind_sets": kind_sets}
+
+
+def top_blockers(hist: dict, n: int = 3) -> list[str]:
+    """Types ordered by how many floors become fully clean if that type alone
+    is eliminated (ties: more floors affected, then total, then name)."""
+    t = hist["types"]
+    return sorted(t, key=lambda x: (-len(t[x]["only_floors"]), -len(t[x]["floors"]), -t[x]["total"], x))[:n]
+
+
+def greedy_blockers(hist: dict, n: int = 3) -> list[tuple[str, int]]:
+    """Cumulative view: repeatedly add the failure type that makes the most
+    floors clean TOGETHER with the types already chosen (a floor is clean once
+    all its failure types are chosen). [(type, cumulative_clean_floors)]."""
+    chosen: list[str] = []
+    out: list[tuple[str, int]] = []
+    sets = hist["kind_sets"]
+    for _ in range(n):
+        best = None
+        for t in hist["types"]:
+            if t in chosen:
+                continue
+            cand = set(chosen) | {t}
+            cnt = sum(1 for ks in sets.values() if ks <= cand)
+            key = (cnt, len(hist["types"][t]["floors"]), t)
+            if best is None or key > best[0]:
+                best = (key, t, cnt)
+        if best is None:
+            break
+        chosen.append(best[1])
+        out.append((best[1], best[2]))
+    return out
+
+
+def format_violation_histogram(results: dict, label: str) -> str:
+    hist = violation_histogram(results)
+    t = hist["types"]
+    nc = len(hist["non_clean"])
+    lines = [
+        f"=== HARD-VIOLATION HISTOGRAM [{label}] ===",
+        f"floors scored {len(results)}; NOT fully clean (clean_all: all {len(SCORED_CHECKS)} scored checks + circulation): {nc}",
+        "class HARD = layout/metrics hard violation; CHECK = scorecard-only check (coverage, yards, parts, size caps, single-floor stair)",
+        f"{'type':<22}{'class':<7}{'violations':>11}{'floors':>8}{'newly clean if fixed':>22}",
+    ]
+    order = sorted(t, key=lambda x: (-len(t[x]["floors"]), -t[x]["total"], x))
+    for name in order:
+        r = t[name]
+        lines.append(f"{name:<22}{'HARD' if r['hard'] else 'CHECK':<7}{r['total']:>11}{len(r['floors']):>8}{len(r['only_floors']):>22}")
+    if not t:
+        lines.append("(no failures: every floor is clean)")
+    lines.append("")
+    lines.append("TOP 3 BLOCKERS (types whose elimination alone makes the most additional floors fully clean):")
+    for i, name in enumerate(top_blockers(hist), start=1):
+        r = t[name]
+        lines.append(f"  {i}. {name}: +{len(r['only_floors'])} newly clean floors "
+                     f"({len(r['floors'])} floors / {r['total']} violations affected)"
+                     + (f" - only-this-type floors: {', '.join(r['only_floors'])}" if r["only_floors"] else ""))
+        cats = sorted(r["by_category"].items(), key=lambda kv: (-kv[1], kv[0]))
+        lines.append("       by room category: " + ", ".join(f"{c} {n}" for c, n in cats))
+    greedy = greedy_blockers(hist)
+    if greedy:
+        lines.append("Cumulative (greedy; fixing these types TOGETHER): "
+                     + "; ".join(f"+{t} -> {c} floors clean" for t, c in greedy))
+    return "\n".join(lines)

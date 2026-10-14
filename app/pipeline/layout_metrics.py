@@ -127,6 +127,8 @@ def measure_floor(
         "hard_count": len(hard),
         "soft_count": len(soft),
         "hard_kinds": sorted({v.kind for v in hard}),
+        # [kind, room] per hard violation (scorecard histogram; informational).
+        "hard_detail": [[v.kind, v.room] for v in hard],
         "coverage_gap_fraction": round(1 - covered / fp_area, 5) if fp_area else 0.0,
         "overlap_area": round(overlap, 4),
         "daylight_fail_hard": dl_hard,

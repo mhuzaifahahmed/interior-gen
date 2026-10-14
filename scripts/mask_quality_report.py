@@ -155,7 +155,12 @@ def _print_table(results):
 
 
 def _scorecard(results, label, planner):
-    from app.pipeline.mask_scorecard import capacity_summary, format_scorecard, score_floor
+    from app.pipeline.mask_scorecard import (
+        capacity_summary,
+        format_scorecard,
+        format_violation_histogram,
+        score_floor,
+    )
 
     scored = {}
     for key, (case, floor_n, rects, _m, overrides) in results.items():
@@ -175,6 +180,7 @@ def _scorecard(results, label, planner):
     text = format_scorecard(scored, label, capacity, paths)
     if planner:
         text += "\n\n" + _built_area_table(results)
+    text += "\n\n" + format_violation_histogram(scored, label)
     print(text)
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(os.path.join(OUT_DIR, f"scorecard_{label}.txt"), "w", encoding="utf-8") as f:

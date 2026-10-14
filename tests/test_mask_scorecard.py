@@ -166,3 +166,83 @@ def test_scorecard_prints_suite_guard_picks_line_with_case_ids():
     assert "circ_arms picks: 1/4 floors" in text and "circ_stair picks: 0/4 floors" in text
     none = format_scorecard(results, "planner_on", paths={k: "rectified" for k in keys})
     assert "suite_guard picks: 0/4 floors  [workaround" in none
+
+
+# ---- violation histogram / top blockers (Step 3b) ----
+def _fake_result(events_by_check):
+    """A minimal score_floor()-shaped dict whose failure_events() are the
+    given ones. events_by_check: dict with optional keys oversized (list of
+    room names), hard_detail ([[kind, room]]), coverage_fail (bool),
+    unreachable (list), aspect (list)."""
+    e = events_by_check
+    circ_bad = bool(e.get("unreachable"))
+    res = {
+        "metrics": {"hard_detail": e.get("hard_detail", []), "hard_kinds": [], "daylight_fail_hard": e.get("daylight", [])},
+        "coverage": {"pass": not e.get("coverage_fail")},
+        "yards": {"pass": True},
+        "sizes": {"oversized": e.get("oversized", []), "inverted": False, "big_baths": [], "big_dining": [], "big_pinned": []},
+        "parts": {"offenders": []},
+        "stair": {"pass": True},
+        "aspect": {"offenders": e.get("aspect", [])},
+        "stair_cap": {"offenders": []},
+        "circulation": {"measured": True, "unreachable": e.get("unreachable", []), "pass_through_private": [],
+                        "entry_is_garage": False, "entry_missing": False},
+    }
+    res["clean_all"] = not (
+        e.get("oversized") or e.get("hard_detail") or e.get("coverage_fail") or e.get("unreachable")
+        or e.get("aspect") or e.get("daylight")
+    )
+    res["clean"] = res["clean_all"] or circ_bad
+    return res
+
+
+def test_failure_events_types_rooms_and_hardness():
+    from app.pipeline.mask_scorecard import failure_events
+
+    ev = failure_events(_fake_result({
+        "oversized": ["Bedroom 2"], "hard_detail": [["narrow", "Master Bathroom"]],
+        "coverage_fail": True, "daylight": ["Kitchen"], "unreachable": ["Study"],
+    }))
+    got = {(x["type"], x["room"], x["hard"]) for x in ev}
+    assert got == {("oversized", "Bedroom 2", True), ("narrow", "Master Bathroom", True),
+                   ("coverage", None, False), ("no_daylight", "Kitchen", True), ("unreachable", "Study", True)}
+    assert failure_events(_fake_result({})) == []
+
+
+def test_violation_histogram_counts_floors_totals_and_newly_clean():
+    from app.pipeline.mask_scorecard import format_violation_histogram, top_blockers, violation_histogram
+
+    results = {
+        "a/floor1": _fake_result({"hard_detail": [["narrow", "Bedroom 1"], ["narrow", "Bedroom 2"]]}),   # only narrow
+        "b/floor1": _fake_result({"hard_detail": [["narrow", "Bathroom 1"]]}),                           # only narrow
+        "c/floor1": _fake_result({"hard_detail": [["narrow", "Study"]], "oversized": ["Living Room"]}),   # narrow + oversized
+        "d/floor1": _fake_result({"oversized": ["Dining Room"]}),                                         # only oversized
+        "e/floor1": _fake_result({"coverage_fail": True}),                                               # only coverage
+        "f/floor1": _fake_result({}),                                                                    # clean
+    }
+    h = violation_histogram(results)
+    assert h["non_clean"] == ["a/floor1", "b/floor1", "c/floor1", "d/floor1", "e/floor1"]
+    narrow = h["types"]["narrow"]
+    assert narrow["total"] == 4 and len(narrow["floors"]) == 3
+    assert narrow["only_floors"] == ["a/floor1", "b/floor1"]            # c also has oversized
+    assert narrow["by_category"] == {"bedroom": 2, "bathroom": 1, "study": 1}
+    assert h["types"]["oversized"]["only_floors"] == ["d/floor1"]
+    assert h["types"]["coverage"]["by_category"] == {"(floor)": 1}
+    # oversized and coverage each newly clean 1 floor; oversized wins the tie (2 floors affected vs 1).
+    assert top_blockers(h) == ["narrow", "oversized", "coverage"]
+    text = format_violation_histogram(results, "t")
+    assert "NOT fully clean" in text and ": 5" in text and "TOP 3 BLOCKERS" in text
+    assert "1. narrow: +2 newly clean floors (3 floors / 4 violations affected)" in text
+    assert "by room category: bedroom 2, bathroom 1, study 1" in text
+
+
+def test_greedy_blockers_is_cumulative():
+    from app.pipeline.mask_scorecard import greedy_blockers, violation_histogram
+
+    results = {
+        "c/floor1": _fake_result({"hard_detail": [["narrow", "Study"]], "oversized": ["Living Room"]}),
+        "d/floor1": _fake_result({"oversized": ["Dining Room"]}),
+    }
+    g = greedy_blockers(violation_histogram(results))
+    assert g[0] == ("oversized", 1)      # d becomes clean
+    assert g[1] == ("narrow", 2)         # then c too
