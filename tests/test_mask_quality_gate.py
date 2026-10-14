@@ -189,3 +189,44 @@ def _assert_no_regression(case, cur, base):
     band_max_pct = plot_band(net_area, unit).max_cov * 100
     allowed = max(band_max_pct, base["coverage_pct"]) + _COVERAGE_TOLERANCE_PCT
     assert cur["coverage_pct"] <= allowed, (cur["coverage_pct"], band_max_pct)
+
+
+# ---- suite_guard ratchet (Step 3b) ----
+# suite_guard is a planner-only EXTRA candidate path accepted as a WORKAROUND
+# for orphaned ensuites, not the cure. The number of floors whose chosen path
+# is suite_guard may not increase vs tests/data/mask_quality_baseline_planner
+# .json ("layout_path" per floor). It may go down: then lower the baseline by
+# re-running `mask_quality_report.py --planner on --update-baseline` review-
+# ing the diff.
+def _suite_guard_floors(case_ids):
+    from app.pipeline.mask_scorecard import workaround_path_floors
+
+    paths = {}
+    for case, floor_n, _rooms, key in _ITEMS:
+        if case["id"] in case_ids:
+            plan, _results = planner_building(case)
+            paths[key] = plan.for_floor(floor_n).layout_path
+    return workaround_path_floors(paths)["suite_guard"], paths
+
+
+def _baseline_suite_guard(case_ids):
+    return [k for k, v in _PLANNER_BASELINE.items()
+            if v.get("layout_path") is not None and k.split("/")[0] in case_ids
+            and (v["layout_path"] == "suite_guard" or v["layout_path"].startswith("suite_guard+"))]
+
+
+@pytest.mark.fast
+def test_suite_guard_picks_do_not_increase_fast_subset(monkeypatch):
+    monkeypatch.setattr(settings, "house_planner_enabled", True)
+    cur, _ = _suite_guard_floors(_FAST_CASE_IDS)
+    base = _baseline_suite_guard(_FAST_CASE_IDS)
+    assert len(cur) <= len(base), ("suite_guard picks increased on the fast subset", cur, base)
+
+
+def test_suite_guard_picks_do_not_increase_whole_matrix(monkeypatch):
+    monkeypatch.setattr(settings, "house_planner_enabled", True)
+    all_ids = {c["id"] for c, *_ in _ITEMS}
+    cur, paths = _suite_guard_floors(all_ids)
+    base = _baseline_suite_guard(all_ids)
+    assert all(_PLANNER_BASELINE[k].get("layout_path") for k in paths), "baseline lacks layout_path"
+    assert len(cur) <= len(base), ("suite_guard picks increased", len(cur), len(base), cur, base)

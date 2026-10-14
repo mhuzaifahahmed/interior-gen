@@ -246,6 +246,27 @@ PATH_KINDS = ("rectified", "reference_reconnect", "reference_raw")
 # Only these two mean "the Phase 3 rectified candidate lost and we fell back
 # to Phase 2's pick"; circ_* kinds are Phase 4b circulation variants.
 FALLBACK_PATH_KINDS = ("reference_reconnect", "reference_raw")
+# Planner-only extra-candidate paths that exist to WORK AROUND a problem in the
+# main growth path rather than fix it (user decision: accepted as workarounds,
+# not the cure). How often they win is reported; only suite_guard is ratcheted.
+WORKAROUND_PATH_KINDS = ("suite_guard", "circ_arms", "circ_stair")
+
+
+def workaround_path_floors(paths: dict) -> dict[str, list[str]]:
+    """{kind: [floor keys]} for each WORKAROUND_PATH_KINDS entry. A path counts
+    for a kind when it equals it or starts with "<kind>+" (e.g. "circ_arms+stair"
+    is a circ_arms pick; a floor that is circ_stair only counts for circ_stair)."""
+    out: dict[str, list[str]] = {k: [] for k in WORKAROUND_PATH_KINDS}
+    for key, path in paths.items():
+        path = path or ""
+        for kind in WORKAROUND_PATH_KINDS:
+            if path == kind or path.startswith(kind + "+"):
+                out[kind].append(key)
+    return out
+
+
+def suite_guard_count(paths: dict) -> int:
+    return len(workaround_path_floors(paths)["suite_guard"])
 
 
 def format_scorecard(results: dict, label: str, capacity: dict | None = None, paths: dict | None = None) -> str:
@@ -376,6 +397,17 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None, pa
         lines.append(f"Engine path (all {len(keys)} floors): "
                      + " / ".join(f"{p} {seen[p]}" for p in ordered)
                      + f"  [sum {sum(seen.values())}]")
+        wk = workaround_path_floors({k: paths.get(k) for k in keys})
+        lines.append(
+            f"suite_guard picks: {len(wk['suite_guard'])}/{len(keys)} floors"
+            + (f" ({', '.join(wk['suite_guard'])})" if wk["suite_guard"] else "")
+            + "  [workaround, ratcheted: may not increase]"
+        )
+        for kind in ("circ_arms", "circ_stair"):
+            lines.append(
+                f"{kind} picks: {len(wk[kind])}/{len(keys)} floors"
+                + (f" ({', '.join(wk[kind])})" if wk[kind] else "") + "  [workaround, reported only]"
+            )
         lines.append(f"Floors using the Phase 2 fallback ({', '.join(FALLBACK_PATH_KINDS)}): {fallback}/{len(keys)}")
     clean = [k for k in keys if results[k]["clean"]]
     clean_legacy = [k for k in keys if results[k].get("clean_legacy", results[k]["clean"])]

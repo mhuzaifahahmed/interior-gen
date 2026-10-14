@@ -142,3 +142,27 @@ def test_engine_path_counts_fail_loudly_when_a_floor_has_no_path():
     keys = list(results)
     with pytest.raises(AssertionError, match="do not account for all 3 floors"):
         format_scorecard(results, "planner_on", paths={keys[0]: "rectified", keys[1]: "rectified"})
+
+
+def test_workaround_path_floors_counts_each_kind():
+    from app.pipeline.mask_scorecard import suite_guard_count, workaround_path_floors
+
+    paths = {"a": "suite_guard", "b": "rectified", "c": "circ_arms", "d": "circ_arms+stair",
+             "e": "circ_stair", "f": "suite_guard", "g": None, "h": "reference_raw"}
+    w = workaround_path_floors(paths)
+    assert w["suite_guard"] == ["a", "f"]
+    assert w["circ_arms"] == ["c", "d"]
+    assert w["circ_stair"] == ["e"]
+    assert suite_guard_count(paths) == 2
+    assert suite_guard_count({}) == 0
+
+
+def test_scorecard_prints_suite_guard_picks_line_with_case_ids():
+    results = _scored(4)
+    keys = list(results)
+    paths = {keys[0]: "suite_guard", keys[1]: "rectified", keys[2]: "suite_guard", keys[3]: "circ_arms"}
+    text = format_scorecard(results, "planner_on", paths=paths)
+    assert f"suite_guard picks: 2/4 floors ({keys[0]}, {keys[2]})" in text
+    assert "circ_arms picks: 1/4 floors" in text and "circ_stair picks: 0/4 floors" in text
+    none = format_scorecard(results, "planner_on", paths={k: "rectified" for k in keys})
+    assert "suite_guard picks: 0/4 floors  [workaround" in none

@@ -34,6 +34,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "circ_arms",
   "living_area": 502.5,
   "max_parts": 3,
   "max_secondary_fraction": 0.293,
@@ -84,6 +85,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "suite_guard",
   "living_area": 1339.9,
   "max_parts": 2,
   "max_secondary_fraction": 0.134,
@@ -124,6 +126,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 0.0,
   "max_parts": 1,
   "max_secondary_fraction": 0.0,
@@ -174,6 +177,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 451.4,
   "max_parts": 4,
   "max_secondary_fraction": 0.546,
@@ -220,6 +224,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "reference_raw",
   "living_area": 429.3,
   "max_parts": 5,
   "max_secondary_fraction": 0.634,
@@ -259,6 +264,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 682.5,
   "max_parts": 2,
   "max_secondary_fraction": 0.137,
@@ -299,6 +305,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 0.0,
   "max_parts": 1,
   "max_secondary_fraction": 0.0,
@@ -347,6 +354,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 594.8,
   "max_parts": 2,
   "max_secondary_fraction": 0.245,
@@ -391,6 +399,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 171.2,
   "max_parts": 2,
   "max_secondary_fraction": 0.179,
@@ -434,6 +443,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 0.0,
   "max_parts": 1,
   "max_secondary_fraction": 0.0,
@@ -480,6 +490,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 204.1,
   "max_parts": 2,
   "max_secondary_fraction": 0.143,
@@ -526,6 +537,7 @@
    "door_too_narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 328.8,
   "max_parts": 2,
   "max_secondary_fraction": 0.183,
@@ -575,6 +587,7 @@
    "door_too_narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 328.8,
   "max_parts": 2,
   "max_secondary_fraction": 0.183,
@@ -622,6 +635,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 204.1,
   "max_parts": 2,
   "max_secondary_fraction": 0.143,
@@ -668,6 +682,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 172.3,
   "max_parts": 2,
   "max_secondary_fraction": 0.182,
@@ -715,6 +730,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 190.2,
   "max_parts": 3,
   "max_secondary_fraction": 0.042,
@@ -761,6 +777,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 273.4,
   "max_parts": 4,
   "max_secondary_fraction": 0.0,
@@ -813,6 +830,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 344.8,
   "max_parts": 2,
   "max_secondary_fraction": 0.272,
@@ -860,6 +878,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 345.4,
   "max_parts": 2,
   "max_secondary_fraction": 0.272,
@@ -901,6 +920,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "circ_arms",
   "living_area": 243.4,
   "max_parts": 5,
   "max_secondary_fraction": 0.578,
@@ -948,6 +968,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "circ_stair",
   "living_area": 353.3,
   "max_parts": 2,
   "max_secondary_fraction": 0.07,
@@ -989,6 +1010,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "suite_guard",
   "living_area": 453.7,
   "max_parts": 2,
   "max_secondary_fraction": 0.2,
@@ -1034,6 +1056,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "circ_stair",
   "living_area": 196.0,
   "max_parts": 3,
   "max_secondary_fraction": 0.447,
@@ -1077,6 +1100,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "suite_guard",
   "living_area": 284.1,
   "max_parts": 4,
   "max_secondary_fraction": 0.0,
@@ -1122,6 +1146,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "suite_guard",
   "living_area": 426.6,
   "max_parts": 2,
   "max_secondary_fraction": 0.108,
@@ -1165,6 +1190,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "circ_stair",
   "living_area": 196.0,
   "max_parts": 3,
   "max_secondary_fraction": 0.447,
@@ -1208,6 +1234,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "suite_guard",
   "living_area": 284.1,
   "max_parts": 4,
   "max_secondary_fraction": 0.0,
@@ -1253,6 +1280,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "suite_guard",
   "living_area": 426.6,
   "max_parts": 2,
   "max_secondary_fraction": 0.108,
@@ -1294,6 +1322,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "circ_arms",
   "living_area": 243.4,
   "max_parts": 5,
   "max_secondary_fraction": 0.578,
@@ -1341,6 +1370,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "circ_stair",
   "living_area": 353.3,
   "max_parts": 2,
   "max_secondary_fraction": 0.07,
@@ -1382,6 +1412,7 @@
   "hard_count": 0,
   "hard_kinds": [],
   "hierarchy_inverted": false,
+  "layout_path": "suite_guard",
   "living_area": 453.7,
   "max_parts": 2,
   "max_secondary_fraction": 0.2,
@@ -1436,6 +1467,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "circ_arms",
   "living_area": 399.5,
   "max_parts": 3,
   "max_secondary_fraction": 0.415,
@@ -1491,6 +1523,7 @@
    "narrow"
   ],
   "hierarchy_inverted": true,
+  "layout_path": "rectified",
   "living_area": 259.1,
   "max_parts": 2,
   "max_secondary_fraction": 0.318,
@@ -1535,6 +1568,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 179.5,
   "max_parts": 1,
   "max_secondary_fraction": 0.0,
@@ -1585,6 +1619,7 @@
    "narrow"
   ],
   "hierarchy_inverted": false,
+  "layout_path": "rectified",
   "living_area": 400.0,
   "max_parts": 2,
   "max_secondary_fraction": 0.091,

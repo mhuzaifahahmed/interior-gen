@@ -241,6 +241,10 @@ def main():
             path = BASELINE_PATHS[mode]
             os.makedirs(os.path.dirname(path), exist_ok=True)
             data = {k: m for k, (_c, _f, _r, m, _o) in results.items()}
+            if mode == "on":
+                # Per-floor chosen layout path, so the suite_guard ratchet has a baseline.
+                for k in data:
+                    data[k] = {**data[k], "layout_path": (EXTRA.get(k) or {}).get("path")}
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=1, sort_keys=True)
             print(f"baseline written -> {path}")
