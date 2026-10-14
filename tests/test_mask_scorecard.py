@@ -113,3 +113,32 @@ def test_circulation_check_reports_a_pass_through_bedroom():
     res = score_floor(rects, PLOT, "north", floors, 1)
     assert "Bedroom 2" in res["circulation"]["pass_through_private"]
     assert not res["circulation"]["pass"]
+
+
+def _scored(n):
+    return {f"case{i}/floor1": score_floor(_house(4, 6), PLOT, "south", FLOORS, 1) for i in range(n)}
+
+
+def test_engine_path_counts_cover_every_kind_and_sum_to_the_floor_count():
+    # Regression: Phase 4b added circ_* path kinds the old fixed 3-kind line
+    # skipped, so the printed counts summed to 25 of 35.
+    results = _scored(6)
+    keys = list(results)
+    paths = {
+        keys[0]: "rectified", keys[1]: "rectified", keys[2]: "circ_stair",
+        keys[3]: "circ_arms", keys[4]: "circ_arms+stair", keys[5]: "reference_raw",
+    }
+    text = format_scorecard(results, "planner_on", paths=paths)
+    assert "rectified 2" in text and "circ_stair 1" in text and "circ_arms 1" in text
+    assert "circ_arms+stair 1" in text and "reference_raw 1" in text
+    assert "[sum 6]" in text
+    # Only the two reference kinds count as the Phase 2 fallback.
+    assert "fallback (reference_reconnect, reference_raw): 1/6" in text
+
+
+def test_engine_path_counts_fail_loudly_when_a_floor_has_no_path():
+    import pytest
+    results = _scored(3)
+    keys = list(results)
+    with pytest.raises(AssertionError, match="do not account for all 3 floors"):
+        format_scorecard(results, "planner_on", paths={keys[0]: "rectified", keys[1]: "rectified"})

@@ -243,6 +243,9 @@ def capacity_summary() -> dict:
 
 
 PATH_KINDS = ("rectified", "reference_reconnect", "reference_raw")
+# Only these two mean "the Phase 3 rectified candidate lost and we fell back
+# to Phase 2's pick"; circ_* kinds are Phase 4b circulation variants.
+FALLBACK_PATH_KINDS = ("reference_reconnect", "reference_raw")
 
 
 def format_scorecard(results: dict, label: str, capacity: dict | None = None, paths: dict | None = None) -> str:
@@ -338,12 +341,26 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None, pa
         for floors, c in capacity.items():
             lines.append(f"    {floors} floor(s): max bedrooms {c['bedrooms']}, max bathrooms {c['bathrooms']}")
     if paths:
-        counts = {p: sum(1 for k in keys if paths.get(k) == p) for p in PATH_KINDS}
-        fallback = counts["reference_reconnect"] + counts["reference_raw"]
+        # Count EVERY path kind that actually occurs (Phase 4b added circ_*
+        # kinds that the old fixed three-kind line silently skipped, so it
+        # summed to 25 of 35). The per-kind counts must add up to the number
+        # of floors - fail loudly if a floor has no recorded path or the
+        # counts drift, instead of printing a misleading line.
+        seen: dict[str, int] = {}
+        for k in keys:
+            seen[paths.get(k) or "MISSING"] = seen.get(paths.get(k) or "MISSING", 0) + 1
+        if sum(seen.values()) != len(keys) or "MISSING" in seen:
+            raise AssertionError(
+                f"engine path counts {seen} do not account for all {len(keys)} floors "
+                "(a floor has no recorded layout_path)"
+            )
+        ordered = [p for p in PATH_KINDS if p in seen] + sorted(p for p in seen if p not in PATH_KINDS)
+        fallback = sum(seen.get(p, 0) for p in FALLBACK_PATH_KINDS)
         lines.append("")
-        lines.append(f"Phase-3 engine path: floors using the Phase 2 fallback: {fallback}/{len(keys)} "
-                     f"(rectified {counts['rectified']} / reference+reconnect {counts['reference_reconnect']} / "
-                     f"raw reference {counts['reference_raw']})")
+        lines.append(f"Engine path (all {len(keys)} floors): "
+                     + " / ".join(f"{p} {seen[p]}" for p in ordered)
+                     + f"  [sum {sum(seen.values())}]")
+        lines.append(f"Floors using the Phase 2 fallback ({', '.join(FALLBACK_PATH_KINDS)}): {fallback}/{len(keys)}")
     clean = [k for k in keys if results[k]["clean"]]
     clean_legacy = [k for k in keys if results[k].get("clean_legacy", results[k]["clean"])]
     lines.append("")
