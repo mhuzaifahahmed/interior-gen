@@ -89,6 +89,10 @@ def main():
         }
         prev = REC["cur"]
         REC["cur"] = rec
+        # The per-candidate memo (a6341d9, a pure speedup) would skip the
+        # wrapped stages for every candidate after the first - off here.
+        k = dict(k)
+        k["memo"] = None
         try:
             res = originals["_grow_floor"](*a, **k)
         finally:
