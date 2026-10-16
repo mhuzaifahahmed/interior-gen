@@ -291,3 +291,32 @@ def test_stair_is_not_the_last_resort_sink():
     stats: dict = {}
     floor_layout_mask._fill_leftovers_bounded(owner, cells, [1, 1], [1, 1], 3, 1, set(), [1, 2], 0, stats)
     assert owner[0][1] == 1 and cells[0] == {(0, 0)}
+
+
+def test_footprint_scale_trigger_skips_unabsorbable_overflow():
+    # Step 5.2 search is tried only when some floor has a hard violation AND
+    # the fill overflowed - and no floor's overflow exceeds what the smallest
+    # footprint candidate can remove (1 - min scale of its area).
+    from types import SimpleNamespace
+
+    from app.pipeline.layout_quality import Violation
+
+    ws = [Violation("Bedroom 1", "narrow", True, ""), Violation("__floor__", "fill_overflow", False, "")]
+    res = [([], [], ws)]
+    cap = floor_layout_mask.FOOTPRINT_SCALE_MAX_OVERFLOW_FRACTION
+    assert cap == pytest.approx(1.0 - min(floor_layout_mask.FOOTPRINT_SCALE_VARIANTS))
+
+    def plan(*fracs):
+        return SimpleNamespace(floors=[SimpleNamespace(fill_overflow_fraction=f) for f in fracs])
+
+    assert floor_layout_mask._wants_smaller_footprint(res, plan(0.05))
+    assert floor_layout_mask._wants_smaller_footprint(res, plan(cap))
+    assert not floor_layout_mask._wants_smaller_footprint(res + res, plan(0.02, cap + 0.01))
+    assert not floor_layout_mask._wants_smaller_footprint([([], [], ws[:1])], plan(0.05))
+    assert not floor_layout_mask._wants_smaller_footprint([([], [], ws[1:])], plan(0.05))
+
+
+def test_planner_records_fill_overflow_fraction(monkeypatch):
+    monkeypatch.setattr(settings, "house_planner_enabled", True)
+    plan, _results = floor_layout_mask.layout_building([_typical()], _plot(40, 60), "south", None, 1)
+    assert 0.0 <= plan.floors[0].fill_overflow_fraction < 1.0

@@ -93,6 +93,10 @@ class FloorPlan:
     # engine's CORE footprint coordinates (front edge at y=0; east/west
     # facings transposed), identical on every floor; None = no fixed stair.
     stair_block: dict | None = None
+    # Diagnostic (set by floor_layout_mask after layout): fraction of the
+    # floor's grid cells the bounded fill had to place with no neighbour
+    # headroom (its last resort). layout_building's footprint-scale trigger.
+    fill_overflow_fraction: float = 0.0
 
 
 @dataclass

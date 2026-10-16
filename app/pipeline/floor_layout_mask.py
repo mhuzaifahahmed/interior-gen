@@ -816,7 +816,7 @@ def _layout_with_plan(
         decide = best_warnings
         if reference is not None and not _BONUS_DECISIONS_ON_RECTIFIED:
             decide = [v for v in reference[3].violations if v.kind not in _SCORE_ONLY_KINDS + ("notch",)]
-        return best_rooms or [], best_warnings, decide, best_path
+        return best_rooms or [], best_warnings, decide, best_path, int(best_stats.get("overflow_cells") or 0)
 
     def hard_count(warnings: list) -> int:
         # Shape (`wrapped`, Phase 3) is repaired by rectification, not by
@@ -825,7 +825,7 @@ def _layout_with_plan(
         return sum(1 for v in warnings if v.hard and v.kind not in _SCORE_ONLY_KINDS)
 
     started = time.perf_counter()
-    rects, warnings, decide, path = run(rooms)
+    rects, warnings, decide, path, overflow_cells = run(rooms)
     # Bonus rooms are added only where they actually fit: lowest priority
     # first, a planner-added SPARE-AREA room is dropped when it carries a hard
     # violation itself, or the floor lays out with fewer hard violations
@@ -846,14 +846,15 @@ def _layout_with_plan(
         if current == 0:
             break
         trial_rooms = [r for r in rooms if str(r.get("name") or "") != name]
-        t_rects, t_warnings, t_decide, t_path = run(trial_rooms)
+        t_rects, t_warnings, t_decide, t_path, t_overflow = run(trial_rooms)
         # Dropped when the bonus room itself did not fit (it carries a hard
         # violation) and removing it does not make the floor worse, or when
         # the floor is strictly better without it.
         t_hard = hard_count(t_decide)
         no_new_oversize = oversized_count(t_decide) <= oversized_count(decide)
         if no_new_oversize and (t_hard < current or (involves(decide, name) and t_hard <= current)):
-            rooms, rects, warnings, decide, path = trial_rooms, t_rects, t_warnings, t_decide, t_path
+            rooms, rects, warnings, decide, path, overflow_cells = (
+                trial_rooms, t_rects, t_warnings, t_decide, t_path, t_overflow)
             warnings.append(Violation(name, "planner_room_dropped", False, "bonus room did not fit cleanly"))
 
     LAST_FLOOR_DIAGNOSTICS.clear()
@@ -862,6 +863,8 @@ def _layout_with_plan(
         seconds=time.perf_counter() - started,
     )
     plan.layout_path = path
+    grid_cols, grid_rows, _cw, _ch = _grid(core_dimensions)
+    plan.fill_overflow_fraction = overflow_cells / max(grid_cols * grid_rows, 1)
     rooms_out = _apply_plan_transform(rects, facing, fp_length, fp_width, plan.yards)
     return rooms_out, warnings
 
@@ -887,13 +890,17 @@ def layout_building(
     bounded fill had to put leftover cells past a room's max (the floor's
     surplus had no sensible room to go), smaller footprints
     (FOOTPRINT_SCALE_VARIANTS of the planned area, same aspect/yard logic)
-    are laid out too. One is chosen only if EVERY floor is no worse than at
-    full size on every gate metric (layout_metrics.measure_floor) and the
-    building's total hard count is strictly lower; otherwise full size."""
+    are laid out too - unless some floor's overflow is larger than any
+    smaller footprint can absorb (see _wants_smaller_footprint). One is
+    chosen only if EVERY floor is no worse than at full size on every gate
+    metric (layout_metrics.measure_floor) and the building's total hard count
+    is strictly lower; otherwise full size. All scales are evaluated (stopping
+    at the first strictly-better one picks 0.95 instead of 0.85 on
+    60x80_typical, hard 2 instead of 0)."""
     total_floors = total_floors or len(floors_rooms)
     args = (floors_rooms, dimensions, facing, garage_cars, total_floors, min_front_setback, max_replans)
     plan, results = _layout_building_at(*args, 1.0)
-    if not FOOTPRINT_SCALE_SEARCH or not _wants_smaller_footprint(results):
+    if not FOOTPRINT_SCALE_SEARCH or not _wants_smaller_footprint(results, plan):
         return plan, results
     base = [_scale_gate_vector(plan, results, i, dimensions, garage_cars, facing, total_floors) for i in range(len(results))]
     best = (plan, results)
@@ -915,12 +922,33 @@ FOOTPRINT_SCALE_SEARCH = True
 FOOTPRINT_SCALE_VARIANTS = (0.95, 0.90, 0.85)
 
 
-def _wants_smaller_footprint(results: list) -> bool:
+# A smaller footprint removes at most (1 - min scale) of every floor's area,
+# so a floor whose last-resort fill overflow is a larger fraction of its grid
+# than that cannot be absorbed by any candidate - the search is skipped.
+# Measured on the 35-floor matrix (HEAD 5a7fe3d..dfe798a): the three
+# buildings a smaller scale improves overflow 1.3% / 2.6% / 5.4% of their
+# cells; every building with a floor above 15% (30x40 sparse, 50x50 2f, the
+# four 60x80 3f, 90x40 sparse, 150x150 dense, 150x200) never had a scale
+# accepted, and the real dense 3-floor requests (60x80, 150x150) reach ~21%.
+# The data contradicts "large leftover -> try smaller": large overflow is
+# structural (one pocket with no sensible neighbour), not a too-big house.
+FOOTPRINT_SCALE_MAX_OVERFLOW_FRACTION = 1.0 - min(FOOTPRINT_SCALE_VARIANTS)
+
+
+def _wants_smaller_footprint(results: list, plan=None) -> bool:
     """A smaller house is only tried when some floor has a hard violation and
-    the bounded fill had leftover cells with no neighbour headroom."""
+    the bounded fill had leftover cells with no neighbour headroom - and no
+    floor's overflow is larger than a smaller footprint could absorb
+    (FOOTPRINT_SCALE_MAX_OVERFLOW_FRACTION; skipped when `plan` is None)."""
     hard = any(v.hard for _u, _r, ws in results for v in ws)
     overflow = any(v.kind == "fill_overflow" for _u, _r, ws in results for v in ws)
-    return hard and overflow
+    if not (hard and overflow):
+        return False
+    if plan is not None and any(
+        fp.fill_overflow_fraction > FOOTPRINT_SCALE_MAX_OVERFLOW_FRACTION + 1e-9 for fp in plan.floors
+    ):
+        return False
+    return True
 
 
 def _scale_gate_vector(plan, results, i, dimensions, garage_cars, facing, total_floors) -> tuple:
