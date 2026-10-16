@@ -1319,6 +1319,8 @@ def _grow_filled(
         _fill_leftovers_bounded(
             owner, cells_by_room, target_cells, max_cells, cols, rows, spine_cells, zones, band,
             stats if stats is not None else {}, fixed={stair_i} if stair_cells else None,
+            pinned={garage_i} if garage_i is not None else None,
+            sinks={i for i, t in enumerate(targets) if t["category"] == "porch"},
         )
         _rebalance_over_max(
             owner, cells_by_room, target_cells, max_cells, cols, rows, zones, band,
@@ -2899,6 +2901,8 @@ def _fill_leftovers_bounded(
     band: int,
     stats: dict,
     fixed: set | None = None,
+    pinned: set | None = None,
+    sinks: set | None = None,
 ) -> None:
     """Planner-path leftover fill (Phase 2) - BOUNDED by every room's
     max_cells, unlike _fill_leftovers() (whose whole-region dump is a root
@@ -2992,6 +2996,17 @@ def _fill_leftovers_bounded(
             # on 11 floors (new `narrow`/oversized on 60x80 3F and 150x200).)
             pool = [i for i in candidates if not _STAIR_NOT_A_SINK or zones is None or zones[i] != 1] or candidates
             best = min(pool, key=lambda i: (len(cells_by_room[i]) - max_cells[i], i))
+            if _FILL_LAST_RESORT_TO_SINK and sinks:
+                # Step 5.3b: the neighbour with the shortest shared-wall chain
+                # to a remainder SINK (Terrace / Verandah), so the rebalance
+                # passes the excess there; else the neighbour with the most
+                # RELATIVE headroom (least over its max, as a fraction).
+                chained = _nearest_to_sink(pool, owner, cells_by_room, zones, band, cols, rows,
+                                           sinks, (pinned or set()) | set(fixed or ()))
+                if chained is not None:
+                    best = chained
+                else:
+                    best = min(pool, key=lambda i: ((len(cells_by_room[i]) - max_cells[i]) / max(max_cells[i], 1), i))
             for (c, r) in region:
                 owner[r][c] = best
                 cells_by_room[best].add((c, r))
@@ -3021,6 +3036,47 @@ def _fill_leftovers_bounded(
 
 
 _MIN_SHARED_WALL_CELLS = 3
+
+# Step 5.3b (planner path only): see _fill_leftovers_bounded's last resort.
+_FILL_LAST_RESORT_TO_SINK = True
+
+
+def _nearest_to_sink(pool, owner, cells_by_room, zones, band, cols, rows, sinks, pinned) -> int | None:
+    """Among `pool` (the pocket's neighbours), the room with the fewest
+    shared-wall hops (same zone group, never through or to a pinned room) to
+    a remainder sink room; None when no sink is reachable. Ties: index."""
+    n = len(cells_by_room)
+    if zones is not None and band > 0:
+        group = [0 if zones[i] == 0 else 1 for i in range(n)]
+    else:
+        group = [1] * n
+    adj = _room_adjacency(owner, cols, rows, n)
+    best = None
+    for start in pool:
+        if start in pinned or start in sinks:
+            continue
+        seen = {start}
+        frontier = [start]
+        hops = 0
+        found = False
+        while frontier and not found:
+            hops += 1
+            nxt = []
+            for cur in frontier:
+                for nb in sorted(adj[cur]):
+                    if nb in seen or nb in pinned or group[nb] != group[start]:
+                        continue
+                    seen.add(nb)
+                    if nb in sinks:
+                        found = True
+                        break
+                    nxt.append(nb)
+                if found:
+                    break
+            frontier = nxt
+        if found and (best is None or (hops, start) < best):
+            best = (hops, start)
+    return None if best is None else best[1]
 
 
 def _room_adjacency(owner: list[list[int]], cols: int, rows: int, n: int) -> list[set[int]]:

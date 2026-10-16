@@ -561,6 +561,9 @@ def analyse(results, planner):
         tot_over = sum(f["stats"].get("overflow_cells", 0) * f["cell"] for f in floors)
         o(f"   total free after growth {tot_free:.0f} sq ft; total last-resort overflow {tot_over:.0f} sq ft "
           f"({sum(1 for f in floors if f['stats'].get('overflow_cells'))} floors)")
+        om_cells = sum(f["stats"].get("over_max_after_rebalance", 0) * f["cell"] for f in floors)
+        o(f"   leftover cells placed over max (still over after rebalance): {om_cells:.0f} sq ft on "
+          f"{sum(1 for f in floors if f['stats'].get('over_max_after_rebalance'))} floors")
         # over-max rooms final
         om = Counter()
         for f in floors:
