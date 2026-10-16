@@ -41,7 +41,7 @@ import io
 import ezdxf
 from ezdxf.enums import TextEntityAlignment
 
-from app.pipeline.blueprint_svg import _largest_part_view
+from app.pipeline.blueprint_svg import _largest_part_view, planner_added_names, planner_footnote
 from app.pipeline.door_graph import build_door_graph
 from app.pipeline.floor_layout import footprint_bbox, room_parts
 from app.pipeline.room_specs import (
@@ -150,6 +150,11 @@ def render_floor_blueprint_dxf(
         dxfattribs={"layer": "TITLE", "height": title_height},
     )
     title.set_placement((0, width + title_height * 1.5), align=TextEntityAlignment.BOTTOM_LEFT)
+
+    note = planner_footnote(planner_added_names(rects))
+    if note:
+        note_text = msp.add_text(note, dxfattribs={"layer": "TITLE", "height": max(title_height * 0.6, 0.15)})
+        note_text.set_placement((0, -title_height * 1.5), align=TextEntityAlignment.TOP_LEFT)
 
     # Exterior walls (with real window gaps) - one pass per room, only for
     # edges that actually lie on the plot boundary, so no segment is ever
@@ -485,7 +490,7 @@ def _label_view(rect: dict) -> dict:
 
 
 def _display_name(rect: dict) -> str:
-    return rect["name"] + (" (open)" if rect.get("open_area") else "")
+    return rect["name"] + (" (open)" if rect.get("open_area") else "") + (" +" if rect.get("planner_added") else "")
 
 
 def _dims_text(rect: dict, unit: str) -> str:

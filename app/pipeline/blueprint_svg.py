@@ -425,7 +425,10 @@ def render_floor_blueprint(
     _draw_dimensions(draw, rects, length, width, plot_x0, plot_y0, plot_x1, plot_y1, scale, unit, small_font)
     _draw_north_arrow(draw, plot_x1 - 30, plot_y0 + 34, small_font)
     _draw_scale_bar(draw, plot_x0, img_h - 92, scale, unit, small_font)
-    _draw_title_block(draw, floor_number, length, width, unit, scale, img_w, img_h, title_font, small_font)
+    _draw_title_block(
+        draw, floor_number, length, width, unit, scale, img_w, img_h, title_font, small_font,
+        added_names=planner_added_names(rects),
+    )
 
     buffer = BytesIO()
     image.save(buffer, format="PNG")
@@ -1902,6 +1905,8 @@ def _compute_label_layout(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float,
     else:
         area_text = f"{rect['w']:.1f}x{rect['h']:.1f} {unit} ({area_units:.0f} sq {unit})"
     display_name = rect["name"].upper() + (" (OPEN)" if rect.get("open_area") else "")
+    if rect.get("planner_added"):
+        display_name += " +"  # marks a planner-added room (see the title-block footnote)
 
     max_name_width = max(box_w - _LABEL_WIDTH_MARGIN_PX, 10)
     name_lines, fitted_font = _fit_room_name(draw, display_name, max_name_width, name_font)
@@ -2144,7 +2149,23 @@ def _draw_scale_bar(draw: ImageDraw.ImageDraw, x0: float, y: float, scale: float
     _draw_centered_text(draw, (x0 + bar_w / 2, y - 16), f"Scale ({unit})", font, INK_SOFT)
 
 
-def _draw_title_block(draw: ImageDraw.ImageDraw, floor_number: int, length: float, width: float, unit: str, scale: float, img_w: int, img_h: int, title_font: ImageFont.FreeTypeFont, small_font: ImageFont.FreeTypeFont) -> None:
+PLANNER_FOOTNOTE_PREFIX = "+ added by planner to use spare floor area: "
+
+
+def planner_added_names(rects: list[dict]) -> list[str]:
+    """Names (in layout order, de-duplicated) of rooms the planner added."""
+    names: list[str] = []
+    for r in rects:
+        if r.get("planner_added") and r.get("name") not in names:
+            names.append(r["name"])
+    return names
+
+
+def planner_footnote(added_names: list[str]) -> str | None:
+    return PLANNER_FOOTNOTE_PREFIX + ", ".join(added_names) if added_names else None
+
+
+def _draw_title_block(draw: ImageDraw.ImageDraw, floor_number: int, length: float, width: float, unit: str, scale: float, img_w: int, img_h: int, title_font: ImageFont.FreeTypeFont, small_font: ImageFont.FreeTypeFont, added_names: list[str] | None = None) -> None:
     # Plain ASCII only - PIL's default bitmap font renders unsupported glyphs
     # (em dash, the approx sign, superscripts) as visible tofu boxes, a real
     # bug hit and fixed while building this: "-", "~", and "sq {unit}" read
@@ -2164,3 +2185,9 @@ def _draw_title_block(draw: ImageDraw.ImageDraw, floor_number: int, length: floa
         font=small_font,
         fill=INK_SOFT,
     )
+    note = planner_footnote(added_names or [])
+    if note:
+        max_w = img_w - MARGIN_LEFT_PX - MARGIN_RIGHT_PX
+        while len(note) > 8 and _text_dims(draw, note, small_font)[0] > max_w:
+            note = note[:-4].rstrip(", ") + "..."
+        draw.text((MARGIN_LEFT_PX, block_y + 36), note, font=small_font, fill=INK_SOFT)

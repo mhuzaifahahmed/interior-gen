@@ -292,4 +292,66 @@ def test_dxf_draws_open_area_dashed_on_its_own_layer_with_no_exterior_wall():
             pts = list(e.get_points("xy"))
             assert not all(abs(px - right_x) < 1e-6 for px, _ in pts)
     texts = [e.dxf.text for e in msp.query("TEXT")]
-    assert "Verandah (open)" in texts
+    assert "Verandah (open) +" in texts
+
+
+# ---- Item 6: planner-added marker + footnote ----
+
+def _added_rects():
+    return [
+        dict(_LIVING),
+        {**_VERANDAH, "planner_added": True, "added_reason": "porch", "open_area": True},
+        {"name": "Study", "x": 10.0, "y": 30.0, "w": 14.0, "h": 8.0, "planner_added": True, "added_reason": "spare"},
+    ]
+
+
+def test_footnote_lists_exactly_the_planner_added_rooms():
+    names = svg.planner_added_names(_added_rects())
+    assert names == ["Verandah", "Study"]
+    assert svg.planner_footnote(names) == "+ added by planner to use spare floor area: Verandah, Study"
+
+
+def test_no_footnote_or_marker_when_nothing_was_added():
+    plain = [dict(_LIVING), dict(_VERANDAH)]
+    assert svg.planner_added_names(plain) == []
+    assert svg.planner_footnote([]) is None
+
+
+def test_label_gets_a_plus_only_for_planner_added_rooms():
+    f13, f11 = ImageFont.load_default(size=13), ImageFont.load_default(size=11)
+    d = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+
+    def lay(rect):
+        geom = {**rect, "_area_override": rect["w"] * rect["h"], "_multi_part": False}
+        return svg._compute_label_layout(d, geom, 0, 0, 12.0, "ft", f13, f11)
+
+    assert lay({"name": "Study", "x": 0, "y": 0, "w": 20, "h": 12, "planner_added": True})["name_lines"][-1].endswith("+")
+    assert "+" not in " ".join(lay({"name": "Study", "x": 0, "y": 0, "w": 20, "h": 12})["name_lines"])
+
+
+def test_title_block_footnote_is_drawn_only_when_rooms_were_added():
+    dims = {"length": 50, "width": 40, "unit": "ft"}
+    with_note = Image.open(io.BytesIO(svg.render_floor_blueprint(1, _added_rects(), dims, 1, "south"))).convert("RGB")
+    plain = [dict(_LIVING), dict(_VERANDAH)]
+    without = Image.open(io.BytesIO(svg.render_floor_blueprint(1, plain, dims, 1, "south"))).convert("RGB")
+    assert with_note.size == without.size
+    # footnote row sits at img_h - 58 + 36 .. +50: ink only with the note.
+    h = with_note.size[1]
+    band = (svg.MARGIN_LEFT_PX, h - 24, svg.MARGIN_LEFT_PX + 300, h - 8)
+    from PIL import ImageChops
+    diff = ImageChops.difference(with_note.crop(band), without.crop(band)).getbbox()
+    assert diff is not None  # the footnote text only exists in the with-note render
+    # Rows above the footnote line are identical (note does not disturb the block).
+    above = (svg.MARGIN_LEFT_PX, h - 58, svg.MARGIN_LEFT_PX + 300, h - 30)
+    assert ImageChops.difference(with_note.crop(above), without.crop(above)).getbbox() is None
+
+
+def test_dxf_note_matches_the_added_rooms_and_is_absent_otherwise():
+    dims = {"length": 50, "width": 40, "unit": "ft"}
+    doc = _parse(render_floor_blueprint_dxf(1, _added_rects(), dims, "south"))
+    texts = [e.dxf.text for e in doc.modelspace().query("TEXT")]
+    assert "+ added by planner to use spare floor area: Verandah, Study" in texts
+    assert "Study +" in texts
+    doc2 = _parse(render_floor_blueprint_dxf(1, [dict(_LIVING), dict(_VERANDAH)], dims, "south"))
+    assert not any(e.dxf.text.startswith("+ added") for e in doc2.modelspace().query("TEXT"))
+    assert doc.audit().errors == []
