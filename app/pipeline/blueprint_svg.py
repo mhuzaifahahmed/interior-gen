@@ -823,6 +823,49 @@ def _carve_rooms(
                 sx0, sx1 = plot_x0 + lo * scale, plot_x0 + hi * scale
                 draw.rectangle([sx0, by1 - inset, sx1, by1], fill=WALL_COLOR)
 
+    # Pass 3: concave (inside) corners of a multi-part room's union outline.
+    # At such a corner two wall strips (one per edge) meet, but each strip
+    # lies inside a different part, so they only touch diagonally and leave
+    # a light inset x inset square of room fill missing from the wall corner.
+    for rect in rects:
+        parts = room_parts(rect)
+        if len(parts) > 1:
+            _fill_concave_corners(draw, parts, plot_x0, plot_y0, scale, inset)
+
+
+def _fill_concave_corners(
+    draw: ImageDraw.ImageDraw, parts: list[dict], plot_x0: float, plot_y0: float, scale: float, inset: float
+) -> None:
+    """For every vertex of the parts' union that has exactly three occupied
+    quadrants (a concave corner: the fourth quadrant is the notch), fills the
+    inset x inset square in the quadrant DIAGONALLY OPPOSITE the notch with
+    wall colour. Convex corners (one occupied quadrant), straight edges and
+    shared same-room boundaries (two or four occupied quadrants) are left
+    alone."""
+    eps = 1e-3
+
+    def inside(px: float, py: float) -> bool:
+        return any(
+            p["x"] - 1e-9 <= px <= p["x"] + p["w"] + 1e-9 and p["y"] - 1e-9 <= py <= p["y"] + p["h"] + 1e-9
+            for p in parts
+        )
+
+    vertices = set()
+    for p in parts:
+        for vx in (p["x"], p["x"] + p["w"]):
+            for vy in (p["y"], p["y"] + p["h"]):
+                vertices.add((round(vx, 6), round(vy, 6)))
+
+    for vx, vy in vertices:
+        occupied = {(sx, sy): inside(vx + sx * eps, vy + sy * eps) for sx in (-1, 1) for sy in (-1, 1)}
+        if sum(occupied.values()) != 3:
+            continue
+        notch = next(q for q, occ in occupied.items() if not occ)
+        dx, dy = -notch[0], -notch[1]  # direction from the vertex into the opposite quadrant
+        cx, cy = plot_x0 + vx * scale, plot_y0 + vy * scale
+        ax, ay = cx + dx * inset, cy + dy * inset
+        draw.rectangle([min(cx, ax), min(cy, ay), max(cx, ax), max(cy, ay)], fill=WALL_COLOR)
+
 
 # ---- Doors ----
 

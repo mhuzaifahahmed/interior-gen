@@ -53,3 +53,34 @@ def test_dxf_label_text_matches_single_and_multi_part():
     assert "20.0x24.0ft" in texts
     assert "528 sq ft" in texts
     assert not any(t.startswith("30.0x12.0") for t in texts)
+
+
+def _carved(rects, scale=10.0):
+    img = Image.new("RGB", (500, 500), svg.PAPER)
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, 500, 500], fill=svg.WALL_COLOR)
+    svg._carve_rooms(d, rects, 0.0, 0.0, scale)
+    return img
+
+
+def test_concave_corner_bite_is_filled_for_an_l_shaped_room():
+    img = _carved([L_ROOM])
+    inset = svg.WALL_HALF_THICKNESS_PX
+    # Concave vertex at (24, 22) ft -> px (240, 220); notch is x>24, y>22, so
+    # the diagonal square is x in [240-inset, 240], y in [220-inset, 220].
+    cx, cy = 240 - inset / 2, 220 - inset / 2
+    assert img.getpixel((int(cx), int(cy))) == svg.WALL_COLOR
+    # room interior well inside both parts stays fill
+    assert img.getpixel((150, 150)) == svg.ROOM_FILL
+    assert img.getpixel((150, 300)) == svg.ROOM_FILL
+
+
+def test_convex_corners_and_plain_rooms_are_unchanged_by_the_concave_pass():
+    # Plain rectangle: no concave pass, interior corner pixel just inside the
+    # wall strips stays room fill.
+    img = _carved([BOX_ROOM])
+    inset = svg.WALL_HALF_THICKNESS_PX
+    assert img.getpixel((int(400 + inset + 2), int(100 + inset + 2))) == svg.ROOM_FILL
+    # Two parts that tile (shared same-room boundary) leave no wall inside.
+    l_img = _carved([L_ROOM])
+    assert l_img.getpixel((150, 220)) == svg.ROOM_FILL  # shared boundary between the two parts
