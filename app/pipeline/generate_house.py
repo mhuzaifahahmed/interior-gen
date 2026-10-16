@@ -8,7 +8,7 @@ from app.config import settings
 from app.db import engine
 from app.models import HouseProject
 from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
-from app.pipeline.blueprint_svg import render_floor_blueprint
+from app.pipeline.blueprint_svg import annotate_planner_rects, render_floor_blueprint
 from app.pipeline.feasibility import check_feasibility
 from app.pipeline.floor_layout_mask import layout_building
 from app.pipeline.house_planner import plan_to_dict
@@ -967,6 +967,11 @@ def run_house_pipeline(
                         for v in quality_warnings:
                             if v.hard:
                                 hard_quality_issues.append(f"Floor {floor['floor_number']}: {v.room} ({v.detail})")
+                        # Planner-on only: hand the renderers the planner flags
+                        # (planner_added / added_reason / open_area) on copies of
+                        # the rects - the layout itself is untouched.
+                        if planned_floors is not None:
+                            rects = annotate_planner_rects(rects, floor["rooms"])
                         png_bytes = render_floor_blueprint(
                             floor["floor_number"], rects, layout_dims, total_floors, facing
                         )

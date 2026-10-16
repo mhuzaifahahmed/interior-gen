@@ -137,6 +137,10 @@ def render_floor_blueprint_dxf(
     # hatch fill, unlike blueprint_svg.py's PNG rendering).
     doc.layers.add("YARD", color=3)
     doc.layers.add("DRIVEWAY", color=9)
+    # Open / covered areas (verandah, porch, terrace): an unwalled outline.
+    if "DASHED" not in doc.linetypes:
+        doc.linetypes.add("DASHED", pattern=[0.6, 0.4, -0.2], description="Dashed")
+    doc.layers.add("OPEN", color=3, linetype="DASHED")
 
     msp = doc.modelspace()
 
@@ -179,6 +183,7 @@ def render_floor_blueprint_dxf(
                 door_width,
                 front_door_edge,
                 facing_normalized,
+                open_area=bool(rect.get("open_area")),
             )
 
     # Interior walls (with real door gaps where a door isn't suppressed) -
@@ -287,6 +292,7 @@ def _draw_exterior_walls_for_room(
     door_width: float | None = None,
     front_door_edge: dict | None = None,
     facing: str = "",
+    open_area: bool = False,
 ) -> None:
     x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
     # Smart canvas sizing (2026-10, Part 1 - replaces the old `length`/
@@ -297,6 +303,19 @@ def _draw_exterior_walls_for_room(
     # wall sitting well inside the plot. Numerically identical to the old
     # logic whenever the footprint fills the plot.
     fp_x0, fp_y0, fp_x1, fp_y1 = footprint_bbox
+
+    if open_area:
+        # No wall, window or door on an open area's exterior edges: a dashed
+        # outline on the OPEN layer instead.
+        for flag, a, b in (
+            (abs(x - fp_x0) < _EDGE_TOL, (fp_x0, y), (fp_x0, y + h)),
+            (abs((x + w) - fp_x1) < _EDGE_TOL, (fp_x1, y), (fp_x1, y + h)),
+            (abs(y - fp_y0) < _EDGE_TOL, (x, fp_y0), (x + w, fp_y0)),
+            (abs((y + h) - fp_y1) < _EDGE_TOL, (x, fp_y1), (x + w, fp_y1)),
+        ):
+            if flag:
+                msp.add_line(a, b, dxfattribs={"layer": "OPEN"})
+        return
 
     if abs(x - fp_x0) < _EDGE_TOL:
         if door_width is not None and _matches_front_door(front_door_edge, "vertical", fp_x0, y, y + h):
@@ -465,6 +484,10 @@ def _label_view(rect: dict) -> dict:
     return view
 
 
+def _display_name(rect: dict) -> str:
+    return rect["name"] + (" (open)" if rect.get("open_area") else "")
+
+
 def _dims_text(rect: dict, unit: str) -> str:
     if rect.get("_multi_part"):
         return f"{rect['_area_override']:.0f} sq {unit}".strip()
@@ -478,7 +501,7 @@ def _label_text_rect(rect: dict, unit: str) -> tuple[float, float, float, float]
     x, y, w, h = rect["x"], rect["y"], rect["w"], rect["h"]
     label_height = max(_ROOM_LABEL_MIN_HEIGHT, min(_ROOM_LABEL_MAX_HEIGHT, _ROOM_LABEL_HEIGHT_RATIO * min(w, h)))
     cx, cy = x + w / 2, y + h / 2
-    name_w = len(rect["name"]) * label_height * _TEXT_CHAR_WIDTH_RATIO
+    name_w = len(_display_name(rect)) * label_height * _TEXT_CHAR_WIDTH_RATIO
     dims_h = label_height * 0.75
     dims_w = len(_dims_text(rect, unit)) * dims_h * _TEXT_CHAR_WIDTH_RATIO
     half_w = max(name_w, dims_w) / 2
@@ -550,7 +573,7 @@ def _draw_room_text(msp, rect: dict, unit: str) -> None:
     label_height = max(_ROOM_LABEL_MIN_HEIGHT, min(_ROOM_LABEL_MAX_HEIGHT, _ROOM_LABEL_HEIGHT_RATIO * min(w, h)))
     cx, cy = x + w / 2, y + h / 2
 
-    name_text = msp.add_text(rect["name"], dxfattribs={"layer": "TEXT", "height": label_height})
+    name_text = msp.add_text(_display_name(rect), dxfattribs={"layer": "TEXT", "height": label_height})
     name_text.set_placement((cx, cy + label_height * 0.6), align=TextEntityAlignment.MIDDLE_CENTER)
 
     dims_text = msp.add_text(

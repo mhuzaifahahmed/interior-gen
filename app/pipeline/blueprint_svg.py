@@ -406,6 +406,8 @@ def render_floor_blueprint(
     # engine's egress-by-construction design, so windows must check every
     # part, not just one).
     for rect in rects:
+        if _is_open_area(rect):
+            continue  # an open area has no glazing
         for part in room_parts(rect):
             _draw_windows(draw, {**rect, **part}, fp, plot_x0, plot_y0, scale, unit)
 
@@ -804,6 +806,83 @@ def _free_intervals(
     return free
 
 
+# Open / covered areas (Verandah, porch, terrace - planner rooms carrying
+# open_area): drawn as an unwalled, paler area with a dashed outline on every
+# edge that is not shared with an enclosed room.
+OPEN_AREA_FILL = (238, 236, 214)
+_OPEN_DASH_ON_PX = 9
+_OPEN_DASH_OFF_PX = 6
+_PLANNER_KEYS = ("planner_added", "added_reason", "open_area")
+
+
+def annotate_planner_rects(rects: list[dict], rooms: list[dict]) -> list[dict]:
+    """Renderer-input helper for the planner-on path: returns copies of
+    `rects` carrying planner_added / added_reason / open_area copied (by room
+    name) from the room list the planner produced. The layout engine's own
+    rects are never modified; rooms without the flags are returned as-is, so
+    a flag-off layout renders exactly as before."""
+    flagged = {r.get("name"): r for r in rooms if r.get("planner_added") or r.get("open_area")}
+    if not flagged:
+        return rects
+    out = []
+    for rect in rects:
+        src = flagged.get(rect.get("name"))
+        if src is None:
+            out.append(rect)
+        else:
+            out.append({**rect, **{k: src[k] for k in _PLANNER_KEYS if k in src}})
+    return out
+
+
+def _is_open_area(rect: dict) -> bool:
+    return bool(rect.get("open_area"))
+
+
+def _draw_dashed_line(draw: ImageDraw.ImageDraw, p0: tuple, p1: tuple, fill: tuple, width: int = 2) -> None:
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    length = (dx * dx + dy * dy) ** 0.5
+    if length < 1:
+        return
+    ux, uy = dx / length, dy / length
+    pos = 0.0
+    while pos < length:
+        end = min(pos + _OPEN_DASH_ON_PX, length)
+        draw.line([(p0[0] + ux * pos, p0[1] + uy * pos), (p0[0] + ux * end, p0[1] + uy * end)], fill=fill, width=width)
+        pos += _OPEN_DASH_ON_PX + _OPEN_DASH_OFF_PX
+
+
+def _draw_unwalled_edge(draw: ImageDraw.ImageDraw, side: str, strip: list, part: dict, fp: tuple | None) -> None:
+    """An open area's unwalled edge: clears the exterior wall band outside it
+    (when the edge lies on the footprint boundary) and draws a dashed outline
+    on the room's own edge instead of solid poche."""
+    sx0, sy0, sx1, sy1 = strip
+    ext = WALL_EXTERIOR_EXTRA_PX + 1
+    on_fp = False
+    if fp is not None:
+        on_fp = {
+            "left": abs(part["x"] - fp[0]) < _PART_TOUCH_TOL,
+            "right": abs(part["x"] + part["w"] - fp[2]) < _PART_TOUCH_TOL,
+            "top": abs(part["y"] - fp[1]) < _PART_TOUCH_TOL,
+            "bottom": abs(part["y"] + part["h"] - fp[3]) < _PART_TOUCH_TOL,
+        }[side]
+    if side == "left":
+        if on_fp:
+            draw.rectangle([sx0 - ext, sy0, sx0, sy1], fill=PAPER)
+        _draw_dashed_line(draw, (sx0, sy0), (sx0, sy1), INK_SOFT)
+    elif side == "right":
+        if on_fp:
+            draw.rectangle([sx1, sy0, sx1 + ext, sy1], fill=PAPER)
+        _draw_dashed_line(draw, (sx1, sy0), (sx1, sy1), INK_SOFT)
+    elif side == "top":
+        if on_fp:
+            draw.rectangle([sx0, sy0 - ext, sx1, sy0], fill=PAPER)
+        _draw_dashed_line(draw, (sx0, sy0), (sx1, sy0), INK_SOFT)
+    else:
+        if on_fp:
+            draw.rectangle([sx0, sy1, sx1, sy1 + ext], fill=PAPER)
+        _draw_dashed_line(draw, (sx0, sy1), (sx1, sy1), INK_SOFT)
+
+
 def _carve_rooms(
     draw: ImageDraw.ImageDraw, rects: list[dict], plot_x0: float, plot_y0: float, scale: float
 ) -> None:
@@ -845,11 +924,16 @@ def _carve_rooms(
             x0, y0, x1, y1 = _room_bbox(part, plot_x0, plot_y0, scale)
             if x1 - x0 <= 0 or y1 - y0 <= 0:
                 continue
-            draw.rectangle([x0, y0, x1, y1], fill=ROOM_FILL)
+            draw.rectangle([x0, y0, x1, y1], fill=OPEN_AREA_FILL if _is_open_area(rect) else ROOM_FILL)
 
     # Pass 2: re-stroke each part's own true outer boundary.
+    fp = footprint_bbox(rects)
+    # Parts of ENCLOSED rooms - an open area keeps a normal wall only where
+    # one of these shares its edge.
+    enclosed_parts = [p for r in rects if not _is_open_area(r) for p in room_parts(r)]
     for rect in rects:
         parts = room_parts(rect)
+        is_open = _is_open_area(rect)
         for part in parts:
             px0, py0 = part["x"], part["y"]
             px1, py1 = px0 + part["w"], py0 + part["h"]
@@ -861,37 +945,44 @@ def _carve_rooms(
                 # defensive floor the old uniform-inset carve already had.
                 continue
 
-            left_covered = [
-                (max(py0, s["y"]), min(py1, s["y"] + s["h"]))
-                for s in siblings if abs(s["x"] + s["w"] - px0) < _PART_TOUCH_TOL
-            ]
-            for lo, hi in _free_intervals(py0, py1, left_covered):
-                sy0, sy1 = plot_y0 + lo * scale, plot_y0 + hi * scale
-                draw.rectangle([bx0, sy0, bx0 + inset, sy1], fill=WALL_COLOR)
-
-            right_covered = [
-                (max(py0, s["y"]), min(py1, s["y"] + s["h"]))
-                for s in siblings if abs(s["x"] - px1) < _PART_TOUCH_TOL
-            ]
-            for lo, hi in _free_intervals(py0, py1, right_covered):
-                sy0, sy1 = plot_y0 + lo * scale, plot_y0 + hi * scale
-                draw.rectangle([bx1 - inset, sy0, bx1, sy1], fill=WALL_COLOR)
-
-            top_covered = [
-                (max(px0, s["x"]), min(px1, s["x"] + s["w"]))
-                for s in siblings if abs(s["y"] + s["h"] - py0) < _PART_TOUCH_TOL
-            ]
-            for lo, hi in _free_intervals(px0, px1, top_covered):
-                sx0, sx1 = plot_x0 + lo * scale, plot_x0 + hi * scale
-                draw.rectangle([sx0, by0, sx1, by0 + inset], fill=WALL_COLOR)
-
-            bottom_covered = [
-                (max(px0, s["x"]), min(px1, s["x"] + s["w"]))
-                for s in siblings if abs(s["y"] - py1) < _PART_TOUCH_TOL
-            ]
-            for lo, hi in _free_intervals(px0, px1, bottom_covered):
-                sx0, sx1 = plot_x0 + lo * scale, plot_x0 + hi * scale
-                draw.rectangle([sx0, by1 - inset, sx1, by1], fill=WALL_COLOR)
+            # (side, edge lo, edge hi, others' coverage along the edge, strip rect)
+            sides = (
+                ("left", py0, py1,
+                 lambda others: [
+                     (max(py0, o["y"]), min(py1, o["y"] + o["h"])) for o in others if abs(o["x"] + o["w"] - px0) < _PART_TOUCH_TOL
+                 ],
+                 lambda lo, hi: [bx0, plot_y0 + lo * scale, bx0 + inset, plot_y0 + hi * scale]),
+                ("right", py0, py1,
+                 lambda others: [
+                     (max(py0, o["y"]), min(py1, o["y"] + o["h"])) for o in others if abs(o["x"] - px1) < _PART_TOUCH_TOL
+                 ],
+                 lambda lo, hi: [bx1 - inset, plot_y0 + lo * scale, bx1, plot_y0 + hi * scale]),
+                ("top", px0, px1,
+                 lambda others: [
+                     (max(px0, o["x"]), min(px1, o["x"] + o["w"])) for o in others if abs(o["y"] + o["h"] - py0) < _PART_TOUCH_TOL
+                 ],
+                 lambda lo, hi: [plot_x0 + lo * scale, by0, plot_x0 + hi * scale, by0 + inset]),
+                ("bottom", px0, px1,
+                 lambda others: [
+                     (max(px0, o["x"]), min(px1, o["x"] + o["w"])) for o in others if abs(o["y"] - py1) < _PART_TOUCH_TOL
+                 ],
+                 lambda lo, hi: [plot_x0 + lo * scale, by1 - inset, plot_x0 + hi * scale, by1]),
+            )
+            for side, lo_full, hi_full, cover_fn, strip_fn in sides:
+                for lo, hi in _free_intervals(lo_full, hi_full, cover_fn(siblings)):
+                    if not is_open:
+                        draw.rectangle(strip_fn(lo, hi), fill=WALL_COLOR)
+                        continue
+                    # Open area: keep the normal wall only where an ENCLOSED
+                    # room shares this edge; the rest is unwalled.
+                    walled = [
+                        (max(a_, lo), min(b_, hi)) for a_, b_ in cover_fn(enclosed_parts)
+                        if min(b_, hi) - max(a_, lo) > _PART_TOUCH_TOL
+                    ]
+                    for wlo, whi in walled:
+                        draw.rectangle(strip_fn(wlo, whi), fill=WALL_COLOR)
+                    for ulo, uhi in _free_intervals(lo, hi, walled):
+                        _draw_unwalled_edge(draw, side, strip_fn(ulo, uhi), part, fp)
 
     # Pass 3: concave (inside) corners of a multi-part room's union outline.
     # At such a corner two wall strips (one per edge) meet, but each strip
@@ -899,7 +990,7 @@ def _carve_rooms(
     # a light inset x inset square of room fill missing from the wall corner.
     for rect in rects:
         parts = room_parts(rect)
-        if len(parts) > 1:
+        if len(parts) > 1 and not _is_open_area(rect):
             _fill_concave_corners(draw, parts, plot_x0, plot_y0, scale, inset)
 
 
@@ -1810,7 +1901,7 @@ def _compute_label_layout(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float,
         area_text = f"{area_units:.0f} sq {unit}"
     else:
         area_text = f"{rect['w']:.1f}x{rect['h']:.1f} {unit} ({area_units:.0f} sq {unit})"
-    display_name = rect["name"].upper()
+    display_name = rect["name"].upper() + (" (OPEN)" if rect.get("open_area") else "")
 
     max_name_width = max(box_w - _LABEL_WIDTH_MARGIN_PX, 10)
     name_lines, fitted_font = _fit_room_name(draw, display_name, max_name_width, name_font)

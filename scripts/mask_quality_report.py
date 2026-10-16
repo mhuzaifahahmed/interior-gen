@@ -65,7 +65,7 @@ def _compute_case(case_id: str, planner: bool) -> dict:
                 _used, rects, _w = floor_results[i - 1]
                 fplan = plan.for_floor(i)
                 overrides = dict(fplan.room_max) or None
-                extra[key] = {"remainder": list(fplan.remainder_rooms), "path": fplan.layout_path, "plan": plan}
+                extra[key] = {"remainder": list(fplan.remainder_rooms), "path": fplan.layout_path, "plan": plan, "used": _used}
             else:
                 rects, _ = layout_floor_with_warnings(
                     rooms, case["plot"], garage_cars=case["garage_cars"], facing=case["facing"]
@@ -103,11 +103,14 @@ def compute_all(planner: bool = False, jobs: int = 1) -> dict:
 def _render(results, out_dir):
     from PIL import Image, ImageDraw
 
-    from app.pipeline.blueprint_svg import render_floor_blueprint
+    from app.pipeline.blueprint_svg import annotate_planner_rects, render_floor_blueprint
 
     os.makedirs(out_dir, exist_ok=True)
     thumbs = []
     for key, (case, floor_n, rects, _m, _o) in results.items():
+        used = (EXTRA.get(key) or {}).get("used")
+        if used is not None:  # planner-on: pass the planner flags to the renderer
+            rects = annotate_planner_rects(rects, used)
         png = render_floor_blueprint(
             floor_n, rects, case["plot"], len(case["floors"]), case["facing"]
         )
