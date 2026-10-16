@@ -162,3 +162,33 @@ vs 114/114.
 Conclusion: area/sizing changes keep failing for the same reason the diagnostic showed - the
 engine's growth decides shapes (50% of final violations start at growth), so any extra or resized room
 becomes a strip somewhere. The next real lever is width-aware growth, not more planner numbers.
+
+## Footprint-scale trigger (kept, 048e5ef) and suite-aware `_reconnect_rooms` (reverted)
+
+**Trigger.** Per floor, `fill_overflow_fraction` = last-resort fill cells / grid cells. The three buildings
+a smaller scale improves have the SMALLEST overflow (150x150_typical 1.3% / 28 sq ft, 50x50_typical 2.6% /
+42, 60x80_typical 5.4% / 101); every building with a floor above 15% (30x40 sparse, 50x50 2f, the four 60x80
+3f, 90x40 sparse, 150x150 dense, 150x200; worst floors 18-28%) never had a scale accepted, and the real dense
+3-floor e2e requests reach 20.8%. So the search now runs only when no floor exceeds 15% = 1 - min scale
+(the most area any candidate removes) - an UPPER bound, the opposite of "try smaller when leftover is
+large" (any lower bound that keeps 150x150_typical triggers on nearly everything). Matrix output
+byte-identical in both modes. Stop-at-first differs from try-all on 60x80_typical (0.95 / hard 2 vs
+0.85 / hard 0), so try-all stays. Redundant-work pruning measured and not worth it: identical floor inputs
+13/208 calls (8 s of 328 s) on the matrix, 2/36 in e2e; an early "floor is worse" abort can only skip floors
+of the last replan attempt (zero on single-floor buildings and on every multi-floor building that still
+triggers).
+
+**Suite-aware reconnect (reverted, no source change).** Keeping the piece of a disconnected bedroom/ensuite
+that touches its partner (longest shared wall) instead of the largest: orphaned ensuites 9 -> 5 (rooms;
+8 -> 5 floors), but 5 floors worse - 50x50_2f f2 (hard 1->2, narrow bedrooms 1->2, path falls back to
+reference_raw), 60x80_3f north/south f2 (hard 0->1, bedroom_aspect, narrow bedroom, pass_through 0->2;
+suite_guard path no longer picked), 60x80_3f east/west f2 (hard 1->2, narrow bedrooms 1->2, orphan unchanged;
+circ_stair no longer picked). Matrix totals: hard 30->35, narrow bedrooms 10->15, pass_through 4->8. Why:
+logging every case where the rule changes the kept piece (all 35 floors, all candidates) shows the piece
+holding the suite wall is ALWAYS a small strip - 6 to 100 sq ft, typically 1-5 ft deep (e.g. 60x80_3f
+south f2 Bedroom 1 keeps 14 sq ft 14.1x1.0 ft of 147 cells) - and below the room's minimum area in every
+case; all but one are also below a usable width. Restricting the rule to pieces that meet the minimum area,
+or that keep a usable width, or both, changes no layout at all. So the 5 reconnect losses are not "the
+wrong piece kept": the bedroom's real body is elsewhere and only a sliver touches the ensuite. The fix has
+to keep the ensuite next to the bedroom's main body earlier (growth / rectify), not in reconnect.
+suite_guard therefore stays (7 picks, unchanged).
