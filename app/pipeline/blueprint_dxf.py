@@ -200,14 +200,14 @@ def render_floor_blueprint_dxf(
     # nowhere to draw text in an L/U room's empty notch) - byte-identical
     # to before for a plain-rectangle room (its only part is its bbox).
     for rect in rects:
-        _draw_room_text(msp, _largest_part_view(rect), unit)
+        _draw_room_text(msp, _label_view(rect), unit)
 
     # Structural columns (2026-10, Part 3) - real geometry on their own
     # layer, mirroring blueprint_svg.py's PNG column marks (same
     # room_specs.column_fractions_for_span() source, so the two can never
     # disagree about where a column belongs).
     for rect in rects:
-        view = _largest_part_view(rect)
+        view = _label_view(rect)
         _draw_columns(msp, view, unit, _label_text_rect(view, unit))
 
     buffer = io.StringIO()
@@ -455,6 +455,22 @@ _NO_COLUMN_CATEGORIES = frozenset({"hallway", "bathroom", "powder", "closet", "s
 _TEXT_CHAR_WIDTH_RATIO = 0.75  # generous average glyph width / text height
 
 
+def _label_view(rect: dict) -> dict:
+    """Largest-part view plus the multi-part flag/summed area the label text
+    needs (a multi-part room prints its area only, like the PNG)."""
+    parts = room_parts(rect)
+    view = _largest_part_view(rect)
+    if len(parts) > 1:
+        view = {**view, "_multi_part": True, "_area_override": sum(p["w"] * p["h"] for p in parts)}
+    return view
+
+
+def _dims_text(rect: dict, unit: str) -> str:
+    if rect.get("_multi_part"):
+        return f"{rect['_area_override']:.0f} sq {unit}".strip()
+    return f"{rect['w']:.1f}x{rect['h']:.1f}{unit}"
+
+
 def _label_text_rect(rect: dict, unit: str) -> tuple[float, float, float, float]:
     """Real-unit (x0, y0, x1, y1) estimate of the room's name + dimensions
     text block as _draw_room_text() places it. Shared by the label pass and
@@ -464,7 +480,7 @@ def _label_text_rect(rect: dict, unit: str) -> tuple[float, float, float, float]
     cx, cy = x + w / 2, y + h / 2
     name_w = len(rect["name"]) * label_height * _TEXT_CHAR_WIDTH_RATIO
     dims_h = label_height * 0.75
-    dims_w = len(f"{w:.1f}x{h:.1f}{unit}") * dims_h * _TEXT_CHAR_WIDTH_RATIO
+    dims_w = len(_dims_text(rect, unit)) * dims_h * _TEXT_CHAR_WIDTH_RATIO
     half_w = max(name_w, dims_w) / 2
     return (
         cx - half_w, cy - label_height * 0.6 - dims_h / 2,
@@ -538,7 +554,7 @@ def _draw_room_text(msp, rect: dict, unit: str) -> None:
     name_text.set_placement((cx, cy + label_height * 0.6), align=TextEntityAlignment.MIDDLE_CENTER)
 
     dims_text = msp.add_text(
-        f"{w:.1f}x{h:.1f}{unit}",
+        _dims_text(rect, unit),
         dxfattribs={"layer": "TEXT", "height": label_height * 0.75},
     )
     dims_text.set_placement((cx, cy - label_height * 0.6), align=TextEntityAlignment.MIDDLE_CENTER)

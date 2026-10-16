@@ -360,7 +360,11 @@ def render_floor_blueprint(
     # after furniture (never obscured by/obscuring a furniture symbol -
     # most real rooms never trigger this at all) and before doors/labels.
     label_geoms = [
-        {**_largest_part_view(rect), "_area_override": sum(p["w"] * p["h"] for p in room_parts(rect))}
+        {
+            **_largest_part_view(rect),
+            "_area_override": sum(p["w"] * p["h"] for p in room_parts(rect)),
+            "_multi_part": len(room_parts(rect)) > 1,
+        }
         for rect in rects
     ]
     label_layouts = [
@@ -1586,7 +1590,12 @@ def _compute_label_layout(draw: ImageDraw.ImageDraw, rect: dict, plot_x0: float,
     # largest part, but the printed area is the room's REAL total area
     # ("_area_override" for a multi-part room).
     area_units = rect.get("_area_override", rect["w"] * rect["h"])
-    area_text = f"{rect['w']:.1f}x{rect['h']:.1f} {unit} ({area_units:.0f} sq {unit})"
+    if rect.get("_multi_part"):
+        # An L/U-shaped room has no single W x H (the largest part's size
+        # next to the summed area would not match) - area only.
+        area_text = f"{area_units:.0f} sq {unit}"
+    else:
+        area_text = f"{rect['w']:.1f}x{rect['h']:.1f} {unit} ({area_units:.0f} sq {unit})"
     display_name = rect["name"].upper()
 
     max_name_width = max(box_w - _LABEL_WIDTH_MARGIN_PX, 10)
