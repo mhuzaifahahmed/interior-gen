@@ -121,3 +121,92 @@ def test_dimension_chain_renders_on_multi_part_layout():
     dims = {"length": 50, "width": 40, "unit": "ft"}
     png = svg.render_floor_blueprint(1, _stub_layout(), dims, 1, "south")
     assert png[:4] == b"\x89PNG"
+
+
+def _img(w=600, h=600):
+    img = Image.new("RGB", (w, h), (255, 255, 255))
+    return img, ImageDraw.Draw(img)
+
+
+def _inked_bbox(img):
+    from PIL import ImageChops
+    return ImageChops.difference(img, Image.new("RGB", img.size, (255, 255, 255))).getbbox()
+
+
+def test_zone_label_is_width_checked_against_its_box():
+    font = ImageFont.load_default(size=11)
+    img, d = _img()
+    box = (100, 100, 150, 130)  # 50 px wide: too narrow for "FRONT YARD" even shrunk
+    svg._draw_zone_label(d, box, "FRONT YARD", font)
+    bb = _inked_bbox(img)
+    assert bb is None or (bb[0] >= box[0] and bb[2] <= box[2])
+    img2, d2 = _img()
+    wide = (100, 100, 300, 130)
+    svg._draw_zone_label(d2, wide, "FRONT YARD", font)
+    bb2 = _inked_bbox(img2)
+    assert bb2 is not None and bb2[0] >= wide[0] and bb2[2] <= wide[2]
+
+
+def test_front_yard_label_box_never_overlaps_the_driveway():
+    front = (0, 500, 400, 600)
+    drive = (150, 500, 250, 600)
+    for facing in ("south",):
+        lab = svg._front_label_box(front, drive, facing)
+        assert not svg._boxes_overlap(lab, drive)
+    # east/west facing bands are vertical
+    lab = svg._front_label_box((500, 0, 600, 400), (500, 100, 600, 200), "east")
+    assert not svg._boxes_overlap(lab, (500, 100, 600, 200))
+
+
+def test_zone_labels_are_drawn_after_the_driveway_fill(monkeypatch):
+    rects = [
+        {"name": "Garage", "x": 5.0, "y": 5.0, "w": 12.0, "h": 20.0},
+        {"name": "Entry", "x": 17.0, "y": 5.0, "w": 8.0, "h": 20.0},
+    ]
+    dims = {"length": 60, "width": 80, "unit": "ft"}
+    order = []
+    real_driveway, real_label = svg._draw_driveway, svg._draw_zone_label
+
+    def rec_driveway(*a, **k):
+        r = real_driveway(*a, **k)
+        order.append(("driveway", r is not None))
+        return r
+
+    def rec_label(draw, box, text, font):
+        order.append(("label", text))
+        return real_label(draw, box, text, font)
+
+    monkeypatch.setattr(svg, "_draw_driveway", rec_driveway)
+    monkeypatch.setattr(svg, "_draw_zone_label", rec_label)
+    svg.render_floor_blueprint(1, rects, dims, 1, "south")
+    assert ("driveway", True) in order
+    first_label = next(i for i, o in enumerate(order) if o[0] == "label")
+    assert order.index(("driveway", True)) < first_label
+    assert ("label", "DRIVEWAY") in order
+
+
+def _entrance_edge():
+    # south-facing edge on the bottom of a room box spanning x 100..200 px
+    return {"orientation": "horizontal", "pos": 20.0, "start": 10.0, "end": 20.0}
+
+
+def test_entrance_label_stays_inside_the_door_room_and_clear_of_labels():
+    font = ImageFont.load_default(size=11)
+    img, d = _img()
+    room_box = (100.0, 100.0, 300.0, 220.0)  # scale 10 -> edge pos 20 => y=200..: set plot 0,0
+    edge = {"orientation": "horizontal", "pos": 21.0, "start": 10.0, "end": 30.0}
+    avoid = [(150, 140, 250, 170)]
+    box = svg._draw_entrance_label(d, edge, "south", 0.0, 0.0, 10.0, 20.0, font, room_box, avoid, (0, 0, 600, 600))
+    assert box is not None
+    assert box[0] >= room_box[0] and box[2] <= room_box[2] and box[1] >= room_box[1] and box[3] <= room_box[3]
+    assert not svg._boxes_overlap(box, avoid[0])
+
+
+def test_entrance_label_moves_to_the_front_yard_when_the_room_is_too_small():
+    font = ImageFont.load_default(size=11)
+    img, d = _img()
+    room_box = (100.0, 100.0, 140.0, 210.0)  # 40 px wide: ENTRANCE cannot fit inside
+    edge = {"orientation": "horizontal", "pos": 21.0, "start": 10.0, "end": 14.0}
+    box = svg._draw_entrance_label(d, edge, "south", 0.0, 0.0, 10.0, 20.0, font, room_box, [], (0, 0, 600, 600))
+    assert box is not None
+    assert box[1] >= 210 - 1  # below the wall: outside, in the front yard

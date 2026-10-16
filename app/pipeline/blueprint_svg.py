@@ -268,8 +268,20 @@ def render_floor_blueprint(
     # more). Drawn after the grid/property line but before the house's own
     # solid poché walls, matching the plan's own C1 ordering.
     if floor_number == 1:
-        _draw_yard(draw, plot_x0, plot_y0, plot_x1, plot_y1, house_x0, house_y0, house_x1, house_y1, facing, small_font)
-        _draw_driveway(draw, rects, fp, facing, plot_x0, plot_y0, plot_x1, plot_y1, scale, small_font)
+        # Labels are deferred until AFTER the driveway fill so the paving
+        # never paints over "FRONT YARD" / zone text.
+        zone_labels = _draw_yard(
+            draw, plot_x0, plot_y0, plot_x1, plot_y1, house_x0, house_y0, house_x1, house_y1, facing, small_font,
+            driveway_box=_driveway_box(rects, fp, facing, plot_x0, plot_y0, plot_x1, plot_y1, scale),
+            defer_labels=True,
+        )
+        driveway_box = _draw_driveway(
+            draw, rects, fp, facing, plot_x0, plot_y0, plot_x1, plot_y1, scale, small_font, defer_label=True
+        )
+        for zbox, ztext in zone_labels:
+            _draw_zone_label(draw, zbox, ztext, small_font)
+        if driveway_box is not None:
+            _draw_zone_label(draw, driveway_box, "DRIVEWAY", small_font)
 
     # Solid poché wall base - fill the HOUSE's own footprint (extended
     # outward for the exterior wall) black, THEN carve each room's
@@ -400,6 +412,14 @@ def render_floor_blueprint(
     for label_geom in label_geoms:
         _draw_room_label(draw, label_geom, plot_x0, plot_y0, scale, unit, label_font, small_font)
 
+    if front_door_edge:
+        _draw_entrance_label(
+            draw, front_door_edge, facing_normalized, plot_x0, plot_y0, scale, front_door_width_px, small_font,
+            _front_door_part_box(rects, front_door_edge, facing_normalized, plot_x0, plot_y0, scale),
+            [lay["box"] for lay in label_layouts if lay],
+            (plot_x0, plot_y0, plot_x1, plot_y1),
+        )
+
     _draw_dimensions(draw, rects, length, width, plot_x0, plot_y0, plot_x1, plot_y1, scale, unit, small_font)
     _draw_north_arrow(draw, plot_x1 - 30, plot_y0 + 34, small_font)
     _draw_scale_bar(draw, plot_x0, img_h - 92, scale, unit, small_font)
@@ -485,10 +505,22 @@ def _draw_zone_label(draw: ImageDraw.ImageDraw, box: tuple, text: str, font: Ima
     """Same restraint as every other label in this module (_draw_room_label
     etc.) - drawn only when the zone is actually big enough to hold it
     legibly; a thin sliver of side yard gets the hatch with no text rather
-    than overlapping/illegible text."""
+    than overlapping/illegible text. Width-checked against the box: the
+    font shrinks (down to _NAME_MIN_FONT_SIZE) and, if the text still does
+    not fit, the label is skipped rather than spilling past its zone."""
     x0, y0, x1, y1 = box
     if (x1 - x0) < _MIN_ZONE_LABEL_W_PX or (y1 - y0) < _MIN_ZONE_LABEL_H_PX:
         return
+    max_w = (x1 - x0) - 6
+    size = font.size
+    while True:
+        tw, th = _text_dims(draw, text, font)
+        if tw <= max_w and th <= (y1 - y0) - 2:
+            break
+        size -= 1
+        if size < _NAME_MIN_FONT_SIZE:
+            return
+        font = ImageFont.load_default(size=size)
     _draw_centered_text(draw, ((x0 + x1) / 2, (y0 + y1) / 2), text, font, INK_SOFT)
 
 
@@ -498,7 +530,9 @@ def _draw_yard(
     house_x0: float, house_y0: float, house_x1: float, house_y1: float,
     facing: str | None,
     font: ImageFont.FreeTypeFont,
-) -> None:
+    driveway_box: tuple | None = None,
+    defer_labels: bool = False,
+) -> list:
     """Phase C1 - labeled outdoor zones in the gap between the house's own
     footprint (house_x0..y1, pixel coords - from footprint_bbox()) and the
     full plot (plot_x0..y1). `facing` decides which band is the FRONT
@@ -523,7 +557,7 @@ def _draw_yard(
         # No real facing signal - draw nothing rather than guess which side
         # is the road (same "no signal, no mark" restraint this module
         # already uses for the front door - see _front_door_opening()).
-        return
+        return []
 
     if facing in ("north", "south"):
         if facing == "north":
@@ -544,12 +578,13 @@ def _draw_yard(
         left_box = (house_x0, plot_y0, house_x1, house_y0)
         right_box = (house_x0, house_y1, house_x1, plot_y1)
 
+    labels: list = []
     _draw_hatch(draw, *rear_box, YARD_REAR_HATCH_COLOR, spacing=14)
-    _draw_zone_label(draw, rear_box, "GARDEN", font)
+    labels.append((rear_box, "GARDEN"))
 
     for side_box in (left_box, right_box):
         _draw_hatch(draw, *side_box, YARD_SIDE_HATCH_COLOR, spacing=18)
-        _draw_zone_label(draw, side_box, "SIDE YARD", font)
+        labels.append((side_box, "SIDE YARD"))
 
     # The front zone is left UNHATCHED here - the driveway (C2, drawn
     # separately, on top of this same band) is the real feature there; a
@@ -558,35 +593,43 @@ def _draw_yard(
     # driveway itself is narrower than the full front band when the garage
     # is narrower than the house, leaving visible plain front-yard beside
     # it).
-    _draw_zone_label(draw, front_box, "FRONT YARD", font)
+    labels.append((_front_label_box(front_box, driveway_box, facing), "FRONT YARD"))
+    if not defer_labels:
+        for box, text in labels:
+            _draw_zone_label(draw, box, text, font)
+    return labels
 
 
-def _draw_driveway(
-    draw: ImageDraw.ImageDraw,
+def _front_label_box(front_box: tuple, driveway_box: tuple | None, facing: str) -> tuple:
+    """The part of the front-yard band NOT covered by the driveway (the
+    larger free stretch beside it), so "FRONT YARD" never lands on the paving."""
+    if driveway_box is None:
+        return front_box
+    x0, y0, x1, y1 = front_box
+    dx0, dy0, dx1, dy1 = driveway_box
+    if facing in ("north", "south"):
+        a, b = (x0, y0, min(dx0, x1), y1), (max(dx1, x0), y0, x1, y1)
+    else:
+        a, b = (x0, y0, x1, min(dy0, y1)), (x0, max(dy1, y0), x1, y1)
+    area = lambda r: max(r[2] - r[0], 0) * max(r[3] - r[1], 0)
+    return a if area(a) >= area(b) else b
+
+
+def _driveway_box(
     rects: list[dict],
     fp: tuple[float, float, float, float],
     facing: str | None,
     plot_x0: float, plot_y0: float, plot_x1: float, plot_y1: float,
     scale: float,
-    font: ImageFont.FreeTypeFont,
-) -> None:
-    """Phase C2 - a driveway apron from the plot's facing (road) boundary
-    to the garage, drawn only when a room classifies as `garage`
-    (room_specs.classify_room_category) AND that garage has a real part
-    touching the HOUSE's own facing edge (the same edge _front_door_
-    opening() checks against) - the normal case, since generate_house.py's
-    garage injection already targets the front zone and Phase D4 is where
-    the engine's own road-edge bias belongs. A garage that isn't adjacent
-    to the facing edge is a known, separate gap (Phase D4's job, not this
-    renderer's) - this function simply skips drawing a driveway rather than
-    drawing one that doesn't actually connect to anything, which would be
-    more misleading than no driveway at all."""
+) -> tuple | None:
+    """Pixel box of the driveway apron, or None when none is drawn (see
+    _draw_driveway() for the rules)."""
     facing = (facing or "").strip().lower()
     if facing not in _FACING_ORDER:
-        return
+        return None
     garage = next((r for r in rects if classify_room_category(r["name"]) == "garage"), None)
     if garage is None:
-        return
+        return None
 
     fp_x0, fp_y0, fp_x1, fp_y1 = fp
     if facing == "north":
@@ -604,7 +647,7 @@ def _draw_driveway(
 
     touching_parts = [p for p in room_parts(garage) if touches(p)]
     if not touching_parts:
-        return
+        return None
     part = max(touching_parts, key=lambda p: span(p)[1] - span(p)[0])
     start, end = span(part)
 
@@ -621,11 +664,38 @@ def _draw_driveway(
     else:  # east
         box = (plot_x0 + fp_x1 * scale, plot_y0 + start * scale, plot_x1, plot_y0 + end * scale)
 
+    return box if (box[2] - box[0]) >= 2 and (box[3] - box[1]) >= 2 else None
+
+
+def _draw_driveway(
+    draw: ImageDraw.ImageDraw,
+    rects: list[dict],
+    fp: tuple[float, float, float, float],
+    facing: str | None,
+    plot_x0: float, plot_y0: float, plot_x1: float, plot_y1: float,
+    scale: float,
+    font: ImageFont.FreeTypeFont,
+    defer_label: bool = False,
+) -> tuple | None:
+    """Phase C2 - a driveway apron from the plot's facing (road) boundary
+    to the garage, drawn only when a room classifies as `garage`
+    (room_specs.classify_room_category) AND that garage has a real part
+    touching the HOUSE's own facing edge (the same edge _front_door_
+    opening() checks against) - the normal case, since generate_house.py's
+    garage injection already targets the front zone and Phase D4 is where
+    the engine's own road-edge bias belongs. A garage that isn't adjacent
+    to the facing edge is a known, separate gap (Phase D4's job, not this
+    renderer's) - this function simply skips drawing a driveway rather than
+    drawing one that doesn't actually connect to anything, which would be
+    more misleading than no driveway at all."""
+    box = _driveway_box(rects, fp, facing, plot_x0, plot_y0, plot_x1, plot_y1, scale)
+    if box is None:
+        return None
     x0, y0, x1, y1 = box
-    if (x1 - x0) < 2 or (y1 - y0) < 2:
-        return
     draw.rectangle([x0, y0, x1, y1], fill=DRIVEWAY_FILL, outline=DRIVEWAY_OUTLINE, width=1)
-    _draw_zone_label(draw, box, "DRIVEWAY", font)
+    if not defer_label:
+        _draw_zone_label(draw, box, "DRIVEWAY", font)
+    return box
 
 
 # Structural columns (2026-10, Part 3) - a small, solid square, slightly
@@ -1005,8 +1075,6 @@ def _draw_front_door(
     # to the wall) - not a fixed pixel guess - is what actually determines
     # safe clearance, and it must also clear the arc symbol's own radius
     # (leaf_len_px) so the two don't visually collide either.
-    text_w, text_h = _text_dims(draw, "ENTRANCE", font)
-
     if edge["orientation"] == "vertical":
         hx = plot_x0 + edge["pos"] * scale
         hy = plot_y0 + gap_start_units * scale
@@ -1014,8 +1082,6 @@ def _draw_front_door(
         inward = 1 if facing == "west" else -1
         open_end = (hx + inward * leaf_len_px, hy)
         arc_start, arc_end = (0, 90) if inward == 1 else (90, 180)
-        clearance = max(text_w / 2, leaf_len_px) + _FRONT_DOOR_LABEL_OFFSET_PX
-        label_xy = (hx + inward * clearance, hy + leaf_len_px / 2)
     else:
         hx = plot_x0 + gap_start_units * scale
         hy = plot_y0 + edge["pos"] * scale
@@ -1023,8 +1089,6 @@ def _draw_front_door(
         inward = 1 if facing == "north" else -1
         open_end = (hx, hy + inward * leaf_len_px)
         arc_start, arc_end = (0, 90) if inward == 1 else (270, 360)
-        clearance = max(text_h / 2, leaf_len_px) + _FRONT_DOOR_LABEL_OFFSET_PX
-        label_xy = (hx + leaf_len_px / 2, hy + inward * clearance)
 
     hinge = (hx, hy)
     draw.line([hinge, gap_end], fill=PAPER, width=erase_width)
@@ -1033,7 +1097,114 @@ def _draw_front_door(
         [hx - leaf_len_px, hy - leaf_len_px, hx + leaf_len_px, hy + leaf_len_px],
         start=arc_start, end=arc_end, fill=WALL_COLOR, width=1,
     )
-    _draw_centered_text(draw, label_xy, "ENTRANCE", font, INK_SOFT)
+    # The "ENTRANCE" text is drawn separately, after every room label, by
+    # _draw_entrance_label() - it needs the label boxes to avoid.
+
+
+def _front_door_part_box(
+    rects: list[dict], edge: dict, facing: str, plot_x0: float, plot_y0: float, scale: float
+) -> tuple[float, float, float, float] | None:
+    """Pixel box of the room PART the front door opens into (the part that
+    touches the facing edge and overlaps the door's span the most)."""
+    best, best_ov = None, 0.0
+    for r in rects:
+        for p in room_parts(r):
+            if edge["orientation"] == "horizontal":
+                edge_y = p["y"] if facing == "north" else p["y"] + p["h"]
+                if abs(edge_y - edge["pos"]) >= _EDGE_TOL:
+                    continue
+                ov = min(p["x"] + p["w"], edge["end"]) - max(p["x"], edge["start"])
+            else:
+                edge_x = p["x"] if facing == "west" else p["x"] + p["w"]
+                if abs(edge_x - edge["pos"]) >= _EDGE_TOL:
+                    continue
+                ov = min(p["y"] + p["h"], edge["end"]) - max(p["y"], edge["start"])
+            if ov > best_ov:
+                best, best_ov = p, ov
+    if best is None:
+        return None
+    return _room_bbox(best, plot_x0, plot_y0, scale)
+
+
+def _boxes_overlap(a: tuple, b: tuple) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _draw_entrance_label(
+    draw: ImageDraw.ImageDraw,
+    edge: dict,
+    facing: str,
+    plot_x0: float,
+    plot_y0: float,
+    scale: float,
+    nominal_len_px: float,
+    font: ImageFont.FreeTypeFont,
+    room_box: tuple | None,
+    avoid_boxes: list[tuple],
+    plot_bounds: tuple,
+) -> tuple | None:
+    """Places the "ENTRANCE" text. Preferred spot: just inside the door, as
+    before. It must stay inside the front-door room's own part (room_box,
+    inset by the wall) and clear of every room label box; a clamp into the
+    room is tried next, then the front yard just OUTSIDE the door. Returns
+    the label's pixel box, or None when no clear spot exists (drawn nowhere
+    rather than over another label or into the next room)."""
+    seg_len_px = (edge["end"] - edge["start"]) * scale
+    leaf_len_px = min(nominal_len_px, seg_len_px * 0.7)
+    if leaf_len_px < 6:
+        return None
+    tw, th = _text_dims(draw, "ENTRANCE", font)
+    mid_units = (edge["start"] + edge["end"]) / 2
+    along = plot_x0 + mid_units * scale if edge["orientation"] == "horizontal" else plot_y0 + mid_units * scale
+    wall_px = plot_x0 + edge["pos"] * scale if edge["orientation"] == "vertical" else plot_y0 + edge["pos"] * scale
+    if edge["orientation"] == "vertical":
+        inward = 1 if facing == "west" else -1
+        half_perp = tw / 2
+        clearance = max(half_perp, leaf_len_px) + _FRONT_DOOR_LABEL_OFFSET_PX
+        # the door hinge sits at gap start; keep the old "beside the leaf" y
+        cross = plot_y0 + (mid_units - (leaf_len_px / scale) / 2) * scale + leaf_len_px / 2
+        mk = lambda off: (wall_px + off, cross)
+    else:
+        inward = 1 if facing == "north" else -1
+        half_perp = th / 2
+        clearance = max(half_perp, leaf_len_px) + _FRONT_DOOR_LABEL_OFFSET_PX
+        cross = plot_x0 + (mid_units - (leaf_len_px / scale) / 2) * scale + leaf_len_px / 2
+        mk = lambda off: (cross, wall_px + off)
+
+    def box_at(c):
+        return (c[0] - tw / 2, c[1] - th / 2, c[0] + tw / 2, c[1] + th / 2)
+
+    pad = WALL_HALF_THICKNESS_PX + 1
+    inner = None
+    if room_box is not None:
+        inner = (room_box[0] + pad, room_box[1] + pad, room_box[2] - pad, room_box[3] - pad)
+
+    def ok_inside(b):
+        if inner is not None and not (b[0] >= inner[0] and b[1] >= inner[1] and b[2] <= inner[2] and b[3] <= inner[3]):
+            return False
+        return not any(_boxes_overlap(b, a) for a in avoid_boxes)
+
+    candidates = []
+    c = mk(inward * clearance)
+    candidates.append(c)
+    if inner is not None:  # clamp into the room part, keeping the door-side position
+        cx = min(max(c[0], inner[0] + tw / 2), max(inner[2] - tw / 2, inner[0] + tw / 2))
+        cy = min(max(c[1], inner[1] + th / 2), max(inner[3] - th / 2, inner[1] + th / 2))
+        candidates.append((cx, cy))
+    for cand in candidates:
+        b = box_at(cand)
+        if ok_inside(b):
+            _draw_centered_text(draw, cand, "ENTRANCE", font, INK_SOFT)
+            return b
+    # Front yard just outside the door.
+    out_off = -inward * (WALL_EXTERIOR_EXTRA_PX + 8 + (th / 2 if edge["orientation"] == "horizontal" else tw / 2))
+    cand = mk(out_off)
+    b = box_at(cand)
+    px0, py0, px1, py1 = plot_bounds
+    if b[0] >= px0 and b[1] >= py0 and b[2] <= px1 and b[3] <= py1 and not any(_boxes_overlap(b, a) for a in avoid_boxes):
+        _draw_centered_text(draw, cand, "ENTRANCE", font, INK_SOFT)
+        return b
+    return None
 
 
 # ---- Windows ----
