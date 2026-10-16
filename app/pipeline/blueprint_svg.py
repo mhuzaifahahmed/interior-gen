@@ -1722,9 +1722,59 @@ def _draw_right_aligned_text(draw: ImageDraw.ImageDraw, right_center_xy: tuple[f
 # ---- Dimension lines ----
 
 
+_DIM_MIN_SEGMENT_M = 0.6  # a chain segment shorter than this is merged into a neighbour
+
+
+def dimension_chain_boundaries(
+    rects: list[dict], fp: tuple[float, float, float, float], axis: str, plot_extent: float, unit: str
+) -> list[float]:
+    """Boundaries (plot units, sorted, always starting at 0 and ending at
+    plot_extent) of the exterior dimension chain along one side.
+
+    axis "x" is the top wall (footprint y0), "y" the left wall (footprint x0).
+    Only parts whose edge actually lies on that exterior wall contribute their
+    extents (an interior room's own bbox edges are cell-size artefacts, not
+    dimensions); the yard setback segments [0, fp_lo] and [fp_hi, plot_extent]
+    are added so the chain still spans the plot. Segments shorter than
+    _DIM_MIN_SEGMENT_M are merged into the shorter neighbour."""
+    fx0, fy0, fx1, fy1 = fp
+    pts = {0.0, round(plot_extent, 3)}
+    if axis == "x":
+        pts |= {round(fx0, 3), round(fx1, 3)}
+        for r in rects:
+            for part in room_parts(r):
+                if abs(part["y"] - fy0) < _EDGE_TOL:
+                    pts |= {round(part["x"], 3), round(part["x"] + part["w"], 3)}
+    else:
+        pts |= {round(fy0, 3), round(fy1, 3)}
+        for r in rects:
+            for part in room_parts(r):
+                if abs(part["x"] - fx0) < _EDGE_TOL:
+                    pts |= {round(part["y"], 3), round(part["y"] + part["h"], 3)}
+    bounds = sorted(p for p in pts if -1e-6 <= p <= plot_extent + 1e-6)
+    min_len = to_plot_unit(_DIM_MIN_SEGMENT_M, unit)
+    while len(bounds) > 2:
+        segs = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
+        i = min(range(len(segs)), key=lambda k: segs[k])
+        if segs[i] >= min_len:
+            break
+        # Drop the boundary on the side of the shorter neighbour (the end
+        # anchors 0 / plot_extent are never dropped).
+        left_ok, right_ok = i > 0, i + 1 < len(bounds) - 1
+        if left_ok and right_ok:
+            drop = i if segs[i - 1] <= segs[i + 1] else i + 1
+        elif left_ok:
+            drop = i
+        else:
+            drop = i + 1
+        bounds.pop(drop)
+    return bounds
+
+
 def _draw_dimensions(draw: ImageDraw.ImageDraw, rects: list[dict], length: float, width: float, plot_x0: float, plot_y0: float, plot_x1: float, plot_y1: float, scale: float, unit: str, font: ImageFont.FreeTypeFont) -> None:
-    x_boundaries = sorted({round(r["x"], 3) for r in rects} | {round(r["x"] + r["w"], 3) for r in rects} | {0.0, round(length, 3)})
-    y_boundaries = sorted({round(r["y"], 3) for r in rects} | {round(r["y"] + r["h"], 3) for r in rects} | {0.0, round(width, 3)})
+    fp = footprint_bbox(rects) or (0.0, 0.0, length, width)
+    x_boundaries = dimension_chain_boundaries(rects, fp, "x", length, unit)
+    y_boundaries = dimension_chain_boundaries(rects, fp, "y", width, unit)
 
     # Top: per-segment widths, then one overall length dimension further out.
     dim_y = plot_y0 - DIM_GUTTER_PX
@@ -1732,11 +1782,16 @@ def _draw_dimensions(draw: ImageDraw.ImageDraw, rects: list[dict], length: float
     for xb in x_boundaries:
         px = plot_x0 + xb * scale
         draw.line([(px, dim_y - DIM_TICK_PX / 2), (px, dim_y + DIM_TICK_PX / 2)], fill=DIM_LINE_COLOR, width=1)
+    last_right = -1e9
     for a, b in zip(x_boundaries, x_boundaries[1:]):
         seg = b - a
-        if seg < 0.2:
-            continue
-        _draw_centered_text(draw, (plot_x0 + (a + b) / 2 * scale, dim_y - 15), f"{seg:.1f}", font, DIM_LINE_COLOR)
+        text = f"{seg:.1f}"
+        tw, _th = _text_dims(draw, text, font)
+        cx = plot_x0 + (a + b) / 2 * scale
+        if cx - tw / 2 < last_right + 3:
+            continue  # would collide with the previous label
+        _draw_centered_text(draw, (cx, dim_y - 15), text, font, DIM_LINE_COLOR)
+        last_right = cx + tw / 2
 
     overall_y = dim_y - DIM_OVERALL_OFFSET_PX
     draw.line([(plot_x0, overall_y), (plot_x1, overall_y)], fill=DIM_LINE_COLOR, width=1)
@@ -1750,11 +1805,16 @@ def _draw_dimensions(draw: ImageDraw.ImageDraw, rects: list[dict], length: float
     for yb in y_boundaries:
         py = plot_y0 + yb * scale
         draw.line([(dim_x - DIM_TICK_PX / 2, py), (dim_x + DIM_TICK_PX / 2, py)], fill=DIM_LINE_COLOR, width=1)
+    last_bottom = -1e9
     for a, b in zip(y_boundaries, y_boundaries[1:]):
         seg = b - a
-        if seg < 0.2:
+        text = f"{seg:.1f}"
+        _tw, th = _text_dims(draw, text, font)
+        cy = plot_y0 + (a + b) / 2 * scale
+        if cy - th / 2 < last_bottom + 2:
             continue
-        _draw_right_aligned_text(draw, (dim_x - 8, plot_y0 + (a + b) / 2 * scale), f"{seg:.1f}", font, DIM_LINE_COLOR)
+        _draw_right_aligned_text(draw, (dim_x - 8, cy), text, font, DIM_LINE_COLOR)
+        last_bottom = cy + th / 2
 
     overall_x = dim_x - DIM_OVERALL_OFFSET_PX
     draw.line([(overall_x, plot_y0), (overall_x, plot_y1)], fill=DIM_LINE_COLOR, width=1)

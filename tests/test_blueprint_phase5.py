@@ -84,3 +84,40 @@ def test_convex_corners_and_plain_rooms_are_unchanged_by_the_concave_pass():
     # Two parts that tile (shared same-room boundary) leave no wall inside.
     l_img = _carved([L_ROOM])
     assert l_img.getpixel((150, 220)) == svg.ROOM_FILL  # shared boundary between the two parts
+
+
+def _stub_layout():
+    # Footprint 5..45 x 4..30 inside a 50x40 ft plot. Top wall parts include
+    # tiny cell-size slivers (0.9 / 1.0 ft) that must not appear in the chain.
+    return [
+        {"name": "A", "x": 5.0, "y": 4.0, "w": 0.9, "h": 10.0},
+        {"name": "B", "x": 5.9, "y": 4.0, "w": 1.0, "h": 10.0},
+        {"name": "C", "x": 6.9, "y": 4.0, "w": 20.0, "h": 8.0,
+         "parts": [{"x": 6.9, "y": 4.0, "w": 20.0, "h": 8.0}, {"x": 6.9, "y": 12.0, "w": 9.0, "h": 18.0}]},
+        {"name": "D", "x": 26.9, "y": 4.0, "w": 18.1, "h": 26.0},
+        {"name": "E", "x": 15.9, "y": 12.0, "w": 11.0, "h": 18.0},  # interior: bbox edges must not leak in
+    ]
+
+
+def test_dimension_chain_has_no_segment_under_0_6_m_and_sums_to_the_plot():
+    rects = _stub_layout()
+    fp = (5.0, 4.0, 45.0, 30.0)
+    min_ft = 0.6 / 0.3048
+    for axis, extent in (("x", 50.0), ("y", 40.0)):
+        b = svg.dimension_chain_boundaries(rects, fp, axis, extent, "ft")
+        segs = [y - x for x, y in zip(b, b[1:])]
+        assert b[0] == 0.0 and b[-1] == extent
+        assert abs(sum(segs) - extent) < 1e-6
+        assert all(s >= min_ft - 1e-9 for s in segs), segs
+
+
+def test_dimension_chain_uses_only_exterior_wall_parts_and_yards():
+    b = svg.dimension_chain_boundaries(_stub_layout(), (5.0, 4.0, 45.0, 30.0), "x", 50.0, "ft")
+    assert 0.0 in b and 45.0 in b and 50.0 in b  # right yard setback kept (left sliver merged)
+    assert 15.9 not in b and 26.9 in b  # interior room E's edge is not on the top wall
+
+
+def test_dimension_chain_renders_on_multi_part_layout():
+    dims = {"length": 50, "width": 40, "unit": "ft"}
+    png = svg.render_floor_blueprint(1, _stub_layout(), dims, 1, "south")
+    assert png[:4] == b"\x89PNG"
