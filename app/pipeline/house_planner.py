@@ -118,6 +118,9 @@ class BuildingPlan:
     # spine it will reserve (the spine/band geometry lives in the engine).
     stair_block: dict | None = None
     stair_area: float = 0.0
+    # Step 5.2: fraction of the planned footprint area actually used (1.0 =
+    # as planned; < 1.0 = a smaller footprint candidate chosen by the engine).
+    footprint_scale: float = 1.0
 
     def for_floor(self, floor_number: int) -> FloorPlan:
         for fp in self.floors:
@@ -500,6 +503,7 @@ def plan_building(
     min_front_setback: float | None = None,
     add_bonus: bool = True,
     exclude_bonus: dict | None = None,
+    footprint_scale: float = 1.0,
 ) -> BuildingPlan:
     """See module docstring. `plot_dims` is the GROSS plot ({"length",
     "width","unit"}); yards are gross distances from the plot edge to the
@@ -553,6 +557,10 @@ def plan_building(
         # The cap never pushes the house below what the program needs.
         upper = min(upper, max(cap_fp, program_min))
     area = min(max(target, program_min), upper)
+    if footprint_scale != 1.0:
+        # Step 5.2: a smaller footprint candidate (layout_building's scale
+        # variants) - never below what the program needs.
+        area = max(area * footprint_scale, program_min)
     porch_area = 0.0
     if tier in rules.PORCH_TIERS and target > area:
         # Ceiling-limited big plot: a ground-floor Verandah (open, covered)
@@ -592,7 +600,7 @@ def plan_building(
         net_plot_area=net_area, footprint_area=area, program_min=program_min,
         program_ceiling=program_ceiling, envelope_area=envelope_area, infeasible=infeasible,
         tier=tier, porch_area=porch_area, built_area_cap=cap_total, total_floors=total_floors,
-        stair_area=stair_area,
+        stair_area=stair_area, footprint_scale=footprint_scale,
     )
     for i, rooms in enumerate(floors_rooms):
         fp = _allocate_floor(rooms, i + 1, total_floors, area, unit, garage_cars, add_bonus,

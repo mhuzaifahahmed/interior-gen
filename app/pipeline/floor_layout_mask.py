@@ -881,10 +881,75 @@ def layout_building(
     than the spare area overflowing another room) and lay out again, at most
     `max_replans` times. Returns (plan, [(rooms_used, rects, warnings), ...])
     in floor order; rooms_used includes the planner-added rooms that were
-    actually drawn (each carries planner_added / added_reason)."""
+    actually drawn (each carries planner_added / added_reason).
+
+    Step 5.2: when the full-size result still has hard violations AND the
+    bounded fill had to put leftover cells past a room's max (the floor's
+    surplus had no sensible room to go), smaller footprints
+    (FOOTPRINT_SCALE_VARIANTS of the planned area, same aspect/yard logic)
+    are laid out too. One is chosen only if EVERY floor is no worse than at
+    full size on every gate metric (layout_metrics.measure_floor) and the
+    building's total hard count is strictly lower; otherwise full size."""
+    total_floors = total_floors or len(floors_rooms)
+    args = (floors_rooms, dimensions, facing, garage_cars, total_floors, min_front_setback, max_replans)
+    plan, results = _layout_building_at(*args, 1.0)
+    if not FOOTPRINT_SCALE_SEARCH or not _wants_smaller_footprint(results):
+        return plan, results
+    base = [_scale_gate_vector(plan, results, i, dimensions, garage_cars, facing, total_floors) for i in range(len(results))]
+    best = (plan, results)
+    best_total = sum(v[0] for v in base)
+    for scale in FOOTPRINT_SCALE_VARIANTS:
+        p2, r2 = _layout_building_at(*args, scale)
+        vecs = [_scale_gate_vector(p2, r2, i, dimensions, garage_cars, facing, total_floors) for i in range(len(r2))]
+        if len(vecs) != len(base) or any(any(x > y for x, y in zip(v, b)) for v, b in zip(vecs, base)):
+            continue
+        total = sum(v[0] for v in vecs)
+        if total < best_total:
+            best, best_total = (p2, r2), total
+    return best
+
+
+# Step 5.2 (planner path only): smaller footprint candidates, as a fraction
+# of the planned footprint area (house_planner.plan_building footprint_scale).
+FOOTPRINT_SCALE_SEARCH = True
+FOOTPRINT_SCALE_VARIANTS = (0.95, 0.90, 0.85)
+
+
+def _wants_smaller_footprint(results: list) -> bool:
+    """A smaller house is only tried when some floor has a hard violation and
+    the bounded fill had leftover cells with no neighbour headroom."""
+    hard = any(v.hard for _u, _r, ws in results for v in ws)
+    overflow = any(v.kind == "fill_overflow" for _u, _r, ws in results for v in ws)
+    return hard and overflow
+
+
+def _scale_gate_vector(plan, results, i, dimensions, garage_cars, facing, total_floors) -> tuple:
+    """Every per-floor metric the quality gate ratchets (hard count first)."""
+    from app.pipeline.layout_metrics import measure_floor
+
+    _used, rects, _w = results[i]
+    fp = plan.floors[i]
+    m = measure_floor(
+        rects, dimensions, total_floors=total_floors, floor_number=i + 1, garage_cars=garage_cars,
+        max_overrides=dict(fp.room_max) or None, facing=facing,
+    )
+    path = fp.layout_path or ""
+    return (
+        m["hard_count"], len(m["daylight_fail_hard"]), len(m["oversized"]), int(m["hierarchy_inverted"]),
+        len(m["undersized"]), len(m["bedroom_aspect_fail"]), len(m["stair_over_cap"]),
+        len(m["orphaned_ensuites"]), len(m["narrow_bedrooms"]),
+        len(m["unreachable"] or []), len(m["pass_through_private"] or []),
+        len(m["entry_is_garage"] or []), len(m["entry_missing"] or []), int(m.get("front_door_fallback") or 0),
+        int(path == "suite_guard" or path.startswith("suite_guard+")),
+        int(m["coverage_gap_fraction"] > 0.01), int(m["overlap_area"] > 1e-3),
+    )
+
+
+def _layout_building_at(
+    floors_rooms, dimensions, facing, garage_cars, total_floors, min_front_setback, max_replans, footprint_scale,
+):
     from app.pipeline.house_planner import plan_building
 
-    total_floors = total_floors or len(floors_rooms)
     exclude: dict[int, set] = {}
     plan = None
     results: list = []
@@ -892,6 +957,7 @@ def layout_building(
         plan = plan_building(
             floors_rooms, dimensions, facing, garage_cars, total_floors,
             min_front_setback=min_front_setback, exclude_bonus=exclude or None,
+            **({"footprint_scale": footprint_scale} if footprint_scale != 1.0 else {}),
         )
         if plan.stair_area:
             norm_facing = (facing or "north").strip().lower()

@@ -166,63 +166,51 @@
  },
  "150x150_typical_1f/floor1": {
   "area_ratio_to_max": {
-   "Bathroom 2": 0.751,
-   "Bedroom 2": 0.487,
-   "Bedroom 3": 0.757,
-   "Dining Room": 0.817,
-   "Entry": 0.865,
-   "Kitchen": 0.92,
-   "Living Room": 0.806,
-   "Master Bathroom": 1.01,
-   "Master Bedroom": 1.061,
-   "Study": 0.975,
-   "Verandah": 0.1
+   "Bathroom 2": 0.957,
+   "Bedroom 2": 0.794,
+   "Bedroom 3": 0.489,
+   "Dining Room": 0.624,
+   "Entry": 0.94,
+   "Kitchen": 0.909,
+   "Living Room": 0.883,
+   "Master Bathroom": 1.042,
+   "Master Bedroom": 0.999,
+   "Verandah": 0.088
   },
-  "bedroom_aspect_fail": [
-   "Bedroom 3"
-  ],
+  "bedroom_aspect_fail": [],
   "circulation_root": "Entry (front_door)",
   "coverage_gap_fraction": 0.0,
-  "coverage_pct": 9.93,
+  "coverage_pct": 8.99,
   "daylight_fail_hard": [],
   "daylight_fail_soft": [],
   "dead_end_hall_len": 0.0,
-  "dining_area": 198.6,
+  "dining_area": 151.7,
   "entry_is_garage": [],
   "entry_missing": [],
   "front_door_fallback": 0,
   "front_door_room": "Entry",
-  "hard_count": 1,
-  "hard_detail": [
-   [
-    "narrow",
-    "Bedroom 3"
-   ]
-  ],
-  "hard_kinds": [
-   "narrow"
-  ],
+  "hard_count": 0,
+  "hard_detail": [],
+  "hard_kinds": [],
   "hierarchy_inverted": false,
   "layout_path": "rectified",
-  "living_area": 451.4,
-  "max_parts": 4,
-  "max_secondary_fraction": 0.546,
-  "narrow_bedrooms": [
-   "Bedroom 3"
-  ],
+  "living_area": 494.4,
+  "max_parts": 2,
+  "max_secondary_fraction": 0.293,
+  "narrow_bedrooms": [],
   "orphaned_ensuites": [],
   "overlap_area": 0.0,
   "oversized": [],
   "pass_through_private": [],
   "single_floor_stair": false,
-  "soft_count": 13,
+  "soft_count": 8,
   "stair_over_cap": [],
   "undersized": [],
   "unreachable": [],
-  "yard_bottom": 63.16,
-  "yard_left": 50.03,
-  "yard_right": 50.03,
-  "yard_top": 42.11
+  "yard_bottom": 64.47,
+  "yard_left": 51.24,
+  "yard_right": 51.24,
+  "yard_top": 42.98
  },
  "150x200_2f_reported/floor1": {
   "area_ratio_to_max": {
@@ -930,35 +918,30 @@
  },
  "50x50_typical_1f/floor1": {
   "area_ratio_to_max": {
-   "Bathroom 2": 0.997,
-   "Bedroom 2": 0.798,
-   "Bedroom 3": 0.792,
-   "Dining Room": 0.891,
-   "Entry": 0.997,
-   "Kitchen": 0.959,
-   "Living Room": 0.862,
-   "Master Bathroom": 0.977,
-   "Master Bedroom": 0.95,
-   "Study": 0.893
+   "Bathroom 2": 0.987,
+   "Bedroom 2": 0.79,
+   "Bedroom 3": 0.712,
+   "Dining Room": 0.988,
+   "Entry": 1.009,
+   "Kitchen": 1.0,
+   "Living Room": 0.878,
+   "Master Bathroom": 1.004,
+   "Master Bedroom": 0.831
   },
   "bedroom_aspect_fail": [],
   "circulation_root": "Entry (front_door)",
   "coverage_gap_fraction": 0.0,
-  "coverage_pct": 65.12,
+  "coverage_pct": 58.61,
   "daylight_fail_hard": [],
   "daylight_fail_soft": [],
   "dead_end_hall_len": 0.0,
-  "dining_area": 160.4,
+  "dining_area": 177.8,
   "entry_is_garage": [],
   "entry_missing": [],
   "front_door_fallback": 0,
   "front_door_room": "Entry",
-  "hard_count": 2,
+  "hard_count": 1,
   "hard_detail": [
-   [
-    "narrow",
-    "Study"
-   ],
    [
     "narrow",
     "Bedroom 3"
@@ -969,9 +952,9 @@
   ],
   "hierarchy_inverted": false,
   "layout_path": "rectified",
-  "living_area": 344.8,
+  "living_area": 351.2,
   "max_parts": 2,
-  "max_secondary_fraction": 0.272,
+  "max_secondary_fraction": 0.46,
   "narrow_bedrooms": [
    "Bedroom 3"
   ],
@@ -980,14 +963,14 @@
   "oversized": [],
   "pass_through_private": [],
   "single_floor_stair": false,
-  "soft_count": 14,
+  "soft_count": 9,
   "stair_over_cap": [],
   "undersized": [],
   "unreachable": [],
-  "yard_bottom": 8.0,
-  "yard_left": 3.0,
-  "yard_right": 3.0,
-  "yard_top": 5.0
+  "yard_bottom": 9.17,
+  "yard_left": 4.13,
+  "yard_right": 4.13,
+  "yard_top": 5.73
  },
  "56x56_typical_1f/floor1": {
   "area_ratio_to_max": {
@@ -1716,70 +1699,50 @@
  },
  "60x80_typical_1f/floor1": {
   "area_ratio_to_max": {
-   "Bathroom 2": 0.99,
-   "Bedroom 2": 0.991,
-   "Bedroom 3": 0.944,
-   "Dining Room": 1.566,
-   "Entry": 0.921,
-   "Kitchen": 1.039,
-   "Living Room": 0.648,
-   "Master Bathroom": 0.99,
-   "Master Bedroom": 0.865,
-   "Media Room": 0.951
+   "Bathroom 2": 0.802,
+   "Bedroom 2": 0.722,
+   "Bedroom 3": 0.936,
+   "Dining Room": 0.963,
+   "Entry": 0.939,
+   "Kitchen": 0.964,
+   "Living Room": 0.867,
+   "Master Bathroom": 1.002,
+   "Master Bedroom": 0.959
   },
   "bedroom_aspect_fail": [],
-  "circulation_root": "Living Room (front_door)",
+  "circulation_root": "Entry (front_door)",
   "coverage_gap_fraction": 0.0,
-  "coverage_pct": 38.94,
+  "coverage_pct": 33.1,
   "daylight_fail_hard": [],
   "daylight_fail_soft": [],
-  "dead_end_hall_len": 1.08,
-  "dining_area": 281.8,
+  "dead_end_hall_len": 1.66,
+  "dining_area": 173.3,
   "entry_is_garage": [],
   "entry_missing": [],
-  "front_door_fallback": 1,
-  "front_door_room": "Living Room",
-  "hard_count": 3,
-  "hard_detail": [
-   [
-    "foyer_shallow",
-    "Entry"
-   ],
-   [
-    "narrow",
-    "Bathroom 2"
-   ],
-   [
-    "door_too_narrow",
-    "Dining Room<->Media Room"
-   ]
-  ],
-  "hard_kinds": [
-   "door_too_narrow",
-   "foyer_shallow",
-   "narrow"
-  ],
-  "hierarchy_inverted": true,
-  "layout_path": "rectified",
-  "living_area": 259.1,
+  "front_door_fallback": 0,
+  "front_door_room": "Entry",
+  "hard_count": 0,
+  "hard_detail": [],
+  "hard_kinds": [],
+  "hierarchy_inverted": false,
+  "layout_path": "circ_arms",
+  "living_area": 346.6,
   "max_parts": 2,
-  "max_secondary_fraction": 0.318,
+  "max_secondary_fraction": 0.125,
   "narrow_bedrooms": [],
   "orphaned_ensuites": [],
   "overlap_area": 0.0,
-  "oversized": [
-   "Dining Room"
-  ],
+  "oversized": [],
   "pass_through_private": [],
   "single_floor_stair": false,
-  "soft_count": 9,
+  "soft_count": 8,
   "stair_over_cap": [],
   "undersized": [],
   "unreachable": [],
-  "yard_bottom": 19.59,
-  "yard_left": 10.27,
-  "yard_right": 10.27,
-  "yard_top": 13.06
+  "yard_bottom": 21.8,
+  "yard_left": 11.81,
+  "yard_right": 11.81,
+  "yard_top": 14.54
  },
  "90x40_sparse_1f/floor1": {
   "area_ratio_to_max": {
