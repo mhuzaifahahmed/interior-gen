@@ -140,3 +140,25 @@ Planner OFF (92 final): growth 86 (93%), fill 6 (7%) - flag-off has no repair st
 So the planned order (5.2 footprint scale, 5.3 bounded fill + sink + top-up, 5.4 compact blocks for small
 rooms) attacks the fill origin first; the larger growth origin (`narrow`) is only touched by 5.4's compact
 pre-claimed blocks (small rooms) - bedrooms/bathrooms narrow at growth are NOT addressed by any Step 5 item.
+
+## Step 5.4 record: compact blocks, small-bonus minima, master cap, upper-floor sinks (ALL reverted)
+
+Each change was gated on its own (planner-on gate, planner-only code; flag-off untouched).
+
+| change | layouts changed | gate | why |
+|---|---|---|---|
+| (a) `_preclaim_compact` alone (compact >= min-width block, aspect <= 2:1, <= max, around the seed, for pantry/laundry/closet/storage) | 0 | n/a | On the matrix the only small service room is a Laundry whose real min width (6.9 ft) squared already exceeds its max (49 sq ft) after grid rounding, so no legal block exists; with a too-big block it became `oversized` (63 > 1.1 x 49) instead of `narrow`. |
+| (a) + small-bonus minima (pantry 25 / laundry 40 / closet 25 sq ft) | 21 | **16 floors worse** | Pantry/Laundry come out compact (7.0x7.0, 6.7x5.3, 4.0x8.0), but adding them shifts every target on the floor and the bonus drop/re-plan loop: new `narrow`, `door_too_narrow`, `foyer_shallow`, `small_area` on 40x60 S/N, 50x50_2f, 60x80_typical, 60x80_3f (all orientations), oversized Sitting Area, narrow bedroom on 56x56. |
+| (b) master <= 2.0x the floor's largest other bedroom (target + max + room_max override) | 13 | **8 floors worse** | The engine still decides the final size: 300x300_typical master 577 -> 539 vs others 107 (5x); 150x150_typical 437 -> 464. Neighbours get the freed area as strips: new `narrow` on 40x60 E/W/garage, 60x80_typical (+door_too_narrow), 60x80_dense, 150x150_typical; orphaned ensuite on 300x300; unreachable on 150x150_dense f1. |
+| (c) upper-floor sinks Landing 70 / Upper Storage 40 before the Terrace | 6 | **6/6 changed floors worse** | Landing/Upper Storage grow as 1-4 ft strips (narrow, door_too_narrow) on 150x150_dense f2, 150x200 f2, 60x80_3f floor 3 (all orientations); the 150x200 stair stays 572 sq ft. |
+| (c) + the compact pre-claim (incl. Landing) | 7 | **7 floors worse** | The blocks are claimed (71-91 cells) but the rest of the floor then fragments (60x80_3f south/north f3: Sitting Area 17 parts, hard 2 -> 12). |
+
+Sparse/big plots (nothing kept, so unchanged from 5.3): 150x150_sparse footprint 457 sq ft / 2.0%,
+300x300_sparse 514 / 0.6%, 150x150_typical 2022 / 9.0% (5.2's 0.9 scale), 300x300_typical 2757 / 3.1%,
+150x200 1950 / 6.5%. Master vs other bedrooms (sq ft): 40x60 south 158 vs 292/177 (master is the SMALLEST);
+60x80 dense 245 vs 216/180/189; 150x150 typical 437 vs 164/101; 150x200 f1 198 vs 200; 300x300 typical 577
+vs 114/114.
+
+Conclusion: area/sizing changes keep failing for the same reason the diagnostic showed - the
+engine's growth decides shapes (50% of final violations start at growth), so any extra or resized room
+becomes a strip somewhere. The next real lever is width-aware growth, not more planner numbers.
