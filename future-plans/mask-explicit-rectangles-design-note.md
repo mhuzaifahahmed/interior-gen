@@ -320,8 +320,8 @@ candidate). A bend that fails either test is not applied.
 - Bedroom 4 (7.2 ft at target) is clamped to 8.9 × 18.1, and the excess depth becomes wet-band /
   study area.
 - Study (5.2 ft) becomes 8.9 × 13.
-- Today's mask_on output for this floor has a hard `narrow` and a 9.3 × 26.4 ft master (Step 4 surplus
-  findings §1). In the packer the master is 14.7 × 14.6.
+- Today's mask_on output for this floor has a hard `narrow`; a 9.3 × 26.4 ft master was measured on it at
+  44132c5 (`mask-surplus-and-path-findings.md` §1). In the packer the master is 14.7 × 14.6.
 
 ---
 
