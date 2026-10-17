@@ -152,3 +152,31 @@ No safe one-line code fix for the core defects exists - all of #1-#4 come from t
 **Single best recommendation for the demo:** A1 + A2 - planner on locally, a pre-generated moderate
 request shown from History, and the packer/compare images ready to answer the inevitable question.
 Nothing here can make a live 6-bedroom-per-floor request on a 100 x 150 plot presentable by tonight.
+
+---
+
+## 5. Addendum (2026-10-17): problems the user found themselves on a SECOND localhost run
+
+Run analysed: project `2935009f` - 100 x 150 ft, **4 floors**, 3 bedrooms + 2 bathrooms per floor, facing
+default, **planner ON** (`HOUSE_PLANNER_ENABLED=true` is already in the local `.env`). Re-run through the real
+pipeline with the stored room lists (`review/repro4.py`, scratchpad, not committed): same picture as the screenshot.
+Footprint ~36.4 x 52 ft. Floors 2, 3 and 4 come out identical.
+
+None of these four were in sections 1-4 above (section 2 #5-#6 and #11 touch the stair/hallway topic only).
+
+| # | Problem (user's words, checked) | Verified? | Cause | Fix status |
+|---|---|---|---|---|
+| U1 | Terrace sits in the middle of the house, no air path | **Yes.** Floors 2-4: Terrace is 7.8 x 24.7 ft at x 39.6-47.4, ringed by Bedroom 1, Bathroom 1/2, Hallway and Bedroom 2; the outer wall (x 31.8) belongs to Bedroom 1 / Bathroom 1. It is drawn as open, but nothing opens it. | The Terrace / Verandah is the planner's "remainder sink" room; the engine gives it no rule to touch an outer wall (seeded for size, not position), and the scorer has no check "open-air room must have an exterior edge". Floor 1's Verandah does touch the west wall, so it is luck, not a rule. | Not fixed. Proposed: seed sinks on an exterior boundary cell; add a hard `open_area_enclosed` scorer check; fall back to dropping the Terrace (spare area goes to a bounded room) if it cannot be placed. |
+| U2 | Bedroom 3 too large - is there a max, why did it not apply? | **Yes.** Floors 2-4 Bedroom 3 = 574-617 sq ft; floor 1 Bedroom 1 = 308 sq ft. | A max exists (bedroom ~188 sq ft; the scorer reports `oversized 574 > 1.10 x max 206.9` as a HARD violation, 3 floors + floor 1). It is only a **warning**, not a rule the engine enforces: (a) the leftover-fill step can push rooms past `max_cells` as a last resort (earlier diagnostic: 32/35 floors); (b) upper floors have far more floor area (~1,900 sq ft) than the program needs (~900), and the only sink (Terrace, 193 sq ft here) cannot absorb it, so the rest lands in a bedroom; (c) Phase 7 (fallback when the best candidate still has hard violations) was never built, so the plan ships labelled "tight" instead of being retried or repaired. I confirmed (c) and the warning text; (a)/(b) come from the earlier diagnostic and were not re-traced here. | Not fixed. Proposed: bounded fill (rooms never exceed max; surplus goes to bonus rooms / sink / smaller footprint) and build the fallback chain. This is the same root as the "planner/fill" work in the main plan. |
+| U3 | Stairs not aligned between floors | **Yes.** Floor 1 stair at x 61.7, y 39.2; floors 2-4 at x 51.3, y 69.1. | The mask engine has no cross-floor stair stacking (known gap #17), stair is placed per floor. **User decision: do NOT patch it from the top for the demo; fix at the root with the earlier plan (single stair position decided once for the building, then each floor built around it).** | Deliberately deferred. Root fix = planner chooses one stair rectangle for all floors and every floor treats it as a fixed block (the packer prototype already does this). |
+| U4 | Beds right in front of doors; furniture in general | **Yes.** Floor 1 Bedroom 1: door on the west wall touches the bed head; floor 2 Bedroom 3: door on the west wall beside the bed. Beds always sit in the left-hand corner. | The bed rule (`blueprint_svg._furnish_bedroom`) only checks the TOP and BOTTOM walls; a door on the LEFT or RIGHT wall is explicitly ignored ("known, accepted simplification" in its docstring) - and since the bed is always anchored at the left edge, a left-wall door always collides. Other pieces use an all-or-nothing skip only for the walls they touch. No door-swing clearance zone is kept. | Not fixed. Proposed: pick the bed position by trying the 4 walls x 2 ends and keeping one whose footprint plus a door-swing clearance square is door-free; apply a clearance check to every piece (not only wall-hugging ones). Renderer-only change, safe for flag-off identity. |
+
+### Other things visible in the same run (not raised by the user)
+- Floor 2-4: Bathroom 2 is a 15.6 x 2.6 ft strip and Bedroom 1 is 7.8 ft wide - both hard `narrow` violations.
+- Floor 1: Bedroom 2 <-> Hallway shared wall is 1.3 ft (no real door), Bedroom 1 has 3 parts, Entry/Foyer is 13 x 3.9 ft.
+- Feasibility banner says "tight" - the hard violations above are the reason, but the plan is still shown.
+
+### Priority if these are tackled
+1. U4 (renderer only, low risk, visible in every bedroom).
+2. U1 + U2 together with the bounded-fill and fallback work (same root: the planner/fill does not enforce what the scorer already detects).
+3. U3 with the stair-stacking root fix, as the user decided.
