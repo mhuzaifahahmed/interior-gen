@@ -591,6 +591,23 @@ def test_furnish_bedroom_direct_call_flips_geometry_when_bottom_blocked():
     assert ImageChops.difference(image_default, image_flipped).getbbox() is not None
 
 
+def test_furnish_bedroom_moves_bed_away_from_a_left_wall_door():
+    default = Image.new("RGB", (200, 200), "white")
+    _furnish_bedroom(ImageDraw.Draw(default), 0, 0, 120, 120, 120, 120, cy=60)
+    left_door = Image.new("RGB", (200, 200), "white")
+    _furnish_bedroom(ImageDraw.Draw(left_door), 0, 0, 120, 120, 120, 120, cy=60, door_walls={"left"})
+    # Bed group now hugs the right side instead of the left.
+    white = Image.new("RGB", (200, 200), "white")
+    dl, _, dr, _ = ImageChops.difference(default, white).getbbox()
+    ml, _, mr, _ = ImageChops.difference(left_door, white).getbbox()
+    assert dl < 10 and ml > 120 - dr - 10 and mr > 110
+
+    # Both side walls have doors: no better side exists, keep the default.
+    both = Image.new("RGB", (200, 200), "white")
+    _furnish_bedroom(ImageDraw.Draw(both), 0, 0, 120, 120, 120, 120, cy=60, door_walls={"left", "right"})
+    assert list(both.getdata()) == list(default.getdata())
+
+
 # ---- Practical keep-clear skip for other wall-anchored furniture ----
 
 

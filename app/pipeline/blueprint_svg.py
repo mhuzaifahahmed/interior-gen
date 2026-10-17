@@ -1574,7 +1574,45 @@ def _draw_furniture(
     # entry/foyer/hallway/storage/unrecognized: no furniture symbol
 
 
+class _XMirrorDraw:
+    """Draw proxy that mirrors every shape left-right inside [x0, x1] - lets
+    the bed be drawn on the right-hand side by reusing the left-anchored
+    geometry unchanged (only the few ImageDraw calls the bed uses)."""
+
+    def __init__(self, draw: ImageDraw.ImageDraw, x0: float, x1: float) -> None:
+        self._d, self._sum = draw, x0 + x1
+
+    def _box(self, xy):
+        a, b, c, d = xy
+        return [self._sum - c, b, self._sum - a, d]
+
+    def rectangle(self, xy, **kw):
+        self._d.rectangle(self._box(xy), **kw)
+
+    def rounded_rectangle(self, xy, **kw):
+        self._d.rounded_rectangle(self._box(xy), **kw)
+
+    def line(self, xy, **kw):
+        self._d.line([(self._sum - px, py) for px, py in xy], **kw)
+
+
 def _furnish_bedroom(
+    draw: ImageDraw.ImageDraw,
+    x0: float, y0: float, x1: float, y1: float, w: float, h: float, cy: float,
+    door_walls: set[str] | None = None,
+) -> None:
+    """Left/right door rule (2026-10-17, user-reported: the bed head sat next
+    to a west-wall door): the bed is drawn against the LEFT side by default;
+    when the left wall has a door and the right wall is door-free, the whole
+    bed group is mirrored to the right side. Top/bottom handling is unchanged
+    (see _furnish_bedroom_core)."""
+    door_walls = door_walls or set()
+    if "left" in door_walls and "right" not in door_walls:
+        draw = _XMirrorDraw(draw, x0, x1)
+    _furnish_bedroom_core(draw, x0, y0, x1, y1, w, h, cy, door_walls)
+
+
+def _furnish_bedroom_core(
     draw: ImageDraw.ImageDraw,
     x0: float, y0: float, x1: float, y1: float, w: float, h: float, cy: float,
     door_walls: set[str] | None = None,
