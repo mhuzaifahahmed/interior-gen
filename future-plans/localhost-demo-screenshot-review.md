@@ -180,3 +180,19 @@ None of these four were in sections 1-4 above (section 2 #5-#6 and #11 touch the
 1. U4 (renderer only, low risk, visible in every bedroom).
 2. U1 + U2 together with the bounded-fill and fallback work (same root: the planner/fill does not enforce what the scorer already detects).
 3. U3 with the stair-stacking root fix, as the user decided.
+
+### U5 (added later 2026-10-17, user screenshot): entrance and foyer are disconnected
+Floor 1 of a newer localhost run: the ENTRANCE arrow opens into the Living Room on the front wall, while the
+Foyer is a separate small box on the right side with no link to it. Cause (from the picture and the door logic,
+not re-run): the renderer puts the front door on the room touching the facing wall, preferring a foyer only if
+one touches it; the engine never requires the foyer to touch the front wall, and the scorer has no check that
+the front door opens into the foyer. Same root as U1-U3: placement rules (foyer on the front wall, open-air
+rooms on an outer wall, one stair position for all floors) are not enforced by the planner/engine. Not caused by
+the bed/door commit `c3eccab` (renderer-only).
+
+### Decision (user, 2026-10-17)
+Stop patching from the top: each local fix shifts space and creates another defect (why 7 of 11 earlier engine
+fixes were reverted). For the demo, show a pre-generated, checked plan (40x60 ft, 1 floor, 3 bed / 2 bath),
+not the 4-floor / big-plot case. Next week: fix at the root - planner enforces the placement rules (foyer on the
+front wall, sinks on an outer wall, shared stair rectangle across floors, max room sizes), scorer checks them
+(front door opens into foyer, open-air room has an exterior edge), and the packer's approach is the reference.
