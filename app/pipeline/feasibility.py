@@ -295,6 +295,11 @@ def _room_list_for_count(category: str, count: int, other_count: int, total_floo
 # bare-minimum one.
 _GEOMETRY_CHECK_MARGINS = (1.0, 1.3, 1.75, 2.5, 3.5)
 
+# Safety margin on the arithmetic area when the geometry probe is unusable (see
+# room_count_requirements_table). Mirrors the middle of _GEOMETRY_CHECK_MARGINS:
+# generous enough that an advertised count is not a bare-minimum promise.
+_PROBE_UNAVAILABLE_MARGIN = 1.3
+
 
 def _geometrically_placeable_area(
     category: str, count: int, other_count: int, total_floors: int, unit: str, required_area: float
@@ -359,14 +364,35 @@ def room_count_requirements_table(total_floors: int, unit: str) -> dict:
     layout computations, not just arithmetic - still milliseconds total
     (the engine itself is pure Python rect math), but no reason to repeat
     it for the same (floor_count, unit) pair."""
+    # 2026-10-17 demo fix: the geometry probe asks the ACTIVE layout engine for a
+    # layout with ZERO hard violations. The mask engine (the live default) almost
+    # never reaches zero on any floor (3/35 on the quality matrix with the planner
+    # on, 0/35 with it off), so the probe failed even at ONE bedroom/bathroom and
+    # the `break` below reported "0 bedrooms / 0 bathrooms fit" for every plot -
+    # the dropdown then offered only "1". When the probe fails at the FIRST
+    # positive count it carries no information about this table (it cannot tell a
+    # too-small plot from an engine that never reaches zero violations), so for
+    # that category the table falls back to the honest area arithmetic times
+    # _PROBE_UNAVAILABLE_MARGIN. If the probe DOES succeed at small counts and
+    # fails at a larger one, that is a real capacity limit and still stops the
+    # table, exactly as before.
     bedrooms: list[dict] = []
+    probe_useless = False
     for n in BEDROOM_COUNT_RANGE:
         other = _realistic_other_count("bedroom", n)
         area = min_area_for_room_count("bedroom", n, other, total_floors, unit)
         if n > 0:
-            placeable_area = _geometrically_placeable_area("bedroom", n, other, total_floors, unit, area)
+            placeable_area = (
+                None if probe_useless
+                else _geometrically_placeable_area("bedroom", n, other, total_floors, unit, area)
+            )
             if placeable_area is None:
-                break
+                if n == 1:
+                    probe_useless = True
+                if probe_useless:
+                    placeable_area = area * _PROBE_UNAVAILABLE_MARGIN
+                else:
+                    break
             area = max(area, placeable_area)
         # MONOTONICITY (2026-10, real bug found via verification): the
         # geometry search can - for a specific room-count split (e.g. which
@@ -381,13 +407,22 @@ def room_count_requirements_table(total_floors: int, unit: str) -> dict:
         bedrooms.append({"count": n, "min_area": round(area, 1), "min_side": round(area**0.5, 1)})
 
     bathrooms: list[dict] = []
+    probe_useless = False
     for n in BATHROOM_COUNT_RANGE:
         other = _realistic_other_count("bathroom", n)
         area = min_area_for_room_count("bathroom", n, other, total_floors, unit)
         if n > 0:
-            placeable_area = _geometrically_placeable_area("bathroom", n, other, total_floors, unit, area)
+            placeable_area = (
+                None if probe_useless
+                else _geometrically_placeable_area("bathroom", n, other, total_floors, unit, area)
+            )
             if placeable_area is None:
-                break
+                if n == 1:
+                    probe_useless = True
+                if probe_useless:
+                    placeable_area = area * _PROBE_UNAVAILABLE_MARGIN
+                else:
+                    break
             area = max(area, placeable_area)
         area = max(area, bathrooms[-1]["min_area"] if bathrooms else 0.0)
         bathrooms.append({"count": n, "min_area": round(area, 1), "min_side": round(area**0.5, 1)})

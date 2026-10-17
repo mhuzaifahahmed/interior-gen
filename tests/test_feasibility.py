@@ -317,3 +317,44 @@ def test_single_floor_never_counts_a_staircase_room():
     assert a["required_area"] == b["required_area"]
     # ...but a 2-floor house does pay for it.
     assert check_feasibility(base, dims, 2)["required_area"] > a["required_area"]
+
+
+def test_capacity_table_is_not_zero_when_the_layout_probe_never_reaches_zero_violations(monkeypatch):
+    # Regression (demo bug 2026-10-17): the geometry probe needs a layout with ZERO
+    # hard violations from the ACTIVE engine. The mask engine (live default) almost
+    # never gets there, so the probe failed at ONE room and the table reported
+    # "0 bedrooms / 0 bathrooms fit" for every plot - the dropdown offered only "1".
+    import app.pipeline.feasibility as feas
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "house_layout_engine", "mask")
+    monkeypatch.setattr(feas, "_geometrically_placeable_area", lambda *a, **k: None)
+    feas.room_count_requirements_table.cache_clear()
+    try:
+        t = feas.room_count_requirements_table(2, "ft")
+    finally:
+        feas.room_count_requirements_table.cache_clear()
+
+    assert max(e["count"] for e in t["bedrooms"]) >= 6
+    assert max(e["count"] for e in t["bathrooms"]) >= 4
+    # Area still grows with the count, so a small plot is still limited.
+    areas = [e["min_area"] for e in t["bedrooms"]]
+    assert areas == sorted(areas) and areas[-1] > areas[1]
+
+
+def test_capacity_table_still_stops_at_a_real_geometric_limit(monkeypatch):
+    # The fallback must NOT hide a genuine limit: if the probe works for small
+    # counts and fails for a larger one, the table still stops there.
+    import app.pipeline.feasibility as feas
+
+    def probe(category, count, other, floors, unit, area):
+        return area * 1.2 if count <= 3 else None
+
+    monkeypatch.setattr(feas, "_geometrically_placeable_area", probe)
+    feas.room_count_requirements_table.cache_clear()
+    try:
+        t = feas.room_count_requirements_table(1, "ft")
+    finally:
+        feas.room_count_requirements_table.cache_clear()
+    assert max(e["count"] for e in t["bedrooms"]) == 3
+    assert max(e["count"] for e in t["bathrooms"]) == 3
