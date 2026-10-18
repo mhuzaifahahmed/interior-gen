@@ -327,13 +327,48 @@ def _geometrically_placeable_area(
     from app.pipeline.layout_engine import layout_floor_with_warnings
 
     rooms = _room_list_for_count(category, count, other_count, total_floors, unit)
+    planner_on = _planner_probe_active()
     for margin in _GEOMETRY_CHECK_MARGINS:
         test_area = max(required_area, 1.0) * margin
         side = math.sqrt(test_area)
-        _, warnings = layout_floor_with_warnings(rooms, {"length": side, "width": side, "unit": unit})
+        if planner_on:
+            warnings = _planner_forced_footprint_warnings(rooms, test_area, unit)
+        else:
+            _, warnings = layout_floor_with_warnings(rooms, {"length": side, "width": side, "unit": unit})
         if not any(w.hard for w in warnings):
             return test_area
     return None
+
+
+# The planner path sizes its own footprint from the PLOT (coverage target,
+# yards, setbacks), so probing it with "a plot of exactly the tested area"
+# tested the yard policy, not the room program. When the planner is on, the
+# probe instead lays the rooms out in a footprint of exactly the tested area.
+_PLANNER_PROBE_PLOT_FACTOR = 1.6  # plot side / footprint side; leaves room for any yards
+
+
+def _planner_probe_active() -> bool:
+    from app.config import settings
+
+    return bool(settings.house_planner_enabled) and settings.house_layout_engine == "mask"
+
+
+def _planner_forced_footprint_warnings(rooms: list[dict], test_area: float, unit: str) -> list:
+    """Layout warnings for `rooms` in a footprint forced to `test_area`, via
+    the planner's existing footprint_scale knob (no change to the planner):
+    plan once on a generous plot to learn the nominal footprint area, then
+    re-plan with footprint_scale = test_area / nominal."""
+    from app.pipeline import floor_layout_mask
+    from app.pipeline.house_planner import plan_building
+
+    side = math.sqrt(test_area) * _PLANNER_PROBE_PLOT_FACTOR
+    plot = {"length": side, "width": side, "unit": unit}
+    nominal = plan_building([rooms], plot, None, None, 1, add_bonus=False).footprint_area
+    scale = test_area / nominal if nominal > 0 else 1.0
+    _plan, results = floor_layout_mask._layout_building_at(
+        [rooms], plot, None, None, 1, None, 0, scale,
+    )
+    return list(results[0][2])
 
 
 @functools.lru_cache(maxsize=64)
