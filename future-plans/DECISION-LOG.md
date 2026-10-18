@@ -58,3 +58,8 @@ never push without being asked).
   (4) move the spine / fix widening guard, (5) bounded last resort, (6) Phase 7 fallback chain, (7) product numbers
   (Terrace cap, upstairs bonus rooms, small-plot yards) only after 2-6. Would fix U1, U2, "tight plans still shipped"; would NOT
   fix U3 (stairs), U4 (bed drawing), U5 (foyer placement).
+
+## 2026-10-18 - decision: order of work (user)
+- First finish the previous plan from Phase 6 (safe form: capacity table, gate assertion, end-to-end renders; NOT the flag
+  flip). Then run the consolidated list in section 6 of `localhost-demo-screenshot-review.md` (merges Opus list, U1-U5,
+  the notes file, RF1-RF7 and Phase 7 into one order without collisions). Flag flip and docs come last.

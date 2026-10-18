@@ -196,3 +196,51 @@ fixes were reverted). For the demo, show a pre-generated, checked plan (40x60 ft
 not the 4-floor / big-plot case. Next week: fix at the root - planner enforces the placement rules (foyer on the
 front wall, sinks on an outer wall, shared stair rectangle across floors, max room sizes), scorer checks them
 (front door opens into foyer, open-air room has an exterior edge), and the packer's approach is the reference.
+
+---
+
+## 6. CONSOLIDATED ROADMAP (2026-10-18) - supersedes the ordering in section 4 and the order in `next-week-root-fix-notes-2026-10-17.md`
+
+User decision: first finish the previous week's plan from Phase 6 (do not "fix from the front"), THEN work this list.
+This section merges everything into one order with no collisions: Opus's list (sections 2 and 4), the user's problems
+U1-U5 (section 5), the notes file (Problems A/B/C), the 7 root-fix steps from `fill-bounding-diagnosis-2026-10-18.md`
+(RF1-RF7) and the still-open phases of `mask-planner-rules-and-quality.md`. Running log: `DECISION-LOG.md`.
+Rules for every step: one change at a time; gate (`tests/test_mask_quality_gate.py`) + scorecard before and after
+(baseline: `scripts/output/quality/step0/baseline_planner_on.txt`: clean 3/35, zero-hard 13/35); flag-off output
+byte-identical; never loosen a threshold; never push; never edit rect; do not edit `.env`; open the renders and read them;
+Opus diagnoses, Sonnet implements with narrow briefs.
+
+### Part I - finish the previous plan (Phase 6, in a safe form)
+| Step | What | Notes |
+|---|---|---|
+| P6.1 | Capacity table: make `feasibility._geometrically_placeable_area` call the engine with a plan whose footprint is forced to the tested area (tests the program, not yard policy) | already partly fixed (`25fb4ea`, arithmetic fallback x1.3); this makes it geometry-based again |
+| P6.2 | Gate assertion: 1-floor 50x50 or larger reports >= 3 bedrooms and >= 2 bathrooms per floor | |
+| P6.3 | End-to-end `run_house_pipeline` runs with a fake provider for the reported cases (40x60/1F, 50x70/3F, 100x150/2F and 4F, 150x200/2F, 56/150/300 squares); render and READ the PNGs | records the "before" for Part II |
+| P6.4 | Do NOT flip `house_planner_enabled` yet | the flip needs a clean planner-on gate; it moves to the end (Part III) |
+Re-run P6.1/P6.2 once more after Part II (capacity depends on the engine).
+
+### Part II - engine root fix, in this order (RF numbers from the diagnosis report)
+| # | Step | Resolves | Depends on / collision rule |
+|---|---|---|---|
+| 0 | Opus-list quick item: strip the room list's own "Hallway/Corridor" rooms before layout (the engine builds its own spine) | review #5 duplicate hallway | do FIRST: it changes room counts, so take the baseline after it, not before |
+| 1 | RF1 compartment-excess diagnostic metric (no behaviour change) | measuring | before any behaviour change |
+| 2 | RF2 capacity-aware seeding: whole bedroom+bathroom suites and the Terrace go to the spine side that can hold them; targets fitted per side. ALSO put the Foyer on the front wall here (U5) and the front door into the foyer, since both are seeding rules | U2, review #2/#3/#4, notes Problem A, U5 | seeding rules change together or they contradict each other; stairs wait (step 4b) |
+| 3 | RF3 Terrace/Verandah seeded on its side's outer wall + new HARD scorer check "open-air room touches an exterior wall" (and "front door opens into the foyer") | U1, U5 | after 2 |
+| 4 | RF4 move the spine sideways when no assignment balances; fix the widening guard to work per side | rest of U2 | after 2-3 (it reuses their per-side numbers) |
+| 4b | Stair stacking (U3): one stair rectangle chosen once by the planner, every floor treats it as a fixed block | U3, review #11 | AFTER 2-4: it changes seeding, so doing it earlier would be redone. Reference: the packer prototype already does this |
+| 5 | RF5 bound the last resort: Terrace first, then neighbours up to 1.10 x max, then hallway; flag the candidate as hard so it loses; keep the old dump only as the final no-gap guarantee | notes B (surplus must go somewhere) | after 2-4, otherwise it only moves the dump |
+| 6 | RF6 = the old Phase 7 fallback chain (one item, not two): re-run footprint search without the 15% guard, try other footprint shapes, use rect only if strictly fewer hard violations, log `layout_path` | review #13 ("tight" plans still shipped) | LAST engine step: if run earlier it would fire on every floor and hide the real fixes |
+| 7 | RF7 product numbers with the user: Terrace cap (try 150 sq ft), small-plot yards (try 4,000 sq ft cutoff), same-category ratio, upstairs bonus rooms | notes B, C | only after 2-6; the earlier trial (reverted) proved these fail while the engine dumps surplus into rooms |
+
+### Part III - what remains after Part II
+- Renderer items (no engine risk, any time): U4 bed-in-front-of-door for rooms with doors on 3 walls (choose bed spot by door
+  position, not only by wall); skip labels that do not fit their room; move area text off furniture (review #14).
+- Re-run P6.1/P6.2 and the end-to-end renders; read them.
+- Review of the result by Opus; decide whether the packer is still needed (finish it only if the above leaves the
+  daylight / foyer / stair problems unsolved), per `mask-explicit-rectangles-design-note.md` section 6.3.
+- Phase 7 docs (CLAUDE.md v30 entry) and, only when the user says so, flip `house_planner_enabled` to True.
+- Product decision still open: bigger houses on big plots (footprint vs plot size, review #12), unrequested bonus rooms by default.
+
+### Not covered by Part II (stay open on purpose)
+Planner-OFF live-default quality (the default stays poor for dense programs; only fixed by flipping the flag), width-aware
+growth rewrite (narrow rooms created during growth are only partly addressed), AI Concept Layout vendor rendering of yards.
