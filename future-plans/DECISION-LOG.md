@@ -63,3 +63,16 @@ never push without being asked).
 - First finish the previous plan from Phase 6 (safe form: capacity table, gate assertion, end-to-end renders; NOT the flag
   flip). Then run the consolidated list in section 6 of `localhost-demo-screenshot-review.md` (merges Opus list, U1-U5,
   the notes file, RF1-RF7 and Phase 7 into one order without collisions). Flag flip and docs come last.
+
+## 2026-10-18 - Phase 6 results (commits be2b240, 1166f9c, 866b4a5)
+- P6.1 capacity probe with a forced footprint: committed, but with the planner on the probe still fails at every margin
+  (even for 1 bedroom: Bedroom 1 oversized, Living wrapped, foyer_shallow, door_too_narrow), so the dropdown still uses the
+  arithmetic fallback (area x 1.3). Table values: 30x40 1/0, 50x50 5/2, 50x70 8/4, 100x150 8/6, 150x200 8/6 (bed/bath).
+  Real fix needs the engine work (Part II).
+- P6.2 gate test added (50x50 >= 3 bed / 2 bath, monotonic): passes.
+- P6.3 end-to-end renders (`scripts/e2e_house_cases.py`, PNGs in `scripts/output/quality/e2e/`, gitignored): all 8 cases finish,
+  ALL have feasibility verdict "tight", none "feasible". Times 15 s (40x60) to 336 s (100x150, 2 floors).
+- IMPORTANT correction: the 40x60 / 1 floor / 3 bed / 2 bath case, advised earlier as the safe demo plan, renders badly in
+  this run (diagonal stair-step walls inside Bedroom 1 and Bathroom 1, a T-shaped hallway bar, 20 hard warnings, an unlabeled
+  room beside the hallway). The earlier advice came from a side-by-side image, not from running the case. Possible reason: the
+  fake room list used by the script differs from a real Gemini list. Always generate and LOOK before any demo.
