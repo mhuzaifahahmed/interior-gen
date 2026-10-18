@@ -76,3 +76,8 @@ never push without being asked).
   this run (diagonal stair-step walls inside Bedroom 1 and Bathroom 1, a T-shaped hallway bar, 20 hard warnings, an unlabeled
   room beside the hallway). The earlier advice came from a side-by-side image, not from running the case. Possible reason: the
   fake room list used by the script differs from a real Gemini list. Always generate and LOOK before any demo.
+
+## 2026-10-18 - checkpoint tag before Phase 7
+- Local git tag `checkpoint/before-phase7-2026-10-18` -> commit a68a680 (code = Phase 6 done, `866b4a5`, plus the decision log).
+  Return to it with `git checkout checkpoint/before-phase7-2026-10-18` (or `git diff` against it to see what Phase 7 changed).
+  The tag is local only, not pushed. It marks the last state before Phase 7; it is not claimed to be "better" in layout quality.
