@@ -44,3 +44,17 @@ never push without being asked).
   flag-off output byte-identical; never push; never edit rect engine; do not edit `.env`; render and read images.
 - Remaining open questions for the user: small-plot yard cutoff, Terrace cap, bedroom size ratio (numbers used so
   far were assumptions), and whether big plots should get bigger houses (product decision).
+
+## 2026-10-18 - Opus diagnosis of the fill step (`fill-bounding-diagnosis-2026-10-18.md`, `69c5762`)
+- Root cause of both oversized-bedroom cases (100x150 floors 2-4, 50x70 floor 3): the hallway (spine) splits the back of the
+  floor into a left and a right part; rooms are seeded on one side or the other by position with no check that the side can
+  hold them. One side gets too many rooms (they stay at minimum size), the other side is left with a big empty pocket, and the
+  fill step's last resort dumps the whole pocket into the one bedroom there. Same cause explains the Terrace cap failure
+  (it removed the only room with spare capacity on that side). On 20 of 35 gate floors some part has more cells than its
+  rooms' combined max.
+- Upper floors have spare area because one footprint (sized from the ground floor) is used for all floors; the smaller-footprint
+  search is switched off above 15% overflow, which is exactly where these cases sit.
+- Proposed 7 ordered changes: (1) diagnostic metric, (2) capacity-aware seeding, (3) Terrace on an outer wall + hard check,
+  (4) move the spine / fix widening guard, (5) bounded last resort, (6) Phase 7 fallback chain, (7) product numbers
+  (Terrace cap, upstairs bonus rooms, small-plot yards) only after 2-6. Would fix U1, U2, "tight plans still shipped"; would NOT
+  fix U3 (stairs), U4 (bed drawing), U5 (foyer placement).
