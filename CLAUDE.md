@@ -3055,6 +3055,38 @@ pipeline module, and its own endpoints — deliberately not folded into the room
     rectangle engine - nothing was deleted, `floor_layout.py` itself was never touched by any phase of this
     plan (Golden Rule 1 in the plan file, verified via `git diff --stat` at every single phase).
 
+- **v30 (2026-10-18, branch Measuremens-model-Major-Refinement): Phase 7 of the mask planner plan - a
+  per-floor fallback chain and a `layout_path` record. Planner-flag work only.**
+  `settings.house_planner_enabled` is still **default off**; with it off nothing here runs (flag-off mask
+  output was byte-compared against the pre-Phase-7 commit with `scripts/mask_output_dump.py --no-capacity`
+  via a git worktree: identical). The full decision trail is `future-plans/DECISION-LOG.md`; the plan is
+  Phase 7 of `future-plans/mask-planner-rules-and-quality.md`.
+  - **`layout_engine.layout_building()`** (new dispatcher entry; `generate_house.py` now imports it from
+    there instead of `floor_layout_mask`) wraps the mask `layout_building` and, planner on only, runs a
+    bounded chain per building: (1) if any floor still has a hard violation (`measure_floor` hard count +
+    hard daylight failures), retry the mask with up to `ALT_SHAPE_MAX_TRIES` (3) alternate footprint shapes
+    (same area; swapped / squarer / longer aspect, via the new `plan_building(shape_aspect=...)`), kept only
+    if the building's hard total is strictly lower and no floor is worse on any gate metric
+    (`_chain_vector` = the footprint-scale search's vector + "parts per room <= 2"); (2) a floor still
+    hard-failing gets the rect engine, used only if it has strictly fewer hard violations AND its footprint
+    is within 10% of the plan's AND no gate metric is worse; (3) otherwise `mask_best_effort`.
+    `EXTRA_TIME_FACTOR` (default None = no limit) is a time budget for the alternate-shape tries.
+  - **`layout_path` per floor** (`FloorPlan.chain_path`): `mask` / `mask_alt_shape:<n>` / `rect_fallback` /
+    `mask_best_effort`. Logged at INFO, stored as `meta_json["layout_paths"]` (planner on only) and in the
+    persisted `room_layout["planner"]` floors; the quality scorecard prints a "Layout chain path" line whose
+    counts must sum to the floor count. A `rect_fallback` plan floor is re-laid by rect in
+    `layout_engine.layout_floor_with_warnings` too, so the AI Concept Layout conditioning image agrees.
+  - **Measured (35-floor planner-on matrix, `mask_quality_report.py --planner on --scorecard`)**: zero-hard
+    floors 13 -> 14, bedroom-aspect check 29 -> 30, every other check unchanged (clean floors 3/35, circulation
+    31/35); path counts mask 13 / mask_alt_shape 1 / mask_best_effort 21 / rect_fallback 0. The committed
+    planner ratchet gate passes. `scripts/e2e_house_cases.py` generation time rose 1.0x-1.76x per case (worst
+    case 244 s -> 387 s, 1.58x).
+  - **Known limits**: the rect engine never qualified on the matrix. A first version without the footprint and
+    gate-metric guards turned 6 more floors zero-hard but regressed yard balance, oversized rooms and the
+    staircase cap, so the guards were added (rect sizes its own footprint, so it rarely matches the planner's).
+    21 of 35 floors remain best-effort with hard violations; a `mask_alt_shape` floor means the whole building
+    uses the alternate footprint, not that every floor was fixed. No visual quality is claimed - read the PNGs.
+
 ## Subscription plans, quotas, admin panel, and payments
 
 Free/Pro/Studio plan gating is **built and live** (previously tracked as a roadmap-only plan in

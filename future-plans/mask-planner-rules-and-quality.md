@@ -246,6 +246,8 @@ These ship together. A larger footprint without bounded fill would dump the surp
 
 ## Phase 7: Fallback chain + docs [R4]
 
+**Status (2026-10-18): implemented** in `layout_engine.layout_building` (commits 7.1-7.4). Measured: zero-hard 13 -> 14 of 35, no other gate metric worse, rect fallback guarded and unused on the matrix, generation time up to 1.76x. L/U footprints: not attempted (21 floors still best-effort; daylight evidence not yet gathered). See CLAUDE.md v30 and `DECISION-LOG.md`.
+
 - **In `layout_engine.layout_floor_with_warnings`:** if the mask result's best candidate still has hard violations:
   1. Retry mask with alternate footprint shapes from the planner (swapped aspect, squarer, longer; same area).
   2. If every attempt is still hard-failing, run rect, and **use it only if** it has strictly fewer hard violations including daylight.

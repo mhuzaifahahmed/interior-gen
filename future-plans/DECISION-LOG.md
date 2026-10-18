@@ -81,3 +81,16 @@ never push without being asked).
 - Local git tag `checkpoint/before-phase7-2026-10-18` -> commit a68a680 (code = Phase 6 done, `866b4a5`, plus the decision log).
   Return to it with `git checkout checkpoint/before-phase7-2026-10-18` (or `git diff` against it to see what Phase 7 changed).
   The tag is local only, not pushed. It marks the last state before Phase 7; it is not claimed to be "better" in layout quality.
+
+## 2026-10-18 - Phase 7 results (fallback chain, `layout_path`)
+- Built in `layout_engine.layout_building` (planner on only). Per-floor `layout_path` is logged, stored in `meta_json["layout_paths"]`
+  and counted in the scorecard.
+- First version used the rect fallback as the spec said (strictly fewer hard violations): zero-hard floors 13 -> 19 of 35 and
+  circulation 31 -> 32, BUT yard balance 35 -> 32, oversized 15 -> 12, staircase cap 31 -> 28 and the planner ratchet gate failed
+  (30x40_small). Reason: rect sizes its own footprint, so it ignores the planner's yards/caps. Per the rule "a worse gate metric means
+  revert", the rect fallback now needs (a) a footprint within 10% of the plan and (b) no gate metric worse; alternate shapes
+  also need "parts per room" not worse (a 56x56 alternate made Living Room 4 parts and was rejected).
+- Final: zero-hard 13 -> 14, bedroom aspect 29 -> 30, all other checks equal, gate passes, rect_fallback used on 0 floors, one floor
+  (30x40_sparse floor 1) on an alternate shape. 21 floors remain mask_best_effort. Time: scorecard 163 s -> 217 s; end-to-end cases
+  1.0x-1.76x (worst 244 s -> 387 s), so no time budget was needed (`EXTRA_TIME_FACTOR` exists, default off).
+- Open: the engine's own fill/seeding root causes (RF1-RF6) still decide most remaining hard violations; L/U footprints not attempted.
