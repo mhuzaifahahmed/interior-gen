@@ -252,12 +252,15 @@ def _envelope(depth_len, cross_len, sb) -> tuple[float, float]:
     return max(depth_len - sb["front"] - sb["rear"], 0.0), max(cross_len - 2 * sb["side"], 0.0)
 
 
-def _shape(area: float, env_depth: float, env_cross: float) -> tuple[float, float]:
+def _shape(area: float, env_depth: float, env_cross: float, aspect_override: float | None = None) -> tuple[float, float]:
     """(fp_depth, fp_cross) with the given area, aspect following the
-    envelope (bounded 1:2), never exceeding the envelope."""
+    envelope (bounded 1:2), never exceeding the envelope. `aspect_override`
+    (cross/depth; Phase 7 alternate-shape retries) replaces the envelope's
+    own aspect; None = unchanged."""
     if area <= 0 or env_depth <= 0 or env_cross <= 0:
         return env_depth, env_cross
-    aspect = min(max(env_cross / env_depth, 1 / _MAX_ASPECT), _MAX_ASPECT)
+    wanted = env_cross / env_depth if aspect_override is None else aspect_override
+    aspect = min(max(wanted, 1 / _MAX_ASPECT), _MAX_ASPECT)
     depth = math.sqrt(area / aspect)
     cross = area / depth
     if cross > env_cross:
@@ -552,6 +555,7 @@ def plan_building(
     add_bonus: bool = True,
     exclude_bonus: dict | None = None,
     footprint_scale: float = 1.0,
+    shape_aspect: float | None = None,
 ) -> BuildingPlan:
     """See module docstring. `plot_dims` is the GROSS plot ({"length",
     "width","unit"}); yards are gross distances from the plot edge to the
@@ -625,7 +629,7 @@ def plan_building(
         if porch_area < preferred_area_for_room(porch_name, unit):
             porch_area = 0.0
         area += porch_area
-    fp_depth, fp_cross = _shape(area, env_depth, env_cross)
+    fp_depth, fp_cross = _shape(area, env_depth, env_cross, shape_aspect)
     shaped = fp_depth * fp_cross
     if porch_area > 0:
         porch_area = max(porch_area - max(area - shaped, 0.0), 0.0)

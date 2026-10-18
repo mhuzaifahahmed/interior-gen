@@ -975,6 +975,7 @@ def _scale_gate_vector(plan, results, i, dimensions, garage_cars, facing, total_
 
 def _layout_building_at(
     floors_rooms, dimensions, facing, garage_cars, total_floors, min_front_setback, max_replans, footprint_scale,
+    shape_aspect=None,
 ):
     from app.pipeline.house_planner import plan_building
 
@@ -986,6 +987,7 @@ def _layout_building_at(
             floors_rooms, dimensions, facing, garage_cars, total_floors,
             min_front_setback=min_front_setback, exclude_bonus=exclude or None,
             **({"footprint_scale": footprint_scale} if footprint_scale != 1.0 else {}),
+            **({"shape_aspect": shape_aspect} if shape_aspect is not None else {}),
         )
         if plan.stair_area:
             norm_facing = (facing or "north").strip().lower()
