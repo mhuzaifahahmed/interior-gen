@@ -89,7 +89,7 @@ def planner_building(case):
     settings.house_planner_enabled switched on, as they already do."""
     built = _PLANNER_BUILDINGS.get(case["id"])
     if built is None:
-        from app.pipeline.floor_layout_mask import layout_building
+        from app.pipeline.layout_engine import layout_building
 
         built = _PLANNER_BUILDINGS[case["id"]] = layout_building(
             case["floors"], case["plot"], case["facing"], case["garage_cars"], len(case["floors"])

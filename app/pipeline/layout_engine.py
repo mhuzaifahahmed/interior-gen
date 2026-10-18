@@ -26,8 +26,19 @@ is deliberately flipped in its own commit (see the plan file's milestone
 roadmap). Reverting after a flip is a one-line config change, not a code
 rollback."""
 
+import logging
+
 from app.config import settings
 from app.pipeline import floor_layout, floor_layout_mask
+
+logger = logging.getLogger(__name__)
+
+# Phase 7: per-floor record of how the final geometry was produced (planner
+# path only; see layout_building() below).
+PATH_MASK = "mask"
+PATH_ALT_SHAPE = "mask_alt_shape"  # recorded as "mask_alt_shape:<n>"
+PATH_RECT_FALLBACK = "rect_fallback"
+PATH_BEST_EFFORT = "mask_best_effort"
 
 
 def layout_floor_with_warnings(
@@ -53,3 +64,44 @@ def layout_floor(
     parts list, no warnings (see layout_floor_with_warnings() above)."""
     rects, _warnings = layout_floor_with_warnings(rooms, dimensions, garage_cars, facing, plan)
     return rects
+
+
+def floor_hard_total(rects: list[dict], dimensions: dict, floor_number: int, total_floors: int,
+                     garage_cars: int | None) -> int:
+    """Hard violations of one floor's final rects, including the hard
+    daylight failures: layout_quality's hard kinds (measure_floor.hard_count)
+    plus measure_floor.daylight_fail_hard. Engine-agnostic (works on rects in
+    plot coordinates), so mask and rect results are compared on one yardstick."""
+    from app.pipeline.layout_metrics import measure_floor
+
+    m = measure_floor(rects, dimensions, total_floors=total_floors, floor_number=floor_number,
+                      garage_cars=garage_cars)
+    return int(m["hard_count"]) + len(m["daylight_fail_hard"])
+
+
+def layout_building(
+    floors_rooms: list[list[dict]],
+    dimensions: dict,
+    facing: str | None,
+    garage_cars: int | None,
+    total_floors: int | None = None,
+    min_front_setback: float | None = None,
+    max_replans: int = 2,
+):
+    """Whole-building layout for the planner path (what generate_house.py
+    calls). Same contract as floor_layout_mask.layout_building(): returns
+    (plan, [(rooms_used, rects, warnings), ...]). With the planner flag OFF
+    this is a pure pass-through. With it ON, each floor additionally gets
+    `plan.floors[i].chain_path` (see PATH_* above), logged at INFO."""
+    plan, results = floor_layout_mask.layout_building(
+        floors_rooms, dimensions, facing, garage_cars, total_floors, min_front_setback, max_replans
+    )
+    if not settings.house_planner_enabled:
+        return plan, results
+    total = total_floors or len(floors_rooms)
+    for index, (_used, rects, _warnings) in enumerate(results):
+        hard = floor_hard_total(rects, dimensions, index + 1, total, garage_cars)
+        path = PATH_MASK if hard == 0 else PATH_BEST_EFFORT
+        plan.floors[index].chain_path = path
+        logger.info("layout_path floor %s: %s (hard=%s)", index + 1, path, hard)
+    return plan, results

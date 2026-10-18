@@ -31,7 +31,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from app.config import settings  # noqa: E402
-from app.pipeline.floor_layout_mask import layout_building, layout_floor_with_warnings  # noqa: E402
+from app.pipeline.floor_layout_mask import layout_floor_with_warnings  # noqa: E402
+from app.pipeline.layout_engine import layout_building  # noqa: E402
 from app.pipeline.layout_metrics import measure_floor  # noqa: E402
 from tests.mask_quality_matrix import CASES, iter_floors  # noqa: E402
 
@@ -65,7 +66,7 @@ def _compute_case(case_id: str, planner: bool) -> dict:
                 _used, rects, _w = floor_results[i - 1]
                 fplan = plan.for_floor(i)
                 overrides = dict(fplan.room_max) or None
-                extra[key] = {"remainder": list(fplan.remainder_rooms), "path": fplan.layout_path, "plan": plan, "used": _used}
+                extra[key] = {"remainder": list(fplan.remainder_rooms), "path": fplan.layout_path, "chain": fplan.chain_path, "plan": plan, "used": _used}
             else:
                 rects, _ = layout_floor_with_warnings(
                     rooms, case["plot"], garage_cars=case["garage_cars"], facing=case["facing"]
@@ -180,7 +181,8 @@ def _scorecard(results, label, planner):
     finally:
         settings.house_planner_enabled = previous
     paths = {k: (EXTRA.get(k) or {}).get("path") for k in scored} if planner else None
-    text = format_scorecard(scored, label, capacity, paths)
+    chain_paths = {k: (EXTRA.get(k) or {}).get("chain") for k in scored} if planner else None
+    text = format_scorecard(scored, label, capacity, paths, chain_paths)
     if planner:
         text += "\n\n" + _built_area_table(results)
     text += "\n\n" + format_violation_histogram(scored, label)

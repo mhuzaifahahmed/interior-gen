@@ -355,7 +355,8 @@ def format_narrow_bedrooms(results: dict) -> str:
             + ("" if not hit else ": " + "; ".join(f"{k}={','.join(v)}" for k, v in hit)))
 
 
-def format_scorecard(results: dict, label: str, capacity: dict | None = None, paths: dict | None = None) -> str:
+def format_scorecard(results: dict, label: str, capacity: dict | None = None, paths: dict | None = None,
+                     chain_paths: dict | None = None) -> str:
     """results: {key: score_floor() dict}. `paths` ({key: layout_path},
     planner mode) adds the Phase-3 fallback-rate line. Returns the
     printable report."""
@@ -496,6 +497,21 @@ def format_scorecard(results: dict, label: str, capacity: dict | None = None, pa
                 + (f" ({', '.join(wk[kind])})" if wk[kind] else "") + "  [workaround, reported only]"
             )
         lines.append(f"Floors using the Phase 2 fallback ({', '.join(FALLBACK_PATH_KINDS)}): {fallback}/{len(keys)}")
+    if chain_paths:
+        # Phase 7 (layout_engine.layout_building): how each floor's final
+        # geometry was produced. "mask_alt_shape:<n>" is bucketed as
+        # mask_alt_shape. Counts must account for every floor.
+        chain: dict[str, int] = {}
+        for k in keys:
+            raw = chain_paths.get(k) or "MISSING"
+            kind = "mask_alt_shape" if raw.startswith("mask_alt_shape") else raw
+            chain[kind] = chain.get(kind, 0) + 1
+        if sum(chain.values()) != len(keys) or "MISSING" in chain:
+            raise AssertionError(
+                f"layout chain path counts {chain} do not account for all {len(keys)} floors"
+            )
+        lines.append("Layout chain path (all %d floors): " % len(keys)
+                     + " / ".join(f"{p} {chain[p]}" for p in sorted(chain)) + f"  [sum {sum(chain.values())}]")
     clean = [k for k in keys if results[k]["clean"]]
     clean_legacy = [k for k in keys if results[k].get("clean_legacy", results[k]["clean"])]
     lines.append("")

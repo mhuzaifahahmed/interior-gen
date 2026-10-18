@@ -97,6 +97,11 @@ class FloorPlan:
     # floor's grid cells the bounded fill had to place with no neighbour
     # headroom (its last resort). layout_building's footprint-scale trigger.
     fill_overflow_fraction: float = 0.0
+    # Phase 7 (set by layout_engine.layout_building): how this floor's final
+    # geometry was produced - "mask" / "mask_alt_shape:<n>" / "rect_fallback" /
+    # "mask_best_effort". Distinct from `layout_path` above (the mask engine's
+    # INTERNAL candidate tier).
+    chain_path: str = "mask"
 
 
 @dataclass
@@ -679,6 +684,7 @@ def plan_to_dict(plan: BuildingPlan) -> dict:
                 "added_rooms": [dict(a) for a in f.added_rooms],
                 "remainder_rooms": list(f.remainder_rooms),
                 "layout_path": f.layout_path,
+                "chain_path": f.chain_path,
             }
             for f in plan.floors
         ],
@@ -699,6 +705,7 @@ def floor_plan_from_dict(data: dict | None, floor_number: int) -> FloorPlan | No
             added_rooms=[dict(a) for a in floor.get("added_rooms") or []],
             remainder_rooms=list(floor.get("remainder_rooms") or []),
             layout_path=str(floor.get("layout_path") or ""),
+            chain_path=str(floor.get("chain_path") or "mask"),
             stair_block=dict(data["stair_block"]) if data.get("stair_block") else None,
         )
     except (KeyError, TypeError, ValueError, StopIteration):

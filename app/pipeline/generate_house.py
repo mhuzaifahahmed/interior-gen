@@ -10,9 +10,8 @@ from app.models import HouseProject
 from app.pipeline.blueprint_dxf import render_floor_blueprint_dxf
 from app.pipeline.blueprint_svg import annotate_planner_rects, render_floor_blueprint
 from app.pipeline.feasibility import check_feasibility
-from app.pipeline.floor_layout_mask import layout_building
 from app.pipeline.house_planner import plan_to_dict
-from app.pipeline.layout_engine import layout_floor_with_warnings
+from app.pipeline.layout_engine import layout_building, layout_floor_with_warnings
 from app.pipeline.house_prompts import (
     build_house_elevation_prompt,
     build_house_prompt,
@@ -631,6 +630,7 @@ def run_house_pipeline(
             blueprint_keys: list[str] = []
             blueprint_dxf_keys: list[str] = []
             feasibility_result: dict | None = None
+            layout_paths: list[str] | None = None  # Phase 7, planner-on only
             garage_cars: int | None = None
             building_dimensions = dimensions
             requirements_text = prompt or ""
@@ -997,6 +997,7 @@ def run_house_pipeline(
                                 floor["floor_number"],
                             )
                     if building_plan is not None:
+                        layout_paths = [fp.chain_path for fp in building_plan.floors]
                         room_layout["planner"] = plan_to_dict(building_plan)
                         building_dimensions = layout_dims
                     house_project.blueprint_status = "done"
@@ -1199,6 +1200,7 @@ def run_house_pipeline(
                     "floor_count": len(blueprint_keys) or (len(room_layout["floors"]) if room_layout else 0),
                     "render_model": render_model,
                     "feasibility_verdict": feasibility_result["verdict"] if feasibility_result else None,
+                    **({"layout_paths": layout_paths} if layout_paths else {}),
                 }
             )
             session.add(house_project)
