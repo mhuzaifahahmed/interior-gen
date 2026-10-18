@@ -358,3 +358,31 @@ def test_capacity_table_still_stops_at_a_real_geometric_limit(monkeypatch):
         feas.room_count_requirements_table.cache_clear()
     assert max(e["count"] for e in t["bedrooms"]) == 3
     assert max(e["count"] for e in t["bathrooms"]) == 3
+
+
+import pytest
+
+
+@pytest.mark.parametrize("planner_on", [False, True])
+def test_capacity_table_50x50_one_floor_allows_3_bed_2_bath_and_is_monotonic(monkeypatch, planner_on):
+    # P6.2 gate: with the mask engine live, a 50x50 ft plot (2500 sq ft) must
+    # offer at least 3 bedrooms and 2 bathrooms per floor, planner on or off,
+    # and every table must be monotonic in the room count.
+    import app.pipeline.feasibility as feas
+
+    monkeypatch.setattr(settings, "house_layout_engine", "mask")
+    monkeypatch.setattr(settings, "house_planner_enabled", planner_on)
+    feas.room_count_requirements_table.cache_clear()
+    try:
+        t = feas.room_count_requirements_table(1, "ft")
+    finally:
+        feas.room_count_requirements_table.cache_clear()
+
+    plot_area = 50 * 50
+    beds = max(e["count"] for e in t["bedrooms"] if e["min_area"] <= plot_area)
+    baths = max(e["count"] for e in t["bathrooms"] if e["min_area"] <= plot_area)
+    assert beds >= 3
+    assert baths >= 2
+    for key in ("bedrooms", "bathrooms"):
+        areas = [e["min_area"] for e in t[key]]
+        assert areas == sorted(areas)
