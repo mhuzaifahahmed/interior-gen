@@ -255,6 +255,13 @@ PORCH_MAX_FRACTION = 0.15
 BUILT_SQFT_PER_BEDROOM_CAP = 1300.0
 BUILT_AREA_CAP_BANDS = ("L", "XL")
 
+# Same-category balance (planner flag): rooms of one category on a floor
+# (bedrooms especially; a master bedroom is its own group) end within this
+# area ratio of each other when allocation allows it, never above their max.
+# Pinned/circulation categories are exempt.
+BALANCE_RATIO = 1.5
+BALANCE_EXEMPT_CATEGORIES = ("staircase", "hallway", "garage", "porch", "courtyard")
+
 # Shape / size caps scored under planner checks (opt-in).
 BEDROOM_ASPECT_HARD = 2.5  # largest-part long/short above this: hard
 BEDROOM_ASPECT_SOFT = 2.0  # above this: soft

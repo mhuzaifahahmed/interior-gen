@@ -362,6 +362,44 @@ def _apply_hierarchy(entries, alloc, maxs, floor_area: float, unit: str) -> floa
     return freed
 
 
+def _balance_same_category(entries, alloc, maxs) -> None:
+    """Rooms of one category (master bedrooms separate) end within
+    rules.BALANCE_RATIO of each other: when a group's largest/smallest ratio
+    is exceeded, its total is re-spread evenly (water-filling between each
+    room's min and max), so the group total - and the floor's remainder - is
+    unchanged. A group that cannot be balanced within its bounds is left
+    alone."""
+    groups: dict[str, list[int]] = {}
+    for i, e in enumerate(entries):
+        if e["category"] in rules.BALANCE_EXEMPT_CATEGORIES:
+            continue
+        groups.setdefault(rules._tier_key(e["name"]), []).append(i)
+    for idx in groups.values():
+        if len(idx) < 2 or max(alloc[i] for i in idx) <= rules.BALANCE_RATIO * min(alloc[i] for i in idx) + 1e-9:
+            continue
+        total = sum(alloc[i] for i in idx)
+        lo = {i: entries[i]["min"] for i in idx}
+        hi = {i: max(maxs[i], lo[i]) for i in idx}
+        if not (sum(lo.values()) - 1e-9 <= total <= sum(hi.values()) + 1e-9):
+            continue
+        new = {}
+        free, left = list(idx), total
+        while free:
+            share = left / len(free)
+            pinned = [i for i in free if share < lo[i] or share > hi[i]]
+            if not pinned:
+                for i in free:
+                    new[i] = share
+                break
+            i = pinned[0]
+            new[i] = min(max(share, lo[i]), hi[i])
+            left -= new[i]
+            free.remove(i)
+        if max(new.values()) <= rules.BALANCE_RATIO * min(new.values()) + 1e-9:
+            for i, v in new.items():
+                alloc[i] = v
+
+
 # Phase 4b step B: the staircase is a FIXED block - the run (room_specs
 # staircase_dimensions: width x depth) plus a landing allowance at the top
 # of the run - reserved once and identical on every floor. Nothing ever
@@ -432,6 +470,7 @@ def _allocate_floor(
     maxs = [e["max"] for e in entries]
     rem = _raise(alloc, maxs, rem)
     rem += _apply_hierarchy(entries, alloc, maxs, footprint_area, unit)
+    _balance_same_category(entries, alloc, maxs)
 
     room_max: dict[str, float] = {}
     remainder: list[str] = []
